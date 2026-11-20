@@ -1,0 +1,29 @@
+# MERGE this `gateway` service into ~/docker/retrieval/compose.yml on BWH.
+# It joins the SAME network(s) as retrieval-xray so (a) traefik can reach it by name
+# and (b) it can reach the tunnel at retrieval-xray:18000.
+#
+#   >>> copy retrieval-xray's `networks:` block onto this service verbatim <<<
+# (the retrieval compose shares an external network with the prod traefik — that's how
+#  traefik already reaches retrieval-xray:18000; the gateway must be on it too.)
+
+services:
+  gateway:
+    # Pull from Docker Hub (public repo — no pull token needed). CI dual-publishes to
+    # both Docker Hub and ghcr.io/ironboxplus/retrival-gateway:latest.
+    image: docker.io/arccot/retrival-gateway:latest
+    container_name: retrieval-gateway
+    restart: always
+    env_file:
+      - ./gateway.env          # GATEWAY_* secrets — NOT in git (see gateway.env.example)
+    volumes:
+      - ./gateway-data:/data   # SQLite ledger (users/keys/transactions/orders) persists here
+    labels:
+      - "traefik.enable=false" # routed via the file provider (like retrieval-xray), not labels
+    # networks:                # ← paste retrieval-xray's networks block here
+    #   - <shared-traefik-net>
+    # no published ports — internal only, reached as retrieval-gateway:8001
+
+# If the retrieval compose declares `networks:` at top level (external: true), the gateway
+# needs the same top-level entry. Verify reachability after `up`:
+#   docker compose -f ~/docker/retrieval/compose.yml exec gateway \
+#     python -c "import httpx;print(httpx.get('http://retrieval-xray:18000/health',timeout=5).status_code)"

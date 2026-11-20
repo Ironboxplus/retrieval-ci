@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "retrieval": {
+      "command": "uvx",
+      "args": ["--from", "retrieval-mcp==0.5.7", "retrieval-mcp"],
+      "env": {
+        "RETRIEVAL_API_URL": "http://10.100.100.111:8000"
+      }
+    }
+  }
+}
