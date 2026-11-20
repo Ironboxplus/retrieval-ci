@@ -1,0 +1,453 @@
+# conferences.yaml — 会议注册表
+# 格式兼容 ccf-deadlines (github.com/ccfddl/ccf-deadlines)
+# 新增会议：从 ccf-deadlines 复制 title/description/sub/rank/dblp，补 source_class/years 即可
+
+categories:
+  AI:
+    name: 人工智能
+    name_en: Artificial Intelligence
+  DB:
+    name: 数据库/数据挖掘/内容检索
+    name_en: Database/Data Mining/Information Retrieval
+  NW:
+    name: 计算机网络
+    name_en: Network System
+  SC:
+    name: 网络与信息安全
+    name_en: Network and System Security
+  SE:
+    name: 软件工程/系统软件/程序设计语言
+    name_en: Software Engineering/Operating System/Programming Language Design
+  DS:
+    name: 计算机体系结构/并行与分布计算/存储系统
+    name_en: Computer Architecture/Parallel Programming/Storage Technology
+  CT:
+    name: 计算机科学理论
+    name_en: Computing Theory
+  CG:
+    name: 计算机图形学与多媒体
+    name_en: Graphics
+  HI:
+    name: 人机交互与普适计算
+    name_en: Computer-Human Interaction
+  MX:
+    name: 交叉/综合/新兴
+    name_en: Interdiscipline/Mixture/Emerging
+
+conferences:
+  # ── AI 人工智能 ──
+
+  - title: AAAI
+    description: AAAI Conference on Artificial Intelligence
+    sub: AI
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: aaai
+    source_class: AaaiTechnicalTracksSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: ACL
+    description: Annual Meeting of the Association for Computational Linguistics
+    sub: AI
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: acl
+    source_class: AclMainConferenceSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: CVPR
+    description: IEEE/CVF Conference on Computer Vision and Pattern Recognition
+    sub: AI
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: cvpr
+    source_class: CvfProceedingsSource
+    source_args:
+      conference_name: CVPR
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: ICCV
+    description: IEEE International Conference on Computer Vision
+    sub: AI
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: iccv
+    source_class: CvfProceedingsSource
+    source_args:
+      conference_name: ICCV
+    track_type: main
+    years: [2023, 2025]
+
+  - title: ICLR
+    description: International Conference on Learning Representations
+    sub: AI
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: iclr
+    source_class: IclrOpenReviewSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: ICML
+    description: International Conference on Machine Learning
+    sub: AI
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: icml
+    source_class: IcmlProceedingsSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: NeurIPS
+    description: Conference on Neural Information Processing Systems
+    sub: AI
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: nips
+    source_class: NeuripsProceedingsSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  - title: IJCAI
+    description: International Joint Conference on Artificial Intelligence
+    sub: AI
+    rank:
+      ccf: B
+      core: A*
+      thcpl: B
+    dblp: ijcai
+    source_class: IjcaiProceedingsSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  - title: EMNLP
+    description: Conference on Empirical Methods in Natural Language Processing
+    sub: AI
+    rank:
+      ccf: B
+      core: A*
+      thcpl: A
+    dblp: emnlp
+    source_class: EmnlpMainConferenceSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  # ── DB 数据库/数据挖掘/内容检索 ──
+
+  - title: KDD
+    description: ACM SIGKDD Conference on Knowledge Discovery and Data Mining
+    sub: DB
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: kdd
+    source_class: KddOfficialProceedingsSource
+    source_args:
+      conference_name: KDD
+      dblp_venue_key: kdd
+      dblp_toc_overrides:
+        2025:
+          - conf/kdd/kdd2025-1
+          - conf/kdd/kdd2025-2
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: SIGIR
+    description: International Conference on Research on Development in Information Retrieval
+    sub: DB
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: sigir
+    source_class: SigirOfficialProgramSource
+    source_args:
+      conference_name: SIGIR
+      dblp_venue_key: sigir
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: SIGMOD
+    description: ACM Conference on Management of Data
+    sub: DB
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: sigmod
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: SIGMOD
+      dblp_venue_key: sigmod
+      dblp_toc_overrides:
+        2023: journals/pacmmod/pacmmod1
+        2024: journals/pacmmod/pacmmod2
+        2025: journals/pacmmod/pacmmod3
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  - title: VLDB
+    description: International Conference on Very Large Data Bases
+    sub: DB
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: vldb
+    # VLDB papers are published in the PVLDB journal; volume N maps to year 2007+N.
+    # 2022 → vol 15, 2023 → vol 16, 2024 → vol 17, 2025 → vol 18.
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: VLDB
+      dblp_venue_key: vldb
+      dblp_toc_overrides:
+        2022: journals/pvldb/pvldb15
+        2023: journals/pvldb/pvldb16
+        2024: journals/pvldb/pvldb17
+        2025: journals/pvldb/pvldb18
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  # ── SC 网络与信息安全 ──
+
+  - title: CCS
+    description: ACM Conference on Computer and Communications Security
+    sub: SC
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: ccs
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: CCS
+      dblp_venue_key: ccs
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  - title: USENIX Security
+    description: USENIX Security Symposium
+    sub: SC
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: uss
+    source_class: UsenixSecuritySource
+    track_type: main
+    years: [2021, 2022, 2023, 2024, 2025]
+
+  - title: NDSS
+    description: Network and Distributed System Security Symposium
+    sub: SC
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: ndss
+    source_class: NdssSymposiumSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  # ── CG 计算机图形学与多媒体 ──
+
+  - title: ACM MM
+    description: ACM International Conference on Multimedia
+    sub: CG
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: mm
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: ACM MM
+      dblp_venue_key: mm
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  # ── MX 交叉/综合/新兴 ──
+
+  - title: WWW
+    description: The Web Conference (formerly WWW)
+    sub: MX
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: www
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: WWW
+      dblp_venue_key: www
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: CSUR
+    description: ACM Computing Surveys (CCF-A journal, not a conference)
+    sub: MX
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: csur
+    # CSUR is a journal: volume N maps to year 1968+N (vol 54=2022, 58=2026).
+    # DBLP TOC keys live under journals/csur/csurNN; reuse the proceedings
+    # scraper with per-year overrides — same pattern VLDB→PVLDB uses.
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: CSUR
+      dblp_venue_key: csur
+      dblp_toc_overrides:
+        2022: journals/csur/csur54
+        2023: journals/csur/csur55
+        2024: journals/csur/csur56
+        2025: journals/csur/csur57
+        2026: journals/csur/csur58
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  # ── DS 计算机体系结构/并行与分布计算/存储系统 ──
+  # 开放获取全文 only。IEEE Xplore 付费墙会议（MICRO / HPCA / ISCA<=2024 / SC 偶数年）
+  # 暂不收录：合法 OA 仅 ~23-50%（Unpaywall 0、S2 arXiv 23%），盗版源禁用 —— 见 W89。
+
+  - title: ASPLOS
+    description: ACM International Conference on Architectural Support for Programming Languages and Operating Systems
+    sub: DS
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: asplos
+    # 多投稿周期后每年拆多卷，DBLP 无裸 asplosYYYY key。已验证 2024/2025 卷号；
+    # 2022/2023 卷结构待 live smoke 补齐（W89 per-year 验活，勿盲列）。
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: ASPLOS
+      dblp_venue_key: asplos
+      dblp_toc_overrides:
+        2024:
+          - conf/asplos/asplos2024-1
+          - conf/asplos/asplos2024-2
+          - conf/asplos/asplos2024-3
+          - conf/asplos/asplos2024-4
+        2025:
+          - conf/asplos/asplos2025-1
+          - conf/asplos/asplos2025-2
+    track_type: main
+    years: [2024, 2025]
+
+  - title: ISCA
+    description: ACM/IEEE International Symposium on Computer Architecture
+    sub: DS
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: isca
+    # ISCA 2022-2024 在 IEEE Xplore（10.1109，付费墙）→ deferred；2025 起转 ACM（10.1145）。
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: ISCA
+      dblp_venue_key: isca
+    track_type: main
+    years: [2025]
+
+  - title: PPoPP
+    description: ACM SIGPLAN Symposium on Principles and Practice of Parallel Programming
+    sub: DS
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: ppopp
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: PPoPP
+      dblp_venue_key: ppopp
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  - title: EuroSys
+    description: European Conference on Computer Systems
+    sub: DS
+    rank:
+      ccf: A
+      core: A
+      thcpl: A
+    dblp: eurosys
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: EuroSys
+      dblp_venue_key: eurosys
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  - title: DAC
+    description: ACM/IEEE Design Automation Conference
+    sub: DS
+    rank:
+      ccf: A
+      core: A
+      thcpl: A
+    dblp: dac
+    # 主会 DBLP TOC（conf/dac/dacYYYY）= 已归档主会论文；co-located workshop 在独立 key。
+    # 入库后按 W52 复核是否漏入非主会短文/special。
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: DAC
+      dblp_venue_key: dac
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  - title: FAST
+    description: USENIX Conference on File and Storage Technologies
+    sub: DS
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: fast
+    # USENIX 开放获取：usenix.org/conference/fast{YY}/technical-sessions；
+    # PDF system/files/fast{YY}-{slug}.pdf（2026-06-03 验证 200）。
+    source_class: UsenixProceedingsSource
+    source_args:
+      conference_name: FAST
+      url_slug: fast
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
+
+  - title: USENIX ATC
+    description: USENIX Annual Technical Conference
+    sub: DS
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: usenix
+    # USENIX 开放获取：usenix.org/conference/atc{YY}/technical-sessions；
+    # PDF system/files/atc{YY}-{slug}.pdf（2026-06-03 验证 200）。DBLP key 为 conf/usenix（仅元数据参考）。
+    source_class: UsenixProceedingsSource
+    source_args:
+      conference_name: USENIX ATC
+      url_slug: atc
+    track_type: main
+    years: [2022, 2023, 2024, 2025]
