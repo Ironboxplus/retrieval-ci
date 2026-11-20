@@ -1,0 +1,237 @@
+{
+ "paper": "jmlr-2022-21-0061",
+ "page": 44,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     492,
+     79,
+     723,
+     102
+    ],
+    "block_content": "PACCHIARDI AND DUTTA"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     186,
+     1047,
+     264
+    ],
+    "block_content": "This definition is an extension of the standard Markovianity assumption (of order 1), which corresponds to  $ p(x|\\theta) = p(x_1|\\theta) \\prod_{i=2}^{d} p(x_i|x_{i-1};\\theta) $, and it means that each element of x only depends on the last r elements. When r = 0, this corresponds to i.i.d. assumption."
+   },
+   {
+    "block_id": 2,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     266,
+     1048,
+     319
+    ],
+    "block_content": "When a model is r-Markovian, the probability density of an observation x is invariant to r-block-switch transformation, which is defined as follows:"
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     341,
+     1051,
+     423
+    ],
+    "block_content": "Definition 24 r-block-switch transformation (Wiqvist et al., 2019) Let $x_{i:j}$ and $x_{k:l}$ be two non-overlapping blocks with $x_{i:(i+r)} = x_{k:(k+r)}$ and $x_{(j-r):j} = x_{(l-r):l}$. Then, denoting $b = (i, j, k, l)$, with $j - i \\geq r$ and $l - k \\geq r$:"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     377,
+     445,
+     845,
+     518
+    ],
+    "block_content": " $$ \\begin{array}{c}{x=x_{1:i-1}\\quad x_{i:j}\\quad x_{(j+1):(k-1)}\\quad x_{k:l}\\quad x_{(l+1):M}}\\\\ {T_{b}^{(r)}(x)=x_{1:i-1}\\quad x_{k:l}\\quad x_{(j+1):(k-1)}\\quad x_{i:j}\\quad x_{(l+1):M}.}\\end{array} $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "display_formula",
+    "block_bbox": [
+     211,
+     534,
+     888,
+     565
+    ],
+    "block_content": " $$ {O t h e r w i s e,~i f~}x_{i:(i+r)}\\neq x_{k:(k+d)}{~o r~}x_{(j-r):j}\\neq x_{(l-r):l},{~t h e n~}T_{b}^{(r)}(x)=x. $$ "
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     582,
+     1048,
+     637
+    ],
+    "block_content": "For instance, let us consider the case in which the data space is  $ \\mathcal{X} = \\{0, 1, \\ldots, 9\\}^{16} $, and r = 2. An example of the above transformation is the following:"
+   },
+   {
+    "block_id": 7,
+    "block_label": "display_formula",
+    "block_bbox": [
+     371,
+     679,
+     848,
+     755
+    ],
+    "block_content": " $$ \\begin{array}{r l}{x=1}&{{}\\boxed{7236458}17\\boxed{72958}1}\\\\ {T_{(2,8,11,15)}^{(2)}(x)=1}&{{}\\boxed{72958}\\boxed{17}\\boxed{7236458}1.}\\end{array} $$ "
+   },
+   {
+    "block_id": 8,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     772,
+     1046,
+     825
+    ],
+    "block_content": "The authors of Wiqvist et al. (2019) provide a simple Neural Network structure which is invariant to the r-block-switch transformation, motivated by the following theorem:"
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     841,
+     1047,
+     895
+    ],
+    "block_content": "Theorem 25 ((Wiqvist et al., 2019)) Let $f: \\mathcal{X}^M \\to A$ r-block-switch invariant. If $\\mathcal{X}$ is countable, $\\exists \\phi: \\mathcal{X}^{r+1} \\to \\mathbb{R}$ and $\\rho: \\mathcal{X}^r \\times \\mathbb{R} \\to A$ such that:"
+   },
+   {
+    "block_id": 10,
+    "block_label": "display_formula",
+    "block_bbox": [
+     395,
+     911,
+     824,
+     983
+    ],
+    "block_content": " $$ \\forall x\\in\\mathcal{X}^{M},f(x)=\\rho\\left(x_{1:r},\\sum_{i=1}^{M-r}\\phi(x_{i:(i+r)})\\right). $$ "
+   },
+   {
+    "block_id": 11,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1004,
+     933,
+     1044,
+     960
+    ],
+    "block_content": "(18)"
+   },
+   {
+    "block_id": 12,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1000,
+     1045,
+     1053
+    ],
+    "block_content": "In practice,  $ \\phi $ and  $ \\rho $ are two independent Neural Networks (which we take to be fully connected in our case), giving rise to a PEN of order r."
+   },
+   {
+    "block_id": 13,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     1054,
+     1048,
+     1216
+    ],
+    "block_content": "In Wiqvist et al. (2019), the authors show that the posterior mean of a Markovian variable of order r needs to be invariant to the r-block-switch transformation. Therefore, this motivates using a PEN for learning a summary statistics as in the approach by Fearnhead and Prangle (2012). Here, we use PEN for parametrizing the statistics in the approximating exponential family as well; this choice implies that the approximating family has the same Markovianity property as the true distribution, as we discuss in the following."
+   },
+   {
+    "block_id": 14,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     174,
+     1242,
+     650,
+     1267
+    ],
+    "block_content": "E.3.1 RESULTS FOR THE EXPONENTIAL FAMILY"
+   },
+   {
+    "block_id": 15,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1280,
+     1046,
+     1334
+    ],
+    "block_content": "A deeper connection between r-Markovian probability models and r-block-switch transformation exists. We can in fact state the following result:"
+   },
+   {
+    "block_id": 16,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     1356,
+     1048,
+     1413
+    ],
+    "block_content": "Lemma 26 A probability model  $ p(x|\\theta) $ is r-Markovian  $ \\iff $ the function  $ x \\mapsto p(x|\\theta) $ is r-block-switch invariant, i.e.  $ p(x|\\theta) = p(T_b^{(r)}(x)|\\theta) \\forall T_b^{(r)} $."
+   },
+   {
+    "block_id": 17,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1451,
+     625,
+     1469
+    ],
+    "block_content": "44"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['17', '7236458', '72958']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 23,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.938,
+   "numbers_unknown": 3,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.999,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

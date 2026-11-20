@@ -2,18 +2,24 @@
 Reranker — re-scores candidate results using a cross-encoder model.
 
 Takes top-N candidates from retrieval and re-ranks them to top-K
-with much higher precision.
+with much higher precision. The cross-encoder runs as a vLLM service
+(``RERANKER__SERVICE_URL``) and ``VllmReranker`` is its client. The in-process torch
+``BgeReranker`` is retired and raises when constructed.
 """
 from __future__ import annotations
 
 import logging
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from config import settings
+import httpx
+
+from config import RERANK_QUERY_TOKENS, settings
 from app.models.schemas import SearchResult
+from core.inference_retired import RERANKER_INSTEAD, RetiredInferencePath
 from core.gpu_memory import (
     CudaAllocatorSnapshot,
     capture_cuda_allocator_snapshot,
@@ -70,12 +76,138 @@ class BaseReranker:
         raise NotImplementedError
 
 
+# ``served-model-name`` of the reranking service (deploy/compute88/vllm_reranker.yaml); vLLM
+# routes the request by it.
+RERANKER_SERVED_MODEL = "bge-reranker-v2-m3"
+# Pairs per request. A cancel can land between requests, so this is also the cancel latency.
+RERANK_REQUEST_PAIRS = 32
+# Requests in flight at once: the service batches across them (4 measured as fast as 16).
+RERANK_IN_FLIGHT = 4
+# Scoring is business traffic: the top of vLLM's priority scale (lower runs first).
+RERANK_PRIORITY = 0
+RERANK_TIMEOUT_S = 120.0
+
+
+class RerankerServiceError(RuntimeError):
+    """The reranking service did not answer, or answered something that is not a score list."""
+
+
+class VllmReranker(BaseReranker):
+    """Cross-encoder scores from the vLLM reranking service (bge-reranker-v2-m3).
+
+    ``score_pairs`` returns the service's default (sigmoid) score of each (query, text) pair, in
+    input order: the scale ``FlagReranker(normalize=True)`` had. A pair is cut, not refused, as
+    before:
+
+    * the query is clipped here to ``RERANK_QUERY_TOKENS`` tokens (FlagReranker's
+      ``query_max_length``) with the production tokenizer, which the reranker's vocabulary shares;
+    * the service cuts the whole pair to ``settings.reranker.max_length`` tokens
+      (``truncate_prompt_tokens``, a top-level request field: inside the body it is ignored), so
+      only the end of a long passage is lost.
+
+    Texts go out in requests of ``RERANK_REQUEST_PAIRS`` pairs, ``RERANK_IN_FLIGHT`` at a time.
+    ``should_cancel`` is polled before each request is sent, so a cancelled rerank stops after
+    at most the requests already in flight.
+    """
+
+    def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3", *, base_url: str | None = None,
+                 batch_size: int | None = None, max_length: int | None = None,
+                 in_flight: int = RERANK_IN_FLIGHT, timeout_s: float = RERANK_TIMEOUT_S,
+                 client: httpx.Client | None = None):
+        self._model_name = model_name
+        self._base_url = (base_url or settings.reranker.service_url).rstrip("/")
+        self._batch_size = RERANK_REQUEST_PAIRS if batch_size is None else batch_size
+        self._max_length = settings.reranker.max_length if max_length is None else max_length
+        if self._batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        if in_flight < 1:
+            raise ValueError("in_flight must be at least 1")
+        if self._max_length < 64:
+            raise ValueError("max_length must be at least 64")
+        self._in_flight = in_flight
+        # trust_env=False: the host's HTTP proxy must never carry loopback traffic.
+        self._client = client or httpx.Client(timeout=timeout_s, trust_env=False)
+
+    def _load_model(self) -> "VllmReranker":
+        """Startup hook kept for ``main.py``: there is no model to load, the service is the model."""
+        return self
+
+    @staticmethod
+    def _clip_query(query: str) -> str:
+        from core.indexing.embedding_profile import ascii_within_limit, get_profile
+        from core.indexing.token_budget import SEGMENT_CHARS, token_offsets
+
+        if ascii_within_limit(query, RERANK_QUERY_TOKENS):
+            return query
+        offsets = token_offsets(query[:SEGMENT_CHARS], get_profile())
+        return query if len(offsets) <= RERANK_QUERY_TOKENS else query[:offsets[RERANK_QUERY_TOKENS - 1][1]]
+
+    def _score_request(self, query: str, texts: list[str]) -> list[float]:
+        body = {
+            "model": RERANKER_SERVED_MODEL, "query": query, "documents": texts,
+            "truncate_prompt_tokens": self._max_length, "priority": RERANK_PRIORITY,
+        }
+        try:
+            response = self._client.post(f"{self._base_url}/rerank", json=body)
+        except httpx.HTTPError as exc:
+            raise RerankerServiceError(f"reranker service {self._base_url} unreachable: {exc!r}") from exc
+        if response.status_code != 200:
+            raise RerankerServiceError(
+                f"reranker service {self._base_url} answered {response.status_code}: {response.text[:300]}")
+        scores: list[float | None] = [None] * len(texts)
+        for item in response.json()["results"]:
+            scores[int(item["index"])] = float(item["relevance_score"])
+        if any(score is None for score in scores):
+            raise RerankerServiceError(
+                f"reranker service returned scores for {sum(s is not None for s in scores)} of {len(texts)} documents")
+        return scores  # type: ignore[return-value]
+
+    def score_pairs(
+        self,
+        query: str,
+        texts: list[str],
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> list[float]:
+        if not texts:
+            return []
+        query = self._clip_query(query)
+        step = self._batch_size
+        scores: list[float] = []
+        pending: list[Future] = []
+        pool = ThreadPoolExecutor(max_workers=self._in_flight, thread_name_prefix="rerank")
+        try:
+            for offset in range(0, len(texts), step):
+                if should_cancel is not None and should_cancel():
+                    raise RerankCancelledError(f"rerank cancelled after {offset}/{len(texts)} pairs")
+                pending.append(pool.submit(self._score_request, query, texts[offset:offset + step]))
+                if len(pending) >= self._in_flight:
+                    scores.extend(pending.pop(0).result())
+            while pending:
+                scores.extend(pending.pop(0).result())
+        finally:
+            for future in pending:
+                future.cancel()
+            pool.shutdown(wait=False)
+        return scores
+
+    def rerank(self, query: str, results: list[SearchResult],
+               top_k: int = 10, *,
+               should_cancel: Callable[[], bool] | None = None) -> list[SearchResult]:
+        return _rerank_by_scores(self, query, results, top_k, should_cancel)
+
+
 class BgeReranker(BaseReranker):
-    """BGE reranker using FlagEmbedding's FlagReranker."""
+    """RETIRED: BGE reranker loaded into this process with FlagEmbedding's FlagReranker.
+
+    Kept for reference only; constructing it raises. Scoring goes through the vLLM reranking
+    service (``get_shared_reranker()`` / ``VllmReranker``).
+    """
 
     def __init__(self, model_name: str = "BAAI/bge-reranker-v2-m3",
                  device: str | None = None, *, batch_size: int | None = None,
                  idle_cache_limit_mib: int | None = None):
+        raise RetiredInferencePath("BgeReranker (in-process FlagReranker)", RERANKER_INSTEAD)
         self._model_name = model_name
         self._device = device or settings.embedding.device
         self._use_fp16 = is_cuda_device(self._device)
@@ -127,6 +259,8 @@ class BgeReranker(BaseReranker):
                         use_fp16=self._use_fp16,
                         devices=[self._device],
                         batch_size=self._batch_size,
+                        max_length=settings.reranker.max_length,
+                        query_max_length=RERANK_QUERY_TOKENS,
                     )
                     if is_cuda_device(self._device):
                         model.compute_score([["warmup", "warmup"]])
@@ -295,34 +429,40 @@ class BgeReranker(BaseReranker):
     def rerank(self, query: str, results: list[SearchResult],
                top_k: int = 10, *,
                should_cancel: Callable[[], bool] | None = None) -> list[SearchResult]:
-        if not results:
-            return []
+        return _rerank_by_scores(self, query, results, top_k, should_cancel)
 
-        scores = self.score_pairs(
-            query, [r.content for r in results], should_cancel=should_cancel,
-        )
 
-        scored = list(zip(results, scores))
-        scored.sort(key=lambda x: x[1], reverse=True)
+def _rerank_by_scores(reranker: BaseReranker, query: str, results: list[SearchResult], top_k: int,
+                      should_cancel: Callable[[], bool] | None) -> list[SearchResult]:
+    """The top ``top_k`` of ``results`` by ``reranker.score_pairs``, each carrying its score."""
+    if not results:
+        return []
 
-        reranked = []
-        for result, score in scored[:top_k]:
-            reranked.append(SearchResult(
-                doc_id=result.doc_id,
-                chunk_id=result.chunk_id,
-                content=result.content,
-                score=float(score),
-                doc_title=result.doc_title,
-                source=result.source,
-                metadata={**result.metadata, "reranker_score": float(score)},
-            ))
-        return reranked
+    scores = reranker.score_pairs(
+        query, [r.content for r in results], should_cancel=should_cancel,
+    )
+
+    scored = list(zip(results, scores))
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    reranked = []
+    for result, score in scored[:top_k]:
+        reranked.append(SearchResult(
+            doc_id=result.doc_id,
+            chunk_id=result.chunk_id,
+            content=result.content,
+            score=float(score),
+            doc_title=result.doc_title,
+            source=result.source,
+            metadata={**result.metadata, "reranker_score": float(score)},
+        ))
+    return reranked
 
 
 def create_reranker(model_name: Optional[str] = None) -> BaseReranker:
-    """Factory for creating reranker instances."""
+    """Factory for creating reranker instances: the client of the reranking service."""
     name = model_name or "BAAI/bge-reranker-v2-m3"
-    return BgeReranker(model_name=name)
+    return VllmReranker(model_name=name)
 
 
 _SHARED_RERANKER: BaseReranker | None = None

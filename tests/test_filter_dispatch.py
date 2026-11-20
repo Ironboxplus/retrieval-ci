@@ -150,14 +150,14 @@ class TestPipelineFilterDispatch(unittest.TestCase):
         pipe, store = self._make_pipeline()
         pipe.search(SearchRequest(query="x", mode="hybrid"))
         fd = store.hybrid_search.call_args.kwargs["filter_dict"]
-        self.assertEqual(fd, {"__exclude__": {"source_type": ["review"]}})
+        self.assertEqual(fd, {"__exclude__": {"source_type": ["review"], "venue_tier": ["preprint"], "withdrawn": True}})
 
     def test_include_reviews_drops_the_exclusion(self):
         from core.retrieval.pipeline import SearchRequest
         pipe, store = self._make_pipeline()
         pipe.search(SearchRequest(query="x", mode="hybrid", include_reviews=True))
         fd = store.hybrid_search.call_args.kwargs["filter_dict"]
-        self.assertEqual(fd, {})
+        self.assertEqual(fd, {"__exclude__": {"venue_tier": ["preprint"], "withdrawn": True}})
 
     def test_source_type_review_is_review_only(self):
         # Explicit source_type=review -> positive match, no exclusion.
@@ -166,7 +166,8 @@ class TestPipelineFilterDispatch(unittest.TestCase):
         pipe.search(SearchRequest(query="x", mode="hybrid", source_type="review"))
         fd = store.hybrid_search.call_args.kwargs["filter_dict"]
         self.assertEqual(fd.get("source_type"), "review")
-        self.assertNotIn("__exclude__", fd)
+        # No review exclusion; the preprint one stays (source_type does not scope tiers).
+        self.assertNotIn("source_type", fd.get("__exclude__", {}))
 
     def test_stream_path_also_excludes_reviews(self):
         # dual-endpoint sync: search_stream must apply the same default exclusion.
@@ -174,7 +175,7 @@ class TestPipelineFilterDispatch(unittest.TestCase):
         pipe, store = self._make_pipeline()
         list(pipe.search_stream(SearchRequest(query="x", mode="hybrid")))
         fd = store.hybrid_search.call_args.kwargs["filter_dict"]
-        self.assertEqual(fd, {"__exclude__": {"source_type": ["review"]}})
+        self.assertEqual(fd, {"__exclude__": {"source_type": ["review"], "venue_tier": ["preprint"], "withdrawn": True}})
 
 
 class TestTitleOnlyRoutesToLevelOne(unittest.TestCase):
@@ -207,6 +208,65 @@ class TestTitleOnlyRoutesToLevelOne(unittest.TestCase):
 
         kwargs = store.hybrid_search.call_args.kwargs
         self.assertEqual(kwargs["filter_dict"].get("level"), 1)
+
+
+class TestWithdrawnExclusion(unittest.TestCase):
+    """include_withdrawn rides the include_preprints path: retrieve_filters adds the
+    must_not, QdrantStore._build_filter turns the bool into a MatchValue."""
+
+    def _store(self):
+        from core.storage.qdrant_store import QdrantStore
+        store = QdrantStore.__new__(QdrantStore)
+        store.collection_name = "arxiv"
+        return store
+
+    def test_scalar_exclude_is_match_value_and_bool_stays_bool(self):
+        f = self._store()._build_filter(filter_dict={"__exclude__": {"withdrawn": True}})
+        self.assertEqual(len(f.must_not), 1)
+        cond = f.must_not[0]
+        self.assertEqual(cond.key, "withdrawn")
+        self.assertIs(cond.match.value, True)
+        self.assertFalse(hasattr(cond.match, "any"))
+
+    def test_list_exclude_stays_match_any(self):
+        f = self._store()._build_filter(
+            filter_dict={"__exclude__": {"venue_tier": ["preprint"], "withdrawn": True}})
+        by_key = {c.key: c.match for c in f.must_not}
+        self.assertEqual(list(by_key["venue_tier"].any), ["preprint"])
+        self.assertIs(by_key["withdrawn"].value, True)
+
+    def test_match_any_cannot_carry_a_bool(self):
+        # Why a bool must not be wrapped in a list: qdrant_client rejects it.
+        from qdrant_client.http import models as qm
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            qm.MatchAny(any=[True])
+
+    def test_default_excludes_withdrawn(self):
+        from core.retrieval.pipeline import SearchRequest, retrieve_filters
+        self.assertIs(retrieve_filters(SearchRequest(query="x"))["__exclude__"]["withdrawn"], True)
+
+    def test_include_withdrawn_drops_the_exclusion(self):
+        from core.retrieval.pipeline import SearchRequest, retrieve_filters
+        item = retrieve_filters(SearchRequest(query="x", include_withdrawn=True))
+        self.assertNotIn("withdrawn", item["__exclude__"])
+
+    def test_id_scoped_requests_are_not_narrowed(self):
+        from core.retrieval.pipeline import SearchRequest, retrieve_filters
+        for key in ("paper_id", "doc_id"):
+            item = retrieve_filters(SearchRequest(query="x", filters={key: ["a"]}))
+            self.assertNotIn("withdrawn", item["__exclude__"], key)
+
+    def test_venue_scope_does_not_lift_it(self):
+        # arxiv_scope sets venue_tier=preprint; withdrawn papers must still be dropped.
+        from core.retrieval.pipeline import SearchRequest, retrieve_filters
+        item = retrieve_filters(SearchRequest(query="x", filters={"venue_tier": "preprint"}))
+        self.assertIs(item["__exclude__"]["withdrawn"], True)
+
+    def test_http_request_defaults_and_carries_the_flag(self):
+        from app.models.schemas import SearchRequest
+        self.assertFalse(SearchRequest(query="x").include_withdrawn)
+        self.assertTrue(SearchRequest(query="x", include_withdrawn=True).include_withdrawn)
 
 
 class TestRetrievalMethodEnumSlim(unittest.TestCase):

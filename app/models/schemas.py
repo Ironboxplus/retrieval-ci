@@ -54,6 +54,11 @@ class Chunk(BaseModel):
     metadata: Dict[str, Any] = {}
 
 
+# venue_tier of arXiv preprints in `papers`; default search excludes it and
+# /api/arxiv/search is scoped to it.
+PREPRINT_TIER = "preprint"
+
+
 class SearchRequest(BaseModel):
     """检索请求"""
     query: str = Field(
@@ -72,6 +77,21 @@ class SearchRequest(BaseModel):
     venue: Optional[Union[str, List[str]]] = None
     year: Optional[Union[int, List[int]]] = None
     venue_tier: Optional[str] = None
+    include_preprints: bool = Field(
+        default=False,
+        description=(
+            "是否混入 arXiv 预印本（venue_tier=preprint）。默认不混入；只检索预印本请用 "
+            "/api/arxiv/search。已按 venue_tier / paper_ids / doc_ids / venue=arXiv 限定范围"
+            "的请求不受此项影响。"
+        ),
+    )
+    include_withdrawn: bool = Field(
+        default=False,
+        description=(
+            "是否包含已撤稿的 arXiv 预印本。默认排除；按 paper_ids / doc_ids 限定的请求"
+            "不受此项影响，仍能找到撤稿论文。命中的 metadata.withdrawn 标记撤稿。"
+        ),
+    )
     title_only: bool = Field(
         default=False,
         description=(
@@ -276,3 +296,131 @@ class IndexStats(BaseModel):
 
 # 解决前向引用
 Document.model_rebuild()
+
+
+# ---------------------------------------------------------------------------
+# Schedules (app/api/routes/schedules.py). Kept as one block, appended last.
+# ---------------------------------------------------------------------------
+class ScheduleMetric(BaseModel):
+    """One labelled gauge on a schedule card."""
+    name: str
+    value: Optional[Union[float, int, str]] = None
+    unit: str = ""
+
+
+class ScheduleTaskBrief(BaseModel):
+    """The Task a tick started, as of now."""
+    id: int
+    status: str
+    error: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    result_json: Optional[Dict[str, Any]] = None
+
+
+class ScheduleTickResponse(BaseModel):
+    id: int
+    schedule_id: int
+    scheduled_for: Optional[str] = Field(None, description="The slot the trigger was due, UTC ISO-8601")
+    fired_at: Optional[str] = None
+    trigger: str = Field(description="cron | manual | retry")
+    status: str = Field(description="enqueued | skipped | missed | error")
+    reason: Optional[str] = None
+    task_id: Optional[int] = None
+    attempt: int = 0
+    task: Optional[ScheduleTaskBrief] = None
+
+
+class ScheduleRunningTask(BaseModel):
+    id: int
+    task_type: str
+    status: str
+    progress: int = 0
+    total: int = 0
+    started_at: Optional[str] = Field(None, description="RFC 3339 with offset")
+
+
+class ScheduleResponse(BaseModel):
+    id: int
+    key: str
+    kind: str
+    title: str
+    enabled: bool
+    system: bool
+    trigger_json: Dict[str, Any] = Field(description="daily | weekly | interval, with timezone")
+    params_json: Dict[str, Any]
+    catchup: str = Field(description="latest | skip")
+    misfire_grace_s: Optional[int] = Field(None, description="null = the kind's default")
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    next_run_time: Optional[str] = Field(None, description="From the engine; null while paused or engine idle")
+    next_fire_times: List[str] = Field(default_factory=list, description="Next 5 slots, ISO-8601 with offset")
+    last_tick: Optional[ScheduleTickResponse] = None
+    running_task: Optional[ScheduleRunningTask] = None
+    metrics: List[ScheduleMetric] = Field(default_factory=list)
+
+
+class ScheduleCreateRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=100)
+    kind: str
+    title: str = Field(min_length=1, max_length=200)
+    trigger: Dict[str, Any]
+    params: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    catchup: str = "latest"
+    misfire_grace_s: Optional[int] = Field(None, ge=0)
+
+
+class SchedulePatchRequest(BaseModel):
+    """Only the fields present in the body change."""
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    enabled: Optional[bool] = None
+    trigger: Optional[Dict[str, Any]] = None
+    params: Optional[Dict[str, Any]] = None
+    catchup: Optional[str] = None
+    misfire_grace_s: Optional[int] = Field(None, ge=0)
+
+
+class ScheduleKindDefault(BaseModel):
+    key: str
+    title: str
+    trigger: Dict[str, Any]
+    params: Dict[str, Any]
+    catchup: str
+    misfire_grace_s: Optional[int] = None
+    enabled: bool
+
+
+class ScheduleRetryPolicy(BaseModel):
+    max_retries: int
+    base_delay_s: int
+    backoff: float
+    max_delay_s: int
+
+
+class ScheduleKindResponse(BaseModel):
+    name: str
+    title: str
+    params_schema: Dict[str, Any] = Field(description="JSON Schema of the kind's parameters")
+    defaults: List[ScheduleKindDefault]
+    retry: ScheduleRetryPolicy
+
+
+class ScheduleFireResponse(BaseModel):
+    status: str = Field(description="enqueued | skipped | noop")
+    task_id: Optional[int] = None
+    reason: Optional[str] = None
+
+
+class SchedulePreviewRequest(BaseModel):
+    trigger: Dict[str, Any]
+    count: int = Field(5, ge=1, le=20)
+
+
+class SchedulePreviewResponse(BaseModel):
+    next_fire_times: List[str] = Field(description="ISO-8601 with the trigger's UTC offset")
+
+
+class ScheduleDeleteResponse(BaseModel):
+    id: int
+    deleted: bool = True

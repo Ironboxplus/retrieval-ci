@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider, App as AntApp, Spin, theme as antTheme } from 'antd';
@@ -21,6 +21,12 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { Toaster } from '@/components/ui/sonner';
 
 dayjs.locale('zh-cn');
+
+// Internal-only page. The import() sits behind the build flag so the public bundle
+// carries none of it (JSON-schema forms, ajv, the virtual list) and emits no chunk.
+// (`import.meta.env` is read here, not via PUBLIC_MODE: the bundler folds the literal
+// before it walks imports, but does not see through the constant re-exported from constants.ts.)
+const Updates = import.meta.env.VITE_PUBLIC_MODE === '1' ? null : lazy(() => import('./pages/Updates'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -110,6 +116,13 @@ export default function App() {
                 <Route path="journal" element={<Navigate to="/settings?tab=journal" replace />} />
                 <Route path="public-code" element={<Navigate to="/settings?tab=public-code" replace />} />
                 {!PUBLIC_MODE && <Route path="tasks" element={<Tasks />} />}
+                {/* Scheduled jobs (/api/schedules): internal build only, admin-gated like settings. */}
+                {Updates && (
+                  <Route
+                    path="updates"
+                    element={<ConsoleGate><Suspense fallback={<Spin />}><Updates /></Suspense></ConsoleGate>}
+                  />
+                )}
                 {/* Public: first-OIDC-login username claim (gateway redirects here). */}
                 {PUBLIC_MODE && <Route path="register" element={<Register />} />}
                 {/* Any unknown path falls back to Search: public hides admin paths,

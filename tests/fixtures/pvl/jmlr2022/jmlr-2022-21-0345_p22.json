@@ -1,0 +1,138 @@
+{
+ "paper": "jmlr-2022-21-0345",
+ "page": 22,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     514,
+     78,
+     703,
+     102
+    ],
+    "block_content": "CANNINGS AND FAN"
+   },
+   {
+    "block_id": 1,
+    "block_label": "table",
+    "block_bbox": [
+     220,
+     175,
+     997,
+     433
+    ],
+    "block_content": "<table><tr><td>Model</td><td>Full</td><td>CAM</td><td>CC</td><td>Mean</td><td>PMM</td><td>RF</td></tr><tr><td>Density</td><td colspan=\"6\"></td></tr><tr><td>1</td><td>4.97 $ _{{0.02}} $</td><td>6.07 $ _{{0.03}} $</td><td>6.23 $ _{{0.03}} $</td><td>23.77 $ _{{0.24}} $</td><td>6.76 $ _{{0.10}} $</td><td>6.86 $ _{{0.10}} $</td></tr><tr><td>2</td><td>35.31 $ _{{0.07}} $</td><td>40.28 $ _{{0.08}} $</td><td>40.58 $ _{{0.08}} $</td><td>101.80 $ _{{1.04}} $</td><td>50.21 $ _{{1.07}} $</td><td>38.31 $ _{{0.31}} $</td></tr><tr><td>3</td><td>51.84 $ _{{0.10}} $</td><td>52.49 $ _{{0.10}} $</td><td>52.72 $ _{{0.10}} $</td><td>69.66 $ _{{0.72}} $</td><td>52.91 $ _{{0.34}} $</td><td>52.85 $ _{{0.35}} $</td></tr><tr><td>Regression</td><td colspan=\"6\"></td></tr><tr><td>1</td><td>2.74 $ _{{0.01}} $</td><td>4.29 $ _{{0.02}} $</td><td>4.35 $ _{{0.02}} $</td><td>6.49 $ _{{0.10}} $</td><td>2.65 $ _{{0.04}} $</td><td>6.40 $ _{{0.11}} $</td></tr><tr><td>2</td><td>2.86 $ _{{0.02}} $</td><td>4.12 $ _{{0.03}} $</td><td>4.20 $ _{{0.03}} $</td><td>5.82 $ _{{0.11}} $</td><td>12.28 $ _{{0.23}} $</td><td>6.02 $ _{{0.12}} $</td></tr><tr><td>3</td><td>19.29 $ _{{0.11}} $</td><td>29.51 $ _{{0.19}} $</td><td>29.84 $ _{{0.20}} $</td><td>61.90 $ _{{1.01}} $</td><td>112.22 $ _{{1.63}} $</td><td>24.44 $ _{{0.46}} $</td></tr></table>"
+   },
+   {
+    "block_id": 2,
+    "block_label": "figure_title",
+    "block_bbox": [
+     176,
+     453,
+     1047,
+     535
+    ],
+    "block_content": "Table 2: Average estimated total variation errors ( $ *10^{3} $) for the density estimation problems and mean integrated squared error ( $ *10^{3} $) for the regression problems. In each case, n = 500 and the first component of X is missing with probability 1/2."
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     603,
+     1049,
+     821
+    ],
+    "block_content": "sample is taken from the observations that are close to the observation with the missing value (Little and Rubin, 2002, Section 4.3.2); and Random Forest (RF) imputation, this uses the Random Forests algorithm to predict the missing entries based on the observed data (Breiman, 2002; Pantanowitz and Marwala, 2009). For the latter two methods, we use multiple imputation; the missing values are imputed five times and we then take the average of the results after fitting the model on the five imputed datasets. A detailed outline of these methods can be found in Little and Rubin (2002, Chapters 4 and 10). Our implementation utilises the mice R package available from CRAN (van Buuren et al., 2018)."
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     824,
+     1048,
+     959
+    ],
+    "block_content": "In our experiments, the kernel density estimators are computed using the ks package available from CRAN. In particular, we use the kde function with a Gaussian kernel, and the diagonal bandwidth matrices were chosen using the Hpi.diag function. In the regression settings, we make use of the regpro package available from CRAN. For the imputation approaches, the corresponding kernel methods are applied to the imputed datasets."
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     962,
+     1050,
+     1234
+    ],
+    "block_content": "In Table 2 we present the estimated total variation or mean integrated squared errors (with standard errors in subscript) over 100 repetitions of each experiment. For comparison, we also present the results of applying the kernel methods to the full dataset of size n. We see that the CAM technique improves on the complete-case approach in every setting. On the other hand, as discussed in the introduction, the imputation approaches are not always successful: indeed, there are many settings here where the imputation methods lead to worse performance than the complete-case method. Notice that occasionally the imputation methods, e.g. random forests in Density Model 2 and predictive mean matching in Regression Model 1, perform very well (even outperforming the full data estimator in a few cases) – it is unclear why this is the case due to the black-box nature of these approaches."
+   },
+   {
+    "block_id": 6,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     174,
+     1264,
+     554,
+     1289
+    ],
+    "block_content": "4.4 The Brandsma school dataset"
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     1305,
+     1049,
+     1416
+    ],
+    "block_content": "In this subsection, we show how the CAM local constant regression estimator can be used in practice with the brandsma dataset available in the MICE package. The full data set consists of 4106 observations of 14 features. We simplify the problem by retaining only 4 features, namely the “verbal IQ score”, the “SES score”, “language score pre”, and “language score"
+   },
+   {
+    "block_id": 8,
+    "block_label": "number",
+    "block_bbox": [
+     599,
+     1450,
+     625,
+     1469
+    ],
+    "block_content": "22"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['07', '08', '1.01', '1.04', '1.07', '1.63', '101.80', '11']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 23,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 1.0,
+   "numbers_unknown": 52,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.0,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 1
+  }
+ }
+}

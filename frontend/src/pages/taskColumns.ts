@@ -1,4 +1,5 @@
 import { taskGroupKey } from './taskBody';
+import { instantMs } from './taskTime';
 
 /**
  * Pure lifecycle-column + stacking logic for the Tasks page (design addendum
@@ -55,7 +56,7 @@ export function groupTaskStacks<T extends TaskLike>(tasks: T[]): TaskStack<T>[] 
   }
   const stacks: TaskStack<T>[] = [];
   for (const [key, group] of byKey) {
-    const sorted = [...group].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const sorted = [...group].sort((a, b) => instantMs(b.created_at) - instantMs(a.created_at));
     stacks.push({ key, latest: sorted[0], earlier: sorted.slice(1) });
   }
   return stacks;
@@ -64,14 +65,13 @@ export function groupTaskStacks<T extends TaskLike>(tasks: T[]): TaskStack<T>[] 
 /** Board order within a column. 运行中 puts the task whose state moved most
  * recently on top: the pipeline stamps `last_heartbeat` on every stage change
  * and progress tick, so the one actually working rises while the dozens
- * parked behind a stage lock sink. `created_at` is UTC and the other two are
- * server-local, so they are never compared with each other. Other columns
- * stay newest-created first. */
+ * parked behind a stage lock sink. Timestamps are compared as instants (they
+ * carry an offset). Other columns stay newest-created first. */
 export function sortStacksForColumn<T extends TaskLike>(column: LifecycleColumn, stacks: TaskStack<T>[]): TaskStack<T>[] {
-  const byCreated = (a: TaskStack<T>, b: TaskStack<T>) => b.latest.created_at.localeCompare(a.latest.created_at);
+  const byCreated = (a: TaskStack<T>, b: TaskStack<T>) => instantMs(b.latest.created_at) - instantMs(a.latest.created_at);
   if (column !== 'running') return [...stacks].sort(byCreated);
-  const touched = (s: TaskStack<T>) => s.latest.last_heartbeat ?? s.latest.started_at ?? '';
-  return [...stacks].sort((a, b) => touched(b).localeCompare(touched(a)) || byCreated(a, b));
+  const touched = (s: TaskStack<T>) => instantMs(s.latest.last_heartbeat ?? s.latest.started_at);
+  return [...stacks].sort((a, b) => touched(b) - touched(a) || byCreated(a, b));
 }
 
 // running/failed are the columns worth a bigger share of board width when

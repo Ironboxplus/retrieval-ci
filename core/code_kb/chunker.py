@@ -38,6 +38,7 @@ from core.code_kb.source_policy import (
     LANG_BY_EXT,
     LANG_BY_NAME,
     MAX_FILE_BYTES,
+    DOC_EXTS,
     resolve_language,
     source_extension,
 )
@@ -437,18 +438,8 @@ def path_excluded(rel_path: str, patterns: List[str]) -> bool:
 
 def gitignore_allowed(root: str) -> Optional[Set[str]]:
     """Repo-relative paths (forward slashes) that git does NOT ignore under `root`, or
-    None if `root` isn't a git working tree (callers then apply no gitignore filtering).
-
-    Delegates the ignore resolution to git itself, so nested .gitignore files, negation
-    (``!``) rules, ``.git/info/exclude`` and the user's global ``core.excludesFile`` are
-    all honored — a hand-rolled parser gets those subtly wrong. ``--cached`` lists tracked
-    files, ``--others`` untracked ones, ``--exclude-standard`` drops the ignored set;
-    ``-z`` NUL-separates so unicode/space paths match our os.walk rels without quoting.
-    Decoded as UTF-8 (git's path encoding) rather than the ambient locale, so non-ASCII
-    paths resolve identically on the Windows (cp936) and Linux (UTF-8) deploy hosts."""
+    None if `root` isn't a git working tree (callers then apply no gitignore filtering)."""
     try:
-        # stdin=DEVNULL: as an MCP stdio server this process's stdin is the JSON-RPC pipe,
-        # and a child inheriting it can wedge on that handle (W159, same as _git_commit).
         out = subprocess.run(
             ["git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
@@ -509,7 +500,36 @@ def iter_repo_files(repo_root: str, skip_dirs: Optional[set] = None,
     full index skips post-gate — too big, unreadable, empty — simply produce no chunks
     and drop out of the manifest naturally; see the incremental collectors).
 
-    respect_gitignore (default True) skips files git ignores — see gitignore_allowed."""
+    respect_gitignore (default True) skips files git ignores — see gitignore_allowed.
+
+    The code-only view of walk_repo_files."""
+    for path, rel, _kind in walk_repo_files(
+            repo_root, skip_dirs=skip_dirs, respect_gitignore=respect_gitignore,
+            exclude_globs=exclude_globs, docs=False):
+        yield path, rel
+
+
+def is_hidden_rel_path(rel_path: str) -> bool:
+    """True when any segment of a scope-relative path is a dot name (``.github/x.md``)."""
+    return any(part.startswith(".") for part in rel_path.replace("\\", "/").split("/"))
+
+
+def is_doc_path(path: str, rel_path: str) -> bool:
+    """A documentation file the journal pipeline owns: a DOC_EXTS extension outside every
+    dot path (the journal's sweep envelope never covers those)."""
+    return _ext_of(path) in DOC_EXTS and not is_hidden_rel_path(rel_path)
+
+
+def walk_repo_files(repo_root: str, skip_dirs: Optional[set] = None,
+                    respect_gitignore: bool = True,
+                    exclude_globs: Optional[List[str]] = None,
+                    docs: bool = True) -> Iterator[Tuple[str, str, str]]:
+    """Yield (abs_path, rel_path, kind) for every indexable file from ONE directory walk.
+
+    kind is "code" (a resolvable language or a fallback ext) or "doc" (DOC_EXTS; ``docs=False``
+    omits them). Code wins when a name qualifies as both (``CMakeLists.txt``). The skipped
+    directories, exclude globs, ``.retrievalignore`` and git's ignore rules gate both kinds
+    identically."""
     skip = skip_dirs or DEFAULT_SKIP_DIRS
     allowed = gitignore_allowed(repo_root) if respect_gitignore else None
     excludes = list(dict.fromkeys(load_retrievalignore(repo_root) + list(exclude_globs or [])))
@@ -518,14 +538,20 @@ def iter_repo_files(repo_root: str, skip_dirs: Optional[set] = None,
             os.path.relpath(os.path.join(root, d), repo_root).replace("\\", "/"), excludes)]
         for fn in files:
             path = os.path.join(root, fn)
-            if not (resolve_language(path) or _ext_of(path) in FALLBACK_EXTS):
+            if resolve_language(path) or _ext_of(path) in FALLBACK_EXTS:
+                kind = "code"
+            elif docs and _ext_of(path) in DOC_EXTS:
+                kind = "doc"
+            else:
                 continue
             rel = os.path.relpath(path, repo_root).replace("\\", "/")
+            if kind == "doc" and is_hidden_rel_path(rel):
+                continue
             if path_excluded(rel, excludes):
                 continue
             if allowed is not None and rel not in allowed:
                 continue
-            yield path, rel
+            yield path, rel, kind
 
 
 def file_content_hash(path: str) -> Optional[str]:

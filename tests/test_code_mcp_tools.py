@@ -14,7 +14,7 @@ import threading
 
 import mcp_server.server as server
 
-from conftest import git_init_repo
+from tests.conftest import git_init_repo
 
 def test_known_code_hashes_requests_detail_tree(monkeypatch):
     """The incremental diff baseline MUST request detail=True: the inventory endpoint now
@@ -24,6 +24,8 @@ def test_known_code_hashes_requests_detail_tree(monkeypatch):
     monkeypatch.setattr(server, "_client", fake)
     asyncio.run(server._known_code_hashes("C:/repo"))
     assert fake.inv_detail is True
+    # ...and only the compared columns: the baseline never reads indexed_at/metadata.
+    assert fake.inv_lean is True
 
 
 # A relative scope resolves against the CALLING client's directory (`_session_cwd`),
@@ -155,13 +157,14 @@ class _FakeCodeClient:
         self.policy = None
 
     async def code_index(self, *, project, host, root_dir, files,
-                         incremental=False, manifest=None, removed_paths=None, report=None,
-                         client_job_id=None):
+                         incremental=False, manifest=None, removed_paths=None,
+                         removed_paths_complete=False, report=None, client_job_id=None):
         # Async contract (W156/W159): POST returns a 202 job view; the catalog `report`
         # is bundled in so the backend writes it on completion — the client never polls.
         self.indexed = {"project": project, "host": host, "root_dir": root_dir, "files": files,
                         "incremental": incremental, "manifest": manifest,
-                        "removed_paths": removed_paths, "report": report,
+                        "removed_paths": removed_paths,
+                        "removed_paths_complete": removed_paths_complete, "report": report,
                         "client_job_id": client_job_id}
         n = sum(len(f["chunks"]) for f in files)
         return {"job_id": "j1", "status": "queued", "indexed": n,
@@ -173,8 +176,11 @@ class _FakeCodeClient:
     async def code_index_jobs(self, **kwargs):
         return {"jobs": []}
 
-    async def index_inventory(self, *, host=None, project=None, kind=None, detail=False):
+    async def index_inventory(self, *, host=None, project=None, kind=None, detail=False,
+                              lean=False, project_contains=None):
         self.inv_detail = detail
+        self.inv_lean = lean
+        self.inv_project_contains = project_contains
         return self._inventory
 
     async def scope_overlap(self, *, project, host=None, kind=None,
@@ -802,7 +808,8 @@ def test_index_code_incremental_sends_only_changed(tmp_path, monkeypatch):
     _index_code_to_completion(str(tmp_path), incremental=True)
     assert {f["rel_path"] for f in fake.indexed["files"]} == {"b.py"}  # only changed re-embedded
     assert fake.indexed["incremental"] is True
-    assert set(fake.indexed["manifest"]) == {"a.py", "b.py"}          # both kept
+    assert set(fake.indexed["manifest"]) == {"a.py", "b.py"}
+    assert fake.indexed["removed_paths"] == []                        # b.py is not a removal          # both kept
     # full snapshot bundled in report so the catalog stays in sync + removed files swept
     report = fake.indexed["report"]
     assert report["replace"] is True
@@ -823,6 +830,10 @@ def test_index_code_incremental_reconciles_deleted_file(tmp_path, monkeypatch):
     assert fake.indexed is not None                                    # not "up to date"
     assert fake.indexed["files"] == []                                # nothing to re-embed
     assert fake.indexed["manifest"] == ["keep.py"]                    # gone.py dropped
+    # the removal is also explicit, diffed against the catalog baseline, so a current
+    # backend need not enumerate the project's paths to find it
+    assert fake.indexed["removed_paths"] == ["gone.py"]
+    assert fake.indexed["removed_paths_complete"] is True
 
 
 def test_index_code_incremental_keeps_transiently_unreadable_file(tmp_path, monkeypatch):
@@ -1226,8 +1237,11 @@ class _FakeJournalClient:
                          "root_dir": root_dir, "patterns": patterns, "max_depth": max_depth}
         return {"total_files": len(files)}
 
-    async def index_inventory(self, *, host=None, project=None, kind=None, detail=False):
+    async def index_inventory(self, *, host=None, project=None, kind=None, detail=False,
+                              lean=False, project_contains=None):
         self.inv_detail = detail
+        self.inv_lean = lean
+        self.inv_project_contains = project_contains
         return self._inventory
 
     async def scope_overlap(self, *, project, host=None, kind=None,
@@ -1722,7 +1736,7 @@ def test_index_code_status_shows_live_local_file_progress(tmp_path, monkeypatch)
     monkeypatch.setattr(server, "_collect_code_files", slow_collect)
 
     async def scenario():
-        call = asyncio.create_task(server.index_code(str(tmp_path), auto_refresh=False))
+        call = asyncio.create_task(server.index_code(str(tmp_path), auto_refresh=False, docs=False))
         while not collection_started.is_set():
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.05)  # let progress_cb land on status dict
@@ -1874,3 +1888,572 @@ class TestIndexingAGitignoredSubtreeUnderAnIndexedParent:
             respect_gitignore=False)
         assert block is None
         assert warning == ""
+
+
+# ----------- index_code also indexes documents (plan P1 I1-I4): the repo server mirror ----------- #
+
+import hashlib  # noqa: E402  (kept next to the tests that need it)
+import inspect  # noqa: E402
+import os  # noqa: E402
+import time  # noqa: E402
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+
+_DOC_GLOBS = ["*.md", "*.mdx", "*.markdown", "*.rst", "*.adoc", "*.txt"]
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _write(path, text: str) -> None:
+    """Exact bytes: Path.write_text turns a newline into CRLF on Windows, and these tests
+    compare content hashes and uploaded bodies against the literal text."""
+    path.write_bytes(text.encode("utf-8"))
+
+
+def _http_404(path: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", f"http://backend{path}")
+    return httpx.HTTPStatusError(
+        f"HTTP 404 from GET {path}", request=request, response=httpx.Response(404, request=request))
+
+
+class _DocBackend:
+    """A small stateful stand-in for the backend routes index_code and its watcher touch
+    through RetrievalClient: policy and catalog are kept per kind, like the real server."""
+
+    def __init__(self, *, code_job_status="completed", doc_job_status="completed",
+                 doc_job_error=None, overlap=None):
+        self.policies: dict[str, dict] = {}
+        self.inventory: dict[str, list[dict]] = {"code": [], "doc": []}
+        self.code_job_status = code_job_status
+        self.doc_job_status = doc_job_status
+        self.doc_job_error = doc_job_error
+        self.overlap_blocks: dict[str, list[dict]] = overlap or {}
+        self.code_requests: list[dict] = []
+        self.bulk_requests: list[dict] = []
+        self.reports: list[dict] = []
+        self.reconciles: list[dict] = []
+        self.reads: list[tuple[str, dict]] = []
+        self.calls: list[str] = []
+
+    # The watcher holds automatic submissions to one per interval; these tests exercise
+    # what the watcher submits, so the fake backend reports no interval unless one asks.
+    min_check_interval_s = 0
+
+    def seed_policies(self, root: str, *, docs: bool = True, interval: int | None = None) -> None:
+        for kind in ("code", "doc") if docs else ("code",):
+            self.policies[kind] = {
+                "host": "desktop", "kind": kind, "root_dir": root, "auto_refresh": True,
+                "respect_gitignore": False, "exclude_globs": [],
+                "min_check_interval_s": self.min_check_interval_s if interval is None else interval}
+
+    async def upsert_index_policy(self, **policy):
+        self.calls.append("upsert_index_policy")
+        self.policies[policy["kind"]] = dict(
+            policy, min_check_interval_s=self.min_check_interval_s)
+        return policy
+
+    async def get_index_policy(self, *, host, project, kind="code"):
+        self.reads.append(("policy", {"kind": kind}))
+        policy = self.policies.get(kind)
+        if policy is None:
+            raise _http_404("/api/index/policy")
+        return policy
+
+    async def index_inventory(self, *, host=None, project=None, kind=None, detail=False,
+                              lean=False, project_contains=None):
+        self.reads.append(("inventory", {"kind": kind}))
+        rows = self.inventory.get(kind, [])
+        return {"users": [{"hosts": [{"projects": [{"dirs": [{"files": rows}]}]}]}]}
+
+    async def scope_overlap(self, *, project, host=None, kind=None, respect_gitignore=None):
+        return {"ancestor_blocks": self.overlap_blocks.get(kind, []),
+                "ancestor_widenings": [], "child_warnings": []}
+
+    async def code_index(self, *, project, host, root_dir, files, incremental=False,
+                         manifest=None, removed_paths=None, removed_paths_complete=False,
+                         report=None, client_job_id=None):
+        self.calls.append("code_index")
+        self.code_requests.append({
+            "project": project, "files": files, "removed_paths": removed_paths,
+            "incremental": incremental, "report": report})
+        return {"job_id": f"code-{len(self.code_requests)}", "status": "queued"}
+
+    async def code_index_job(self, job_id, *, scope_notice=False):
+        return {"job_id": job_id, "status": self.code_job_status, "progress": 1.0,
+                "indexed": 1, "chunks_done": 1, "chunks_total": 1}
+
+    async def code_index_jobs(self, **kwargs):
+        return {"jobs": []}
+
+    async def submit_journal_bulk_index(self, **payload):
+        self.calls.append("submit_journal_bulk_index")
+        self.bulk_requests.append(payload)
+        return {"job_id": f"doc-{len(self.bulk_requests)}", "status": "queued"}
+
+    async def journal_bulk_index_job(self, job_id):
+        index = int(job_id.rsplit("-", 1)[-1]) - 1
+        files = len(self.bulk_requests[index]["files"]) if index < len(self.bulk_requests) else 0
+        return {"job_id": job_id, "status": self.doc_job_status, "files_total": files,
+                "files_done": files, "chunks_total": 3, "chunks_done": 3, "indexed": 3,
+                "progress": 1.0, "error": self.doc_job_error}
+
+    async def report_index(self, *, host, project, files, root_dir=None, replace=True,
+                           patterns=None, max_depth=None):
+        self.calls.append("report_index")
+        self.reports.append({"files": files, "replace": replace, "patterns": patterns,
+                             "max_depth": max_depth, "project": project})
+        return {"total_files": len(files)}
+
+    async def reconcile_journal_docs(self, *, project_slug, live_titles, max_depth=None,
+                                     patterns=None):
+        self.calls.append("reconcile_journal_docs")
+        self.reconciles.append({"project_slug": project_slug, "live_titles": live_titles,
+                                "max_depth": max_depth, "patterns": patterns})
+        return {"removed_entries": 1, "skipped": False}
+
+    async def record_journal(self, **kwargs):
+        raise AssertionError("the bulk endpoint must carry the documents")
+
+
+def _make_code_and_docs_repo(root) -> None:
+    _write(root / "a.py", "def a():\n    return 1\n")
+    _write(root / "README.md", "# Readme\nhello\n")
+    (root / "docs").mkdir()
+    _write(root / "docs" / "guide.rst", "Guide\n=====\n")
+    _write(root / "notes.txt", "plain notes\n")
+    (root / "node_modules" / "pkg").mkdir(parents=True)
+    _write(root / "node_modules" / "pkg" / "README.md", "vendored\n")
+
+
+async def _wait_until(predicate, timeout_seconds=10.0, what="the filesystem watcher event"):
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        await asyncio.sleep(0.05)
+
+
+@pytest.fixture(autouse=True)
+def _no_automatic_index_floor(monkeypatch):
+    """The 5-minute floor on automatic submissions would hold every second event of the
+    watcher tests in this file; the policy a test seeds (default 0) decides the interval."""
+    monkeypatch.setattr(server, "_AUTO_INDEX_MIN_INTERVAL_S", 0, raising=False)
+
+
+def _start_watcher(root):
+    project = server._scope_path(str(root))
+    task = server._ensure_code_watcher(project=project, host="desktop", repo_root=str(root))
+    assert task is not None
+    return project, task
+
+
+async def _stop(task) -> None:
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+def test_server_walk_repo_files_classifies_code_and_documents_in_one_walk(tmp_path, monkeypatch):
+    _make_code_and_docs_repo(tmp_path)
+    _write(tmp_path / "CMakeLists.txt", "project(x)\n")  # code, not a doc
+    _write(tmp_path / "page.MDX", "# mdx\n")
+    (tmp_path / ".github").mkdir()
+    _write(tmp_path / ".github" / "CONTRIBUTING.md", "hidden dir\n")
+    (tmp_path / "private").mkdir()
+    _write(tmp_path / "private" / "secret.md", "excluded\n")
+    walks = []
+    real_walk = os.walk
+
+    def counting_walk(*args, **kwargs):
+        walks.append(args[0])
+        return real_walk(*args, **kwargs)
+
+    monkeypatch.setattr(os, "walk", counting_walk)
+    found = {rel: kind for _path, rel, kind in server._walk_repo_files(
+        str(tmp_path), respect_gitignore=False, exclude_globs=["private/"])}
+
+    assert len(walks) == 1
+    assert found == {
+        "a.py": "code", "CMakeLists.txt": "code",
+        "README.md": "doc", "docs/guide.rst": "doc", "notes.txt": "doc", "page.MDX": "doc",
+    }
+    assert server.DOC_EXTS == {".md", ".mdx", ".markdown", ".rst", ".adoc", ".txt"}
+    assert server.DOC_GLOBS == _DOC_GLOBS
+
+
+def test_server_index_code_indexes_documents_in_the_same_run(tmp_path, monkeypatch):
+    _make_code_and_docs_repo(tmp_path)
+    backend = _DocBackend()
+    monkeypatch.setattr(server, "_client", backend)
+
+    out = _index_code_to_completion(str(tmp_path), auto_refresh=False)
+
+    assert len(backend.code_requests) == 1
+    assert {item["rel_path"] for item in backend.code_requests[0]["files"]} == {"a.py"}
+    assert len(backend.bulk_requests) == 1
+    body = backend.bulk_requests[0]
+    assert {item["title"] for item in body["files"]} == {"README.md", "docs/guide.rst", "notes.txt"}
+    assert body["patterns"] == _DOC_GLOBS and body["max_depth"] is None
+    assert body["replace"] is True
+    assert body["project_slug"] == server._scope_path(str(tmp_path))
+    assert set(body["live_titles"]) == {"README.md", "docs/guide.rst", "notes.txt"}
+    status_line = out.splitlines()[-1]
+    assert "[completed]" in status_line
+    assert "— docs: job doc-1 [completed]" in status_line and "code-1" in status_line
+
+
+def test_server_index_code_docs_false_indexes_only_code(tmp_path, monkeypatch):
+    _make_code_and_docs_repo(tmp_path)
+    backend = _DocBackend()
+    monkeypatch.setattr(server, "_client", backend)
+
+    out = _index_code_to_completion(str(tmp_path), auto_refresh=False, docs=False)
+
+    assert backend.calls == ["upsert_index_policy", "code_index"]
+    assert backend.policies.keys() == {"code"}
+    assert "— docs:" not in out.splitlines()[-1]
+
+
+def test_server_index_code_registers_document_policy(tmp_path, monkeypatch):
+    _make_code_and_docs_repo(tmp_path)
+    backend = _DocBackend()
+    monkeypatch.setattr(server, "_client", backend)
+    _index_code_to_completion(
+        str(tmp_path), auto_refresh=True, respect_gitignore=False, exclude_globs=["private/"])
+    for task in list(server._CODE_WATCH_TASKS.values()):
+        task.cancel()
+    assert backend.policies["doc"]["auto_refresh"] is True
+    assert backend.policies["doc"]["respect_gitignore"] is False
+    assert backend.policies["doc"]["exclude_globs"] == ["private/"]
+
+
+def test_server_index_code_docs_false_turns_document_refresh_off(tmp_path, monkeypatch):
+    _make_code_and_docs_repo(tmp_path)
+    backend = _DocBackend()
+    backend.seed_policies(str(tmp_path))
+    monkeypatch.setattr(server, "_client", backend)
+
+    _index_code_to_completion(str(tmp_path), auto_refresh=False, docs=False)
+
+    assert backend.policies["doc"]["auto_refresh"] is False
+    assert backend.bulk_requests == []
+
+
+def test_server_index_code_doc_block_does_not_block_code(tmp_path, monkeypatch):
+    _make_code_and_docs_repo(tmp_path)
+    parent = server._scope_path(str(tmp_path.parent))
+    backend = _DocBackend(overlap={"doc": [{"project": parent, "host": "h1"}]})
+    monkeypatch.setattr(server, "_client", backend)
+
+    out = _index_code_to_completion(str(tmp_path), auto_refresh=False)
+
+    assert len(backend.code_requests) == 1
+    assert backend.bulk_requests == []
+    assert "Doc scope" in out and "already covered by ancestor scope" in out
+    assert out.splitlines()[-1].count("[completed]") == 1
+
+
+@pytest.mark.parametrize("code_status, doc_status, expected", [
+    ("completed", "completed", "completed"),
+    ("completed", "failed", "failed"),
+    ("failed", "completed", "failed"),
+])
+def test_server_index_code_status_fails_if_either_job_fails(
+        tmp_path, monkeypatch, code_status, doc_status, expected):
+    _make_code_and_docs_repo(tmp_path)
+    backend = _DocBackend(code_job_status=code_status, doc_job_status=doc_status,
+                          doc_job_error="embed exploded" if doc_status == "failed" else None)
+    monkeypatch.setattr(server, "_client", backend)
+
+    out = _index_code_to_completion(str(tmp_path), auto_refresh=False)
+
+    line = out.splitlines()[-1]
+    assert f"[{expected}]" in line and "code-1" in line and "doc-1" in line
+    if doc_status == "failed":
+        assert "embed exploded" in line
+
+
+def test_server_journal_index_dir_delegates_and_announces_the_deprecation(tmp_path, monkeypatch):
+    _write(tmp_path / "a.md", "# a\n")
+    _write(tmp_path / "b.txt", "b\n")
+    backend = _DocBackend()
+    monkeypatch.setattr(server, "_client", backend)
+    calls = []
+    real = server._index_doc_files
+
+    async def spy(*args, **kwargs):
+        calls.append(inspect.signature(real).bind(*args, **kwargs).arguments)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(server, "_index_doc_files", spy)
+
+    out = asyncio.run(server.journal_index_dir(
+        str(tmp_path), recursive=True, pattern="*.{md,txt}", max_depth=2))
+
+    assert len(calls) == 1
+    assert calls[0]["patterns"] == ["*.md", "*.txt"] and calls[0]["max_depth"] == 2
+    assert "Queued Journal bulk index job 'doc-1' for 2 changed file(s)" in out
+    assert [(name, p.default) for name, p in inspect.signature(
+        server.journal_index_dir).parameters.items()] == [
+        ("dir", "."), ("recursive", False), ("pattern", "*.md"), ("max_depth", None),
+        ("respect_gitignore", True)]
+    assert inspect.getdoc(server.journal_index_dir).startswith("Deprecated")
+    assert inspect.signature(server.index_code).parameters["docs"].default is True
+
+
+def test_server_collect_watched_changes_routes_documents_apart_from_code(tmp_path):
+    _write(tmp_path / "a.py", "value = 1\n")
+    _write(tmp_path / "new.md", "# new\n")
+    _write(tmp_path / "same.md", "same\n")
+    _write(tmp_path / "edited.md", "edited now\n")
+    (tmp_path / "private").mkdir()
+    _write(tmp_path / "private" / "skip.md", "excluded\n")
+    (tmp_path / ".github").mkdir()
+    _write(tmp_path / ".github" / "hidden.md", "hidden\n")
+    known_docs = {
+        "same.md": {"content_hash": _sha("same\n")},
+        "edited.md": {"content_hash": "old"},
+        "gone.md": {"content_hash": "old"},
+        "private/skip.md": {"content_hash": "old"},
+    }
+    changed = {str(tmp_path / name) for name in (
+        "a.py", "new.md", "same.md", "edited.md", "gone.md", "private/skip.md",
+        ".github/hidden.md")}
+
+    result = server._collect_watched_changes(
+        str(tmp_path), changed, {}, known_docs, False, ["private/"])
+
+    assert {payload["rel_path"] for payload in result.payloads} == {"a.py"}
+    assert {c.rel_path for c in result.doc_changed} == {"new.md", "edited.md"}
+    assert result.doc_removed == ["gone.md", "private/skip.md"]
+    payloads, removed, _current, reconcile = server._collect_watched_code_changes(
+        str(tmp_path), changed, {}, False, ["private/"])
+    assert {payload["rel_path"] for payload in payloads} == {"a.py"}
+    assert removed == [] and reconcile is False
+
+
+def test_server_real_watcher_sends_changed_documents_with_replace_false(tmp_path, monkeypatch):
+    backend = _DocBackend()
+    backend.seed_policies(str(tmp_path))
+    monkeypatch.setattr(server, "_client", backend)
+
+    async def scenario():
+        project, task = _start_watcher(tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: server._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+        _write(tmp_path / "a.py", "value = 1\n")
+        await _wait_until(lambda: len(backend.code_requests) >= 1, what="the code job")
+        assert [kind for kind, params in backend.reads if params.get("kind") == "doc"] == [], \
+            "a code-only event must not touch the document catalog"
+        _write(tmp_path / "notes.md", "first\n")
+        await _wait_until(lambda: len(backend.bulk_requests) >= 1, what="the document job")
+        first = backend.bulk_requests[0]
+        assert first["replace"] is False
+        assert [item["title"] for item in first["files"]] == ["notes.md"]
+        assert first["files"][0]["body"] == "first\n"
+        assert first["patterns"] == _DOC_GLOBS and first["max_depth"] is None
+        assert len(backend.code_requests) == 1
+        assert ("inventory", {"kind": "doc"}) in backend.reads
+        _write(tmp_path / "notes.md", "second\n")
+        await _wait_until(lambda: len(backend.bulk_requests) >= 2, what="the edited document job")
+        assert backend.bulk_requests[1]["files"][0]["body"] == "second\n"
+        assert backend.reconciles == []
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_server_real_watcher_reconciles_a_deleted_document(tmp_path, monkeypatch):
+    _write(tmp_path / "keep.md", "keep\n")
+    _write(tmp_path / "gone.md", "gone\n")
+    backend = _DocBackend()
+    backend.seed_policies(str(tmp_path))
+    backend.inventory["doc"] = [
+        {"rel_path": "keep.md", "kind": "doc", "content_hash": _sha("keep\n"), "chunk_count": 1},
+        {"rel_path": "gone.md", "kind": "doc", "content_hash": _sha("gone\n"), "chunk_count": 1},
+        {"rel_path": "data.json", "kind": "doc", "content_hash": _sha("{}"), "chunk_count": 1}]
+    monkeypatch.setattr(server, "_client", backend)
+
+    async def scenario():
+        project, task = _start_watcher(tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: server._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+        (tmp_path / "gone.md").unlink()
+        await _wait_until(lambda: len(backend.reconciles) >= 1, what="the document reconcile")
+        reconcile = backend.reconciles[0]
+        assert reconcile["live_titles"] == ["keep.md"]
+        assert reconcile["patterns"] == _DOC_GLOBS and reconcile["max_depth"] is None
+        report = backend.reports[0]
+        assert report["replace"] is True and [r["rel_path"] for r in report["files"]] == ["keep.md"]
+        assert backend.calls.index("report_index") < backend.calls.index("reconcile_journal_docs")
+        assert backend.bulk_requests == [] and backend.code_requests == []
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_server_real_watcher_ignores_documents_without_a_document_policy(tmp_path, monkeypatch):
+    backend = _DocBackend()
+    backend.seed_policies(str(tmp_path), docs=False)
+    monkeypatch.setattr(server, "_client", backend)
+
+    async def scenario():
+        project, task = _start_watcher(tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: server._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+        _write(tmp_path / "notes.md", "ignored\n")
+        await _wait_until(lambda: ("policy", {"kind": "doc"}) in backend.reads,
+                          what="the document policy lookup")
+        await asyncio.sleep(1.5)
+        _write(tmp_path / "a.py", "value = 1\n")
+        await _wait_until(lambda: len(backend.code_requests) >= 1, what="the code job")
+        assert backend.bulk_requests == []
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_server_real_watcher_ignore_file_change_reconciles_documents_too(tmp_path, monkeypatch):
+    a_py = "value = 1\n"
+    _write(tmp_path / "a.py", a_py)
+    _write(tmp_path / "README.md", "# Readme\n")
+    backend = _DocBackend()
+    backend.seed_policies(str(tmp_path))
+    backend.policies["code"]["respect_gitignore"] = True
+    backend.policies["doc"]["respect_gitignore"] = True
+    backend.inventory["code"] = [{
+        "rel_path": "a.py", "kind": "code", "content_hash": _sha(a_py), "chunk_count": 1,
+        "language": "python"}]
+    monkeypatch.setattr(server, "_client", backend)
+
+    async def scenario():
+        project, task = _start_watcher(tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: server._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+        _write(tmp_path / ".gitignore", "*.log\n")
+        await _wait_until(lambda: len(backend.bulk_requests) >= 1, what="the document reconcile job")
+        body = backend.bulk_requests[0]
+        assert body["replace"] is True
+        assert [item["title"] for item in body["files"]] == ["README.md"]
+        assert backend.code_requests == []
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+# ---- automatic indexing runs at most once per interval per scope -------------
+
+def _server_code_request_files(backend) -> list[set[str]]:
+    return [{item["rel_path"] for item in request["files"]} for request in backend.code_requests]
+
+
+def test_server_real_watcher_holds_changes_inside_the_interval_and_sends_one_batch(
+        tmp_path, monkeypatch):
+    backend = _DocBackend()
+    backend.seed_policies(str(tmp_path), docs=False, interval=2)
+    monkeypatch.setattr(server, "_client", backend)
+
+    async def scenario():
+        project, task = _start_watcher(tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: server._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+
+        _write(tmp_path / "a.py", "value = 1\n")
+        await _wait_until(lambda: len(backend.code_requests) >= 1, what="the first code job")
+        first_seen = time.monotonic()
+        assert _server_code_request_files(backend) == [{"a.py"}]
+
+        # Three writes to two files, all inside the interval of the first submission.
+        for name, text in (("a.py", "value = 2\n"), ("b.py", "other = 1\n"),
+                           ("a.py", "value = 3\n")):
+            _write(tmp_path / name, text)
+            await asyncio.sleep(0.1)
+        # Well past the 800 ms debounce but before 2 s since the first submission.
+        await asyncio.sleep(first_seen + 1.5 - time.monotonic())
+        assert len(backend.code_requests) == 1, \
+            "a change inside the interval must be held, not submitted"
+
+        await _wait_until(lambda: len(backend.code_requests) >= 2, timeout_seconds=5.0,
+                          what="the held batch after the interval")
+        await asyncio.sleep(0.5)
+        assert _server_code_request_files(backend) == [{"a.py"}, {"a.py", "b.py"}], \
+            "the held changes go out as one batch with both files"
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_server_real_watcher_sends_the_first_change_after_a_quiet_interval_without_waiting(
+        tmp_path, monkeypatch):
+    backend = _DocBackend()
+    backend.seed_policies(str(tmp_path), docs=False, interval=3)
+    monkeypatch.setattr(server, "_client", backend)
+
+    async def scenario():
+        project, task = _start_watcher(tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: server._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+
+        _write(tmp_path / "a.py", "value = 1\n")
+        await _wait_until(lambda: len(backend.code_requests) >= 1, what="the first code job")
+        first_seen = time.monotonic()
+        _write(tmp_path / "b.py", "other = 1\n")
+        await asyncio.sleep(first_seen + 2.0 - time.monotonic())
+        assert len(backend.code_requests) == 1, "the second change waits for the interval"
+        await _wait_until(lambda: len(backend.code_requests) >= 2, timeout_seconds=5.0,
+                          what="the held change after the interval")
+
+        # A full interval passes with no change: the next change is not delayed again.
+        await asyncio.sleep(3.3)
+        started = time.monotonic()
+        _write(tmp_path / "c.py", "third = 1\n")
+        await _wait_until(lambda: len(backend.code_requests) >= 3, timeout_seconds=6.0,
+                          what="the change after a quiet interval")
+        latency = time.monotonic() - started
+        assert latency < 2.5, f"debounce plus margin expected, took {latency:.2f}s"
+        assert _server_code_request_files(backend)[2] == {"c.py"}
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_server_real_watcher_status_shows_pending_changes_and_time_to_next_refresh(
+        tmp_path, monkeypatch):
+    backend = _DocBackend()
+    backend.seed_policies(str(tmp_path), docs=False, interval=3)
+    monkeypatch.setattr(server, "_client", backend)
+
+    async def scenario():
+        project, task = _start_watcher(tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: server._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+
+        _write(tmp_path / "a.py", "value = 1\n")
+        await _wait_until(lambda: len(backend.code_requests) >= 1, what="the first code job")
+        _write(tmp_path / "b.py", "other = 1\n")
+        await _wait_until(lambda: "next_refresh_in_s" in server._CODE_WATCH_STATUS.get(key, {}),
+                          timeout_seconds=4.0, what="the waiting status")
+        status = dict(server._CODE_WATCH_STATUS[key])
+        assert status["state"] == "watching"
+        assert status["pending_changes"] >= 1
+        assert 1 <= status["next_refresh_in_s"] <= 3
+        line = server._format_refresh_status(status)
+        assert "next refresh in" in line
+        assert f"{status['pending_changes']} pending change(s)" in line
+        assert f"next refresh in {status['next_refresh_in_s']}s" in line
+        # Without a wait the line is what it always was.
+        assert server._format_refresh_status({"state": "watching", "files": 3}) == (
+            "Index freshness: filesystem watcher active (3 files).")
+        await _stop(task)
+
+    asyncio.run(scenario())

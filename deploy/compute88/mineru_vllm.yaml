@@ -1,0 +1,11 @@
+# vLLM server of MinerU2.5-Pro-2605-1.2B, the second model of scripts/remote_pvl/pvl_worker.py (--fallback-config):
+# it re-reads the pages PaddleOCR-VL failed twice. Same server venv, started while the PaddleOCR-VL server is stopped.
+# The worker lowers `gpu-memory-utilization` to what the card has free.
+served-model-name: MinerU2.5-Pro-2605-1.2B
+host: 127.0.0.1
+api-server-count: 1
+max-model-len: 8192  # the model's own limit (max_position_embeddings)
+max-num-seqs: 32
+mm-processor-cache-gb: 0
+# a ceiling: 1.2B of weights plus the KV cache of 32 sequences
+gpu-memory-utilization: 0.40

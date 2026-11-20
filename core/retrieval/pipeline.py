@@ -14,7 +14,7 @@ import time
 from copy import deepcopy
 from config import settings
 
-from app.models.schemas import SearchResult
+from app.models.schemas import PREPRINT_TIER, SearchResult
 from core.storage.qdrant_store import (
     QdrantRetrievalCancelledError,
     sparse_dict_to_qdrant,
@@ -34,6 +34,14 @@ class SearchRequest:
     # Default search EXCLUDES them (they're a different content type); set
     # include_reviews=True to mix them in, or source_type="review" for review-only.
     include_reviews: bool = False
+    # arXiv preprints (venue_tier=preprint) also share `papers` and are searched
+    # through their own API; default search leaves them out. A request already
+    # scoped by venue_tier / paper_id / doc_id / venue=arXiv is not narrowed.
+    include_preprints: bool = False
+    # Withdrawn arXiv papers (payload `withdrawn=true`, `arxiv` collection only) are
+    # left out of search; include_withdrawn=True keeps them, and a request scoped to
+    # paper_id / doc_id always finds them.
+    include_withdrawn: bool = False
     filters: dict[str, Any] = field(default_factory=dict)
     # True (default): collapse multi-chunk hits from one paper to its single
     # best-scoring chunk (W3 anti-flooding). False ("chunk mode"): return the
@@ -67,6 +75,38 @@ class SearchResponse:
     metrics: PipelineMetrics = field(default_factory=PipelineMetrics)
 
 
+_PREPRINT_SCOPE_KEYS = ("venue_tier", "paper_id", "doc_id")
+# Asking for a paper by id must find it even if it was withdrawn.
+_WITHDRAWN_SCOPE_KEYS = ("paper_id", "doc_id")
+
+
+def _names_arxiv(venue: Any) -> bool:
+    venues = venue if isinstance(venue, list) else [venue]
+    return any(isinstance(v, str) and v.lower() == "arxiv" for v in venues)
+
+
+def retrieve_filters(request: SearchRequest) -> dict[str, Any]:
+    """The retrieve-stage filter dict for QdrantStore._build_filter: the free-form
+    filters plus source_type, level and the default review/preprint/withdrawn
+    exclusions."""
+    item = deepcopy(request.filters or {})
+    if request.source_type:
+        item["source_type"] = request.source_type
+    elif not request.include_reviews:
+        # Keep review chunks out of normal results (they share the collection).
+        item.setdefault("__exclude__", {})["source_type"] = ["review"]
+    scoped = any(k in item for k in _PREPRINT_SCOPE_KEYS) or _names_arxiv(item.get("venue"))
+    if not request.include_preprints and not scoped:
+        item.setdefault("__exclude__", {})["venue_tier"] = [PREPRINT_TIER]
+    if not request.include_withdrawn and not any(k in item for k in _WITHDRAWN_SCOPE_KEYS):
+        # A scalar, not a list: bool goes to MatchValue (QdrantStore._build_filter).
+        # CorpusStore.route sends it to the `arxiv` collection only.
+        item.setdefault("__exclude__", {})["withdrawn"] = True
+    if request.level is not None:
+        item["level"] = request.level
+    return item
+
+
 class SearchPipeline:
     """Orchestrates: embed query → retrieve from Qdrant → optional rerank → return."""
 
@@ -90,14 +130,7 @@ class SearchPipeline:
 
         # Merge all retrieve-stage filters (source_type, level, free-form) into a
         # single payload-equality dict consumed by QdrantStore._build_filter.
-        filter_dict = dict(request.filters or {})
-        if request.source_type:
-            filter_dict["source_type"] = request.source_type
-        elif not request.include_reviews:
-            # Keep review chunks out of normal results (they share the collection).
-            filter_dict.setdefault("__exclude__", {})["source_type"] = ["review"]
-        if request.level is not None:
-            filter_dict["level"] = request.level
+        filter_dict = retrieve_filters(request)
 
         retrieve_k = request.top_k * 5 if self._reranker else request.top_k
 
@@ -226,14 +259,7 @@ class SearchPipeline:
 
         filters = []
         for request in requests:
-            item = deepcopy(request.filters or {})
-            if request.source_type:
-                item["source_type"] = request.source_type
-            elif not request.include_reviews:
-                item.setdefault("__exclude__", {})["source_type"] = ["review"]
-            if request.level is not None:
-                item["level"] = request.level
-            filters.append(item)
+            filters.append(retrieve_filters(request))
         depths = [request.top_k * 5 if self._reranker else request.top_k
                   for request in requests]
         if len(set(depths)) != 1:
@@ -360,14 +386,7 @@ class SearchPipeline:
         embed_ms = round((t_embed - t0) * 1000, 1)
         yield {"stage": "embed", "embed_ms": embed_ms}
 
-        filter_dict = dict(request.filters or {})
-        if request.source_type:
-            filter_dict["source_type"] = request.source_type
-        elif not request.include_reviews:
-            # Keep review chunks out of normal results (they share the collection).
-            filter_dict.setdefault("__exclude__", {})["source_type"] = ["review"]
-        if request.level is not None:
-            filter_dict["level"] = request.level
+        filter_dict = retrieve_filters(request)
 
         retrieve_k = request.top_k * 5 if self._reranker else request.top_k
 

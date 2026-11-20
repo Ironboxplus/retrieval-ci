@@ -1,0 +1,177 @@
+name: Tests
+
+# Full pytest suite, split into duration-balanced shards (pytest-split) that run in
+# parallel.  Runs against whatever commit was pushed, so a throwaway ci/wt-* branch
+# built by scripts/maintenance/ci_snapshot.py tests the dirty working tree without
+# anything landing on main (main pushes trigger the deploy workflows).
+#
+# No repository secrets are used.  Shard count == the matrix length; after changing
+# it, refresh .test_durations from the `test-durations` artifact of a full run.
+
+on:
+  push:
+    branches: ['ci/**']
+  workflow_dispatch:
+    inputs:
+      network:
+        description: Also run the live-network tests (reported separately, never blocks)
+        type: boolean
+        default: false
+      select:
+        description: 'Run only these pytest arguments in one job instead of the shards (e.g. "tests/test_x.py -k name -vv")'
+        type: string
+        default: ''
+      repeat:
+        description: With select, run the selection this many times in fresh processes (flake rate)
+        type: string
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  targeted:
+    if: github.event_name == 'workflow_dispatch' && inputs.select != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: ./.github/actions/ci-env
+      - name: pytest ${{ inputs.select }} (x${{ inputs.repeat }})
+        run: |
+          python -c "import platform, sqlite3, sys; print('python', sys.version.split()[0], '| sqlite', sqlite3.sqlite_version, '|', platform.platform())"
+          echo "cpus: $(nproc)"
+          failed=0
+          for i in $(seq 1 "$REPEAT"); do
+            echo "=== iteration $i/$REPEAT"
+            python -m pytest -p no:cacheprovider -rfs --tb=line --timeout 300 $SELECT || failed=$((failed + 1))
+          done
+          echo "iterations with failures: $failed/$REPEAT"
+          [ "$failed" -eq 0 ]
+        env:
+          SELECT: ${{ inputs.select }}
+          REPEAT: ${{ inputs.repeat }}
+          INDEX_BASELINE_OLD_REF: HEAD^
+
+  shard:
+    if: github.event_name != 'workflow_dispatch' || inputs.select == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # tests/test_index_baseline_http_real.py reads the parent commit
+      - uses: ./.github/actions/ci-env
+
+      - name: pytest shard ${{ matrix.group }}/${{ strategy.job-total }}
+        run: |
+          mkdir -p reports
+          python -m pytest -q -p no:cacheprovider -rs \
+            --splits ${{ strategy.job-total }} --group ${{ matrix.group }} \
+            --store-durations --durations-path .test_durations \
+            --timeout 300 \
+            -m "not network and not gpu88 and not needs_dev_data and not needs_camoufox and not needs_marker_pdf and not needs_cuda" \
+            --junitxml=reports/junit-${{ matrix.group }}.xml
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          # A snapshot commit already contains the change that test measures against HEAD.
+          INDEX_BASELINE_OLD_REF: HEAD^
+
+      - name: Collect shard reports
+        if: always()
+        run: cp .test_durations reports/durations-${{ matrix.group }}.json || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shard-${{ matrix.group }}
+          path: reports/
+          if-no-files-found: warn
+
+  network:
+    if: github.event_name == 'workflow_dispatch' && inputs.network
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-env
+      - run: python -m pytest -q -p no:cacheprovider -rs --timeout 300 -m network
+
+  summary:
+    needs: shard
+    if: always() && (github.event_name != 'workflow_dispatch' || inputs.select == '')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          path: reports
+          merge-multiple: true
+
+      - name: Combined report
+        env:
+          SHARD_RESULT: ${{ needs.shard.result }}
+        run: |
+          python3 - <<'EOF'
+          import collections, glob, json, os, xml.etree.ElementTree as ET
+
+          totals = collections.Counter()
+          failed, skipped = [], collections.Counter()
+          shard_time = {}
+          files = sorted(glob.glob("reports/junit-*.xml"))
+          for path in files:
+              suite = ET.parse(path).getroot()
+              suite = suite if suite.tag == "testsuite" else suite[0]
+              shard_time[os.path.basename(path)] = float(suite.get("time", 0))
+              for case in suite.iter("testcase"):
+                  name = f'{case.get("classname")}::{case.get("name")}'
+                  bad = case.find("failure") if case.find("failure") is not None else case.find("error")
+                  skip = case.find("skipped")
+                  if bad is not None:
+                      totals["failed"] += 1
+                      failed.append((name, (bad.get("message") or "").splitlines()[:1]))
+                  elif skip is not None:
+                      totals["skipped"] += 1
+                      skipped[(skip.get("message") or "").strip()] += 1
+                  else:
+                      totals["passed"] += 1
+
+          durations = {}
+          for path in glob.glob("reports/durations-*.json"):
+              durations.update(json.load(open(path)))
+          os.makedirs("merged", exist_ok=True)
+          json.dump(durations, open("merged/.test_durations", "w"), indent=4, sort_keys=True)
+
+          out = [f"## Tests: {totals['passed']} passed, {totals['failed']} failed, "
+                 f"{totals['skipped']} skipped across {len(files)} shard reports",
+                 f"Shard job result: `{os.environ['SHARD_RESULT']}`", "",
+                 "| shard | pytest time (s) |", "|---|---|"]
+          out += [f"| {k} | {v:.0f} |" for k, v in sorted(shard_time.items())]
+          out += ["", f"### Failures ({len(failed)})"]
+          out += [f"- `{n}` {' '.join(m)}" for n, m in sorted(failed)] or ["none"]
+          out += ["", f"### Skips by reason ({sum(skipped.values())})"]
+          out += [f"- {n} x {r}" for r, n in skipped.most_common()] or ["none"]
+          text = "\n".join(out)
+          print(text)
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write(text + "\n")
+          raise SystemExit(1 if failed or os.environ["SHARD_RESULT"] != "success" else 0)
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-durations
+          path: merged/.test_durations
+          include-hidden-files: true
+          if-no-files-found: warn

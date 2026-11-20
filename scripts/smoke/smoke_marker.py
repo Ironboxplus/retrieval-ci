@@ -17,7 +17,15 @@ from time import perf_counter
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 
+def _retired() -> None:
+    """RETIRED: Marker loads torch / surya models into this process; PDF->Markdown is the registered PaddleOCR-VL worker now."""
+    from core.inference_retired import EXTRACTOR_INSTEAD, RetiredInferencePath
+
+    raise RetiredInferencePath("smoke_marker.py (in-process torch / surya Marker)", EXTRACTOR_INSTEAD)
+
+
 def main() -> int:
+    _retired()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

@@ -1,0 +1,215 @@
+{
+ "paper": "jmlr-2022-20-1239",
+ "page": 42,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     466,
+     77,
+     750,
+     102
+    ],
+    "block_content": "WAN, WANG, TU, AND ZHANG"
+   },
+   {
+    "block_id": 1,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     174,
+     184,
+     394,
+     211
+    ],
+    "block_content": "Acknowledgments"
+   },
+   {
+    "block_id": 2,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     240,
+     1050,
+     349
+    ],
+    "block_content": "This work was partially supported by NSFC (62122037, 61921006), and JiangsuSF (BK20200064). We are grateful for the anonymous reviewers and the editor for their helpful comments. We also thank an anonymous reviewer of ICML 2020 for suggesting us investigating the lower bound of communication complexity."
+   },
+   {
+    "block_id": 3,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     174,
+     382,
+     675,
+     410
+    ],
+    "block_content": "Appendix A. Proof of Corollaries 1 and 2"
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     421,
+     1048,
+     491
+    ],
+    "block_content": "Corollary 1 can be proved by substituting  $ \\alpha = 0 $,  $ K = L = \\sqrt{T} $, and  $ h = \\frac{n^{1/4}T^{3/4}G}{\\sqrt{1-\\sigma_{2}(P)}R} $ into Theorem 2, as follows"
+   },
+   {
+    "block_id": 5,
+    "block_label": "display_formula",
+    "block_bbox": [
+     192,
+     504,
+     1027,
+     644
+    ],
+    "block_content": " $$ \\begin{aligned}R_{T,i}\\leq&\\frac{12nGRT}{\\sqrt{\\sqrt{T}+2}}+\\sum_{m=2}^{B}\\frac{3n^{5/4}T^{1/4}GR}{2\\sqrt{1-\\sigma_{2}(P)}}+\\sum_{m=1}^{B}2\\sqrt{1-\\sigma_{2}(P)}n^{3/4}T^{1/4}GR+\\frac{4n^{5/4}T^{3/4}GR}{\\sqrt{1-\\sigma_{2}(P)}}\\\\ \\leq&12nGRT^{3/4}+\\frac{11n^{5/4}T^{3/4}GR}{2\\sqrt{1-\\sigma_{2}(P)}}+2\\sqrt{1-\\sigma_{2}(P)}n^{3/4}T^{3/4}GR\\end{aligned} $$ "
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     659,
+     759,
+     686
+    ],
+    "block_content": "where the last inequality is due to  $ B - 1 < B = T/K = \\sqrt{T} $."
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     684,
+     1045,
+     741
+    ],
+    "block_content": "Corollary 2 can be proved by substituting $\\alpha > 0$, $K = L = T^{2/3}(\\ln T)^{-2/3}$, and $h = \\alpha K$ into Theorem 2. as follows"
+   },
+   {
+    "block_id": 8,
+    "block_label": "display_formula",
+    "block_bbox": [
+     177,
+     755,
+     1045,
+     1073
+    ],
+    "block_content": " $$ \\begin{aligned}R_{T,i}\\leq&\\frac{12nGRT}{\\sqrt{L}}+\\sum_{m=2}^{B}\\frac{3nGK(G+\\alpha R)\\sqrt{n}}{m\\alpha(1-\\sigma_{2}(P))}+\\sum_{m=1}^{B}\\frac{4nK(G+2\\alpha R)^{2}}{(m+2)\\alpha}+4nhR^{2}\\\\ \\leq&\\frac{12nGRT}{\\sqrt{L}}+\\left(\\frac{3nG(G+\\alpha R)\\sqrt{n}}{\\alpha(1-\\sigma_{2}(P))}+\\frac{4n(G+2\\alpha R)^{2}}{\\alpha}\\right)\\sum_{m=1}^{B}\\frac{K}{m}+4nhR^{2}\\\\ \\leq&12nGRT^{2/3}(\\ln T)^{1/3}+\\left(\\frac{3nG(G+\\alpha R)\\sqrt{n}}{\\alpha(1-\\sigma_{2}(P))}+\\frac{4n(G+2\\alpha R)^{2}}{\\alpha}\\right)K(1+\\ln B)+4nhR^{2}\\\\ \\leq&\\left(\\frac{3n^{3/2}G(G+\\alpha R)}{\\alpha(1-\\sigma_{2}(P))}+\\frac{4n(G+2\\alpha R)^{2}}{\\alpha}\\right)T^{2/3}((\\ln T)^{-2/3}+(\\ln T)^{1/3})\\\\ &+12nGRT^{2/3}(\\ln T)^{1/3}+4n\\alpha R^{2}T^{2/3}(\\ln T)^{-2/3}\\end{aligned} $$ "
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1091,
+     861,
+     1119
+    ],
+    "block_content": "where the last inequality is due to  $ K = T^{2/3}(\\ln T)^{-2/3} $ and  $ \\ln B \\leq \\ln T $."
+   },
+   {
+    "block_id": 10,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     174,
+     1153,
+     577,
+     1181
+    ],
+    "block_content": "Appendix B. Proof of Theorem 7"
+   },
+   {
+    "block_id": 11,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     1194,
+     1050,
+     1280
+    ],
+    "block_content": "In the beginning, we define several auxiliary variables. Let  $ \\bar{\\mathbf{z}}(m) = \\frac{1}{n} \\sum_{i=1}^{n} \\mathbf{z}_i(m) $ for any  $ m \\in [B + 1] $ and  $ \\bar{\\mathbf{g}}(m) = \\frac{1}{n} \\sum_{i=1}^{n} \\widehat{\\mathbf{g}}_i(m) $ for any  $ m \\in [B] $. Then, we define  $ \\bar{\\mathbf{x}}(1) = \\mathbf{x}_i $ and  $ \\bar{\\mathbf{x}}(m + 1) = \\arg\\min_{\\mathbf{x} \\in \\mathcal{K}_\\delta} \\bar{F}_m(\\mathbf{x}) $ for any  $ m \\in [B + 1] $, where"
+   },
+   {
+    "block_id": 12,
+    "block_label": "display_formula",
+    "block_bbox": [
+     452,
+     1294,
+     769,
+     1324
+    ],
+    "block_content": " $$ \\bar{F}_{m}(\\mathbf{x})=\\bar{\\mathbf{z}}(m)^{\\top}\\mathbf{x}+h\\|\\mathbf{x}-\\mathbf{x}_{\\mathrm{i n}}\\|_{2}^{2}. $$ "
+   },
+   {
+    "block_id": 13,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1338,
+     949,
+     1368
+    ],
+    "block_content": "Similarly, we define  $ \\widehat{\\mathbf{x}}_i(m+1) = \\argmin_{\\mathbf{x} \\in \\mathcal{K}_\\delta} F_{m,i}(\\mathbf{x}) $ for any  $ m \\in [B+1] $, where"
+   },
+   {
+    "block_id": 14,
+    "block_label": "display_formula",
+    "block_bbox": [
+     446,
+     1384,
+     778,
+     1416
+    ],
+    "block_content": " $$ \\boldsymbol{F}_{m,i}(\\mathbf{x})=\\mathbf{z}_{i}(m)^{\\top}\\mathbf{x}+h\\|\\mathbf{x}-\\mathbf{x}_{\\mathrm{i n}}\\|_{2}^{2} $$ "
+   },
+   {
+    "block_id": 15,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1451,
+     625,
+     1469
+    ],
+    "block_content": "42"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['20200064']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 21,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.906,
+   "numbers_unknown": 1,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.991,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

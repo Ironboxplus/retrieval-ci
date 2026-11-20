@@ -1,0 +1,171 @@
+{
+ "paper": "jmlr-2022-20-748",
+ "page": 41,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0029999999999998916,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     477,
+     78,
+     738,
+     101
+    ],
+    "block_content": "HIGH DIMENSIONAL MNAR"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     184,
+     1045,
+     235
+    ],
+    "block_content": " $ \\underline{\\mathrm{Lemma}} $ A.16 Assume Conditions (C1), (C5), (C6). Let  $ \\delta = D/\\xi $. Let  $ \\Theta^l \\in \\bar{\\mathbb{B}}_{\\Theta}(D) $, and  $ \\mathbf{b}^l, l = 1, \\ldots N_{\\Theta}(\\delta) $ be  $ \\delta $-covering of  $ \\bar{\\mathbb{B}}_{\\Theta}(D) $ in Frobenius norm. Assume"
+   },
+   {
+    "block_id": 2,
+    "block_label": "display_formula",
+    "block_bbox": [
+     372,
+     251,
+     811,
+     305
+    ],
+    "block_content": " $$ \\frac{m n\\delta^{4}}{128(d_{H_{2}}+d_{S_{2}}^{2})^{2}a^{2}D^{2}}\\geq2\\frac{144\\rho(\\nu,D)^{2}}{\\delta^{2}}\\operatorname*{m a x}(n,m). $$ "
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     177,
+     323,
+     277,
+     345
+    ],
+    "block_content": "Recall that"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     195,
+     360,
+     1041,
+     560
+    ],
+    "block_content": " $$ \\begin{array}{r l}&{\\mathrm{v e c}(\\mathbf{A})^{\\mathrm{T}}\\mathbf{F}_{\\Theta}(\\mathbf{X},\\mathbf{Y}|\\widetilde{\\Theta},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{B})}\\\\ {=}&{(m n)^{-1}\\left(\\displaystyle\\sum_{i=1}^{n}\\displaystyle\\sum_{j=1}^{m}\\mathrm{v e c}(\\mathbf{A})^{\\mathrm{T}}R_{i j}[H_{2}(Y_{i j},\\mathbf{X}_{i j}|\\widetilde{\\Theta},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{z}_{i j})\\mathrm{v e c}(\\mathbf{z}_{i j})^{\\mathrm{T}}\\right.}\\\\ &{\\left.-E\\{H_{2}(Y_{i j},\\mathbf{X}_{i j}|\\widetilde{\\Theta},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{z}_{i j})\\mathrm{v e c}(\\mathbf{z}_{i j})^{\\mathrm{T}}|Y_{i j}\\}\\right.}\\\\ &{+E\\{S_{2}^{2}(Y_{i j},\\mathbf{X}_{i j},\\widetilde{\\Theta},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{z}_{i j})\\mathrm{v e c}(\\mathbf{z}_{i j})^{\\mathrm{T}}|Y_{i j}\\}-E\\{S_{2}(Y_{i j},\\mathbf{X}_{i j}|\\widetilde{\\Theta},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{z}_{i j})|Y_{i j}\\}^{\\otimes2}]\\mathrm{v e c}(\\mathbf{B})\\Biggr).}\\end{array} $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     178,
+     586,
+     627,
+     609
+    ],
+    "block_content": "Then there are positive constants  $ c_{d2}, c_{d3} $ such that"
+   },
+   {
+    "block_id": 6,
+    "block_label": "display_formula",
+    "block_bbox": [
+     274,
+     623,
+     971,
+     1108
+    ],
+    "block_content": " $$ \\begin{aligned}&\\Pr\\left(\\sup_{k=1,\\ldots,N(\\delta)}\\left|\\operatorname{vec}(\\boldsymbol{\\Theta}^{k})^{\\mathrm{T}}\\mathbf{F}_{\\boldsymbol{\\Theta}}(\\mathbf{X},\\mathbf{Y}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{vec}(\\boldsymbol{\\Theta}^{k})\\right.\\right.\\\\&\\left.\\left.-\\mathrm{vec}(\\boldsymbol{\\Theta}^{k})^{\\mathrm{T}}(mn)^{-1}\\sum_{i=1}^{n}\\sum_{j=1}^{m}E[R_{ij}E\\{S_{2}^{2}(Y_{ij},\\mathbf{X}_{ij}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathbf{z}_{ij}\\mathbf{z}_{ij}^{\\mathrm{T}}|Y_{ij}\\}\\right.\\right.\\\\&\\left.\\left.-R_{ij}E\\{S_{2}(Y_{ij},\\mathbf{X}_{ij}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathbf{z}_{ij}|Y_{ij}\\}^{\\otimes2}\\}[\\mathrm{vec}(\\boldsymbol{\\Theta}^{k})\\bigg|\\geq\\delta^{2}+\\frac{32(d_{H_{2}}+d_{S_{2}}^{2})a^{2}}{\\sqrt{mn}}\\right)\\right.\\\\&\\leq4\\exp\\left(-c_{d2}D^{2}mn\\right),\\\\ &\\\\&\\Pr\\left(\\sup_{k=1,\\ldots,N(\\delta)}\\left|\\operatorname{vec}(\\boldsymbol{\\Theta}^{k})^{\\mathrm{T}}\\mathbf{F}_{\\boldsymbol{\\Theta}}(\\mathbf{X},\\mathbf{Y}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{vec}(\\boldsymbol{\\Theta}-\\boldsymbol{\\Theta}^{k})\\right.\\right.\\\\&\\left.\\left.-\\mathrm{vec}(\\boldsymbol{\\Theta}^{k})^{\\mathrm{T}}(mn)^{-1}\\sum_{i=1}^{n}\\sum_{j=1}^{m}E[R_{ij}E\\{S_{2}^{2}(Y_{ij},\\mathbf{X}_{ij}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathbf{z}_{ij}\\mathbf{z}_{ij}^{\\mathrm{T}}|Y_{ij}\\}\\right.\\right.\\\\&\\left.\\left.-R_{ij}E\\{S_{2}(Y_{ij},\\mathbf{X}_{ij}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathbf{z}_{ij}|Y_{ij}\\}^{\\otimes2}\\}[\\mathrm{vec}(\\boldsymbol{\\Theta}-\\boldsymbol{\\Theta}^{k})|\\geq\\delta^{2}+\\frac{64(d_{H_{2}}+d_{S_{2}}^{2})a^{2}}{\\sqrt{mn}}\\right)\\right.\\\\&\\leq4\\exp\\left(-c_{d3}D^{2}mn\\right).\\end{aligned} $$ "
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     176,
+     1130,
+     363,
+     1152
+    ],
+    "block_content": "Proof: First we have"
+   },
+   {
+    "block_id": 8,
+    "block_label": "display_formula",
+    "block_bbox": [
+     190,
+     1166,
+     1043,
+     1329
+    ],
+    "block_content": " $$ \\begin{array}{r l}&{|\\mathrm{v e c}(\\boldsymbol{\\Theta})^{k^{\\mathrm{T}}}R_{i j}[H_{2}(Y_{i j},\\mathbf{X}_{i j}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{z}_{i j})\\mathrm{v e c}(\\mathbf{z}_{i j})^{\\mathrm{T}}-E\\{H_{2}(Y_{i j},\\mathbf{X}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{z}_{i j})\\mathrm{v e c}(\\mathbf{z}_{i j})^{\\mathrm{T}}|Y_{i j}\\}}\\\\ &{+E\\{S_{2}^{2}(Y_{i j},\\mathbf{X}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{z}_{i j})\\mathrm{v e c}(\\mathbf{z}_{i j})^{\\mathrm{T}}|Y_{i j}\\}-E\\{S_{2}(Y_{i j},\\mathbf{X}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{v e c}(\\mathbf{z}_{i j})|Y_{i j}\\}^{\\otimes2}]\\mathrm{v e c}(\\boldsymbol{\\Theta})^{k}|}\\\\ {\\leq}&{\\{2d_{H_{2}}\\|\\boldsymbol{\\Theta}^{k}\\|_{F}\\|\\mathrm{v e c}(\\mathbf{z}_{i j})\\|_{2}\\|\\boldsymbol{\\Theta}^{k}\\|_{\\operatorname*{m a x}}\\|\\mathrm{v e c}(\\mathbf{z}_{i j})\\|_{1}}\\\\ &{+2d_{S_{2}}^{2}\\|\\boldsymbol{\\Theta}^{k}\\|_{F}\\|\\mathrm{v e c}(\\mathbf{z}_{i j})\\|_{2}\\|\\boldsymbol{\\Theta}^{k}\\|_{\\operatorname*{m a x}}\\|\\mathrm{v e c}(\\mathbf{z}_{i j})\\|_{1}\\}}\\\\ {=}&{2(d_{H_{2}}+d_{S_{2}}^{2})a D}\\end{array} $$ "
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     1347,
+     216,
+     1367
+    ],
+    "block_content": "and"
+   },
+   {
+    "block_id": 10,
+    "block_label": "display_formula",
+    "block_bbox": [
+     233,
+     1382,
+     1041,
+     1415
+    ],
+    "block_content": " $$ |\\mathrm{vec}(\\boldsymbol{\\Theta})^{k^{\\mathrm{T}}}R_{ij}[H_{2}(Y_{ij},\\mathbf{X}_{ij}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{vec}(\\mathbf{z}_{ij})\\mathrm{vec}(\\mathbf{z}_{ij})^{\\mathrm{T}}-E\\{H_{2}(Y_{ij},\\mathbf{X}|\\widetilde{\\boldsymbol{\\Theta}},\\widetilde{\\boldsymbol{\\beta}})\\mathrm{vec}(\\mathbf{z}_{ij})\\mathrm{vec}(\\mathbf{z}_{ij})^{\\mathrm{T}}|Y_{ij}\\}| $$ "
+   },
+   {
+    "block_id": 11,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1451,
+     623,
+     1469
+    ],
+    "block_content": "41"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['144']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 12,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.936,
+   "numbers_unknown": 1,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.962,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 1,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

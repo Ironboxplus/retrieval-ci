@@ -12,10 +12,11 @@ from app.services.scope_paths import (
     file_abspath as _abspath,
     is_windows_scope,
     path_matches as _path_matches,
+    scopes_share_files,
     stored_relative_path_identity,
 )
 from app.services.journal.chunker import JournalChunker, JournalTextChunk
-from app.services.journal.repository import JournalRepository
+from app.services.journal.repository import JournalRepository, path_identity
 from app.services.journal.schemas import (
     JournalBulkDocItem,
     JournalChunkResponse,
@@ -30,22 +31,35 @@ from app.services.journal.schemas import (
     JournalSearchRequest,
     JournalSearchResponse,
 )
-from app.services.journal.vector_store import JournalChunkUpsert, JournalVectorStore
+from app.services.journal.vector_store import JournalChunkUpsert, JournalVectorStore, journal_points
 from core.db.models import JournalChunk, JournalEntry
 
 
 logger = logging.getLogger("journal.service")
 
 EmbedFn = Callable[[Sequence[str], bool], tuple[list[list[float]], list[dict[str, float]] | None]]
+# Texts per progress/cancel tick of ``_embed``, not a model batch size: every call below goes
+# through ``core.indexing.embedders.embed_in_pieces``, which splits background work itself.
 JOURNAL_EMBED_BATCH = 128
+
+
+# Where the MCP plugin files Claude Code / Codex transcripts (docs of the project scope whose
+# title starts with this directory); they are project history, not files of the tree.
+CONVERSATION_DIR = ".conversations"
 
 
 class _GlobResolution(NamedTuple):
     """Result of resolving a search's path_glob to matching entry_ids, carrying the scope's
     doc count + a sample title so an EMPTY match can be explained (see _resolve_path_glob_ids)."""
     ids: list[str] | None       # None ⇒ no path_glob → caller adds no filter
-    scope_doc_count: int        # titled live docs in scope (0 when no path_glob)
+    scope_doc_count: int        # titled live docs in scope - filled only when ids is empty
     sample_title: str | None    # a representative title, for the empty-match notice
+    # Subdirectory search only: docs outside the directory are excluded by ``ids`` while
+    # every non-doc entry of the scope (memory, handoffs) still takes part.
+    include_non_doc: bool = False
+    # Subdirectory search only: how many live docs lie below the directory (before any
+    # path_glob), so "nothing indexed there" can be told apart from "glob matched nothing".
+    docs_under_prefix: int | None = None
 
 
 def _looks_binary(text: str) -> bool:
@@ -70,6 +84,26 @@ def _default_embed(
     return dense, sparse
 
 
+def journal_entry_points(
+    entry: JournalEntry, chunker: JournalChunker | None = None,
+) -> tuple[list[JournalTextChunk], list[tuple[int, dict[str, Any], str]]]:
+    """The chunks of a stored entry and their Qdrant points ``(id, payload, embedded text)``.
+
+    A pure function of the entry row (its project loaded): the same chunker and the same
+    payload builder as a live write (``JournalService.record`` -> ``JournalVectorStore``), so
+    the re-embed pipeline's rebuild produces exactly the points a fresh index would.
+    """
+    chunks = (chunker or JournalChunker()).chunk_entry(
+        entry_id=entry.entry_id, title=entry.title, summary=entry.summary, body=entry.body,
+        tags=entry.tags_json or [], source_kind=entry.source_kind, client=entry.client)
+    project = entry.project
+    group = JournalChunkUpsert(
+        chunks=chunks, project_id=entry.project_id, project_slug=project.slug, entry_id=entry.entry_id,
+        owner_user_id=project.owner_user_id, client=entry.client, source_kind=entry.source_kind,
+        tags=entry.tags_json or [], dense_vectors=[])
+    return chunks, journal_points(group)
+
+
 class JournalService:
     def __init__(
         self,
@@ -79,7 +113,11 @@ class JournalService:
         vector_store: JournalVectorStore | None = None,
         embed_fn: EmbedFn | None = None,
         reranker: Any | None = None,
+        catalog: Any | None = None,
     ):
+        # ``catalog`` (an IndexCatalogService) lets search map a directory nobody indexed
+        # onto its indexed ancestor. None keeps search exactly scope-by-scope.
+        self.catalog = catalog
         self.repository = repository or JournalRepository()
         self.chunker = chunker or JournalChunker()
         self.vector_store = vector_store or JournalVectorStore()
@@ -104,7 +142,13 @@ class JournalService:
 
     def _embed(
         self, texts: Sequence[str], include_sparse: bool, *, priority: str,
+        progress: Callable[[int, int], None] | None = None,
     ) -> tuple[list[list[float]], list[dict[str, float]] | None]:
+        """Embed ``texts``; ``progress(done, total)`` fires before the first batch and
+        after every batch so a caller can show live counts or stop between batches."""
+        total = len(texts)
+        if progress is not None:
+            progress(0, total)
         if self._uses_default_embed:
             if priority == "background" and len(texts) > JOURNAL_EMBED_BATCH:
                 dense: list[list[float]] = []
@@ -128,14 +172,60 @@ class JournalService:
                         sparse_complete = False
                     else:
                         sparse.extend(batch_sparse)
+                    if progress is not None:
+                        progress(len(dense), total)
                 return dense, (sparse if sparse_complete else None)
             logger.info(
                 "journal.embed_batch index=1 size=%d total=%d priority=%s",
                 len(texts), len(texts), priority,
             )
-            return self.embed_fn(  # type: ignore[call-arg]
+            vectors = self.embed_fn(  # type: ignore[call-arg]
                 texts, include_sparse, priority=priority)
-        return self.embed_fn(texts, include_sparse)
+        else:
+            vectors = self.embed_fn(texts, include_sparse)
+        if progress is not None:
+            progress(total, total)
+        return vectors
+
+    def _embed_with_reuse(
+        self, texts: Sequence[str], prior_entry_ids: Sequence[str], *, priority: str,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> tuple[list[list[float]], list[dict[str, float]] | None]:
+        """``_embed`` that copies the stored vector of every text a prior live version of the
+        same file already carries, and embeds only the rest.
+
+        ``prior_entry_ids`` are the live older entries of the files being written (read
+        before the write, retired after it). Reuse only fills this call's result: the vectors
+        go into the NEW entry's points, the old points are untouched until the caller's
+        latest-wins retirement. ``progress(done, total)`` counts reused chunks as done.
+        A store without ``reusable_vectors_by_content`` (an old local adapter) embeds all.
+        """
+        lookup = getattr(self.vector_store, "reusable_vectors_by_content", None)
+        if not texts or not prior_entry_ids or lookup is None:
+            return self._embed(texts, True, priority=priority, progress=progress)
+        reused = lookup(
+            prior_entry_ids, texts,
+            require_sparse=bool(getattr(self.vector_store, "supports_sparse", False)))
+        misses = list(dict.fromkeys(text for text in texts if text not in reused))
+        total = len(texts)
+        reused_count = sum(1 for text in texts if text in reused)
+        logger.info("journal embed: reused %d/%d chunk vectors", reused_count, total)
+        embedded: dict[str, tuple[list[float], dict[str, float] | None]] = {}
+        if misses:
+            def miss_progress(done: int, _miss_total: int) -> None:
+                if progress is not None:
+                    progress(reused_count + done, total)
+
+            dense, sparse = self._embed(
+                misses, True, priority=priority, progress=miss_progress)
+            for i, text in enumerate(misses):
+                embedded[text] = (dense[i], sparse[i] if sparse is not None else None)
+        elif progress is not None:
+            progress(total, total)
+        merged = [reused[text] if text in reused else embedded[text] for text in texts]
+        lexical = [pair[1] for pair in merged]
+        return ([pair[0] for pair in merged],
+                lexical if all(vector is not None for vector in lexical) else None)
 
     @staticmethod
     def _limit_returned_chunks(
@@ -193,8 +283,10 @@ class JournalService:
         indexed = False
         index_error = None
         try:
-            dense, sparse = self._embed(
-                [c.content for c in chunks], True, priority="background")
+            dense, sparse = self._embed_with_reuse(
+                [c.content for c in chunks],
+                self._prior_doc_entry_ids(request, entry.entry_id),
+                priority="background")
             self.vector_store.upsert_chunks(
                 chunks,
                 project_id=project.project_id,
@@ -245,10 +337,29 @@ class JournalService:
         """Resolve one stored document safely; ``file_abspath`` rejects scope escape."""
         return _abspath(project_slug, title)
 
+    def _related_scope_doc_files(
+        self, *, owner_user_id: str | None, project_slug: str, titles: Sequence[str],
+    ) -> list[tuple[str, str]]:
+        """The owner's live (scope, title) docs that can be the same physical file as
+        ``titles`` indexed under ``project_slug``.
+
+        Identity is the absolute path, and a scope-relative path never contains ``..``, so
+        only scopes equal to (e.g. Windows case variants) or nested with ``project_slug``
+        can hold it (``scopes_share_files``).  The owner's project table is small; its doc
+        entries are not, so only those related scopes - and only rows whose basename can
+        match - are read instead of every live doc of the owner.
+        """
+        related = [
+            slug for slug in self.repository.owner_project_slugs(owner_user_id=owner_user_id)
+            if scopes_share_files(slug, project_slug)
+        ]
+        return self.repository.live_doc_files_in_scopes(
+            owner_user_id=owner_user_id, project_slug=related, titles=titles)
+
     def _owner_physical_doc_index(
-        self, *, owner_user_id: str | None,
+        self, *, owner_user_id: str | None, project_slug: str, titles: Sequence[str],
     ) -> dict[str, list[tuple[str, str]]]:
-        """Read the owner's live path inventory once for an entire bulk request.
+        """Read the owner's related live path inventory once for an entire bulk request.
 
         The source of truth is physical identity, not content hash: two distinct
         files may have identical bytes, while a parent/child scope can address the
@@ -257,7 +368,8 @@ class JournalService:
         """
         paths: dict[str, list[tuple[str, str]]] = defaultdict(list)
         seen: dict[str, set[tuple[str, str]]] = defaultdict(set)
-        for scope, title in self.repository.all_live_doc_files(owner_user_id=owner_user_id):
+        for scope, title in self._related_scope_doc_files(
+                owner_user_id=owner_user_id, project_slug=project_slug, titles=titles):
             try:
                 physical = self._physical_doc_key(scope, title)
                 scope_key = self._doc_scope_key(scope, title)
@@ -270,8 +382,17 @@ class JournalService:
         return paths
 
     def index_docs_bulk(self, *, project_slug: str, owner_user_id: str | None,
-                        files: Sequence[JournalBulkDocItem], client: str = "mcp") -> dict[str, int]:
+                        files: Sequence[JournalBulkDocItem], client: str = "mcp",
+                        progress: Callable[[int, int], None] | None = None,
+                        before_write: Callable[[], None] | None = None,
+                        write_progress: Callable[[int, int], None] | None = None) -> dict[str, int]:
         """Bulk-index changed documents and atomically promote every fan-out scope.
+
+        ``progress(done, total)`` counts embedded chunks. ``write_progress(written,
+        total)`` counts Qdrant points after each durable batch. ``before_write`` runs once,
+        after every vector exists and before the first Qdrant write; raising from
+        either aborts like any other failure (entries stay pending, speculative points
+        are removed, previous revisions stay live), which is how a queue cancels.
 
         A request reads the owner's physical-path inventory *once*.  Each changed
         document adds its pre-existing aliases (for example parent/child scopes) to
@@ -282,16 +403,24 @@ class JournalService:
         retire any scope's previous searchable revision.
         """
         canonical_primary_scope = canonicalize_scope_path(project_slug)
-        owner_paths = self._owner_physical_doc_index(owner_user_id=owner_user_id)
+        owner_paths = self._owner_physical_doc_index(
+            owner_user_id=owner_user_id, project_slug=canonical_primary_scope,
+            titles=[item.title for item in files])
 
         # ``plans`` is keyed by the target scope/title, while ``template_key`` names
         # the one physical-source chunk/vector template that target reuses.
         plans: dict[tuple[str, str], dict[str, Any]] = {}
         templates: dict[str, list[JournalTextChunk]] = {}
         incoming_physical: dict[str, dict[str, Any]] = {}
+        # A binary body is that one file's problem: it is left out and named in the result,
+        # never a reason to drop every other file of the request.
+        skipped_binary: list[str] = []
         for item in files:
             if _looks_binary(item.body):
-                raise ValueError(f"journal body appears binary: {item.title}")
+                logger.warning("journal bulk skipped binary body scope=%s title=%s",
+                               canonical_primary_scope, item.title)
+                skipped_binary.append(item.title)
+                continue
             if not item.body.strip():
                 continue
             source_key = self._doc_scope_key(canonical_primary_scope, item.title)
@@ -324,7 +453,8 @@ class JournalService:
             plans[source_key] = dict(source)
 
         if not plans:
-            return {"files": 0, "deduped": 0, "chunks": 0, "indexed": 0, "chunk_counts": {}}
+            return {"files": 0, "deduped": 0, "chunks": 0, "indexed": 0, "chunk_counts": {},
+                    "skipped_binary": skipped_binary}
 
         # Add aliases from the one owner-wide inventory.  If this request happens to
         # contain two fresh readings of the same physical file with differing hashes,
@@ -388,8 +518,16 @@ class JournalService:
                     chunk for template_key in required_templates
                     for chunk in templates[template_key]
                 ]
-                dense, sparse = self._embed(
-                    [chunk.content for chunk in template_chunks], True, priority="background")
+                # Older live versions of every file written here (fan-out targets
+                # included) lend their stored vectors for unchanged chunk text; they are
+                # read before the write and retired only by the supersede below.
+                prior_ids = (list(self._live_doc_versions(
+                    [(row["project_slug"], row["title"], row["entry_id"]) for row in pending],
+                    owner_user_id=owner_user_id))
+                    if hasattr(self.vector_store, "reusable_vectors_by_content") else [])
+                dense, sparse = self._embed_with_reuse(
+                    [chunk.content for chunk in template_chunks], prior_ids,
+                    priority="background", progress=progress)
                 offset = 0
                 for template_key in required_templates:
                     count = len(templates[template_key])
@@ -399,6 +537,8 @@ class JournalService:
                     )
                     offset += count
 
+                if before_write is not None:
+                    before_write()
                 groups = [JournalChunkUpsert(
                     chunks=row["chunks"],
                     project_id=row["project_id"],
@@ -413,7 +553,12 @@ class JournalService:
                 ) for row in pending]
                 expected_points = sum(len(group.chunks) for group in groups)
                 if hasattr(self.vector_store, "upsert_chunk_groups"):
-                    written = self.vector_store.upsert_chunk_groups(groups)
+                    # Only a caller that asked for progress hands the store the hook,
+                    # so adapters with the plain (groups) signature keep working.
+                    written = (self.vector_store.upsert_chunk_groups(groups)
+                               if write_progress is None else
+                               self.vector_store.upsert_chunk_groups(
+                                   groups, on_batch=write_progress))
                 else:  # compatibility for old test/local vector adapters only
                     written = sum(self.vector_store.upsert_chunks(
                         group.chunks,
@@ -427,6 +572,8 @@ class JournalService:
                         dense_vectors=group.dense_vectors,
                         sparse_vectors=group.sparse_vectors,
                     ) for group in groups)
+                    if write_progress is not None:
+                        write_progress(written, expected_points)
                 if written != expected_points:
                     raise RuntimeError(
                         f"journal Qdrant bulk write incomplete: wrote {written} of {expected_points} points")
@@ -436,11 +583,9 @@ class JournalService:
             # Promotion is intentionally outside the individual write loop.  A target
             # failure above leaves every old revision live; no scope is partially
             # latest-wins promoted merely because it happened to be written first.
-            for row in created:
-                self._supersede_prior_doc_versions(JournalRecordRequest(
-                    project_slug=row["project_slug"], client=client, source_kind="doc",
-                    title=row["title"], body="promotion", owner_user_id=owner_user_id,
-                    dedupe_policy="return_existing"), row["entry_id"])
+            self._supersede_doc_versions(
+                [(row["project_slug"], row["title"], row["entry_id"]) for row in created],
+                owner_user_id=owner_user_id)
         except Exception as exc:
             self.repository.mark_index_results_bulk(
                 [row["entry_id"] for row in pending], success=False, error=str(exc))
@@ -463,7 +608,8 @@ class JournalService:
         indexed_chunks = sum(len(row["chunks"]) for row in pending)
         return {"files": len(created), "deduped": len(created) - len(pending),
                 "chunks": indexed_chunks, "indexed": indexed_chunks,
-                "chunk_counts": {row["title"]: len(row["chunks"]) for row in created}}
+                "chunk_counts": {row["title"]: len(row["chunks"]) for row in created},
+                "skipped_binary": skipped_binary}
 
     def _fan_out_doc(self, request: JournalRecordRequest) -> int:
         """方案2 (text side): after recording a doc, refresh the SAME physical file wherever
@@ -480,7 +626,9 @@ class JournalService:
             return 0
         this_abs = _abspath(request.project_slug, request.title)
         try:
-            owned = self.repository.all_live_doc_files(owner_user_id=request.owner_user_id)
+            owned = self._related_scope_doc_files(
+                owner_user_id=request.owner_user_id, project_slug=request.project_slug,
+                titles=[request.title])
         except Exception:
             logger.exception("journal fan-out: enumerating owner docs failed — skipping sync")
             return 0
@@ -515,17 +663,65 @@ class JournalService:
         """
         if request.source_kind != "doc" or request.dedupe_policy != "return_existing" or not request.title:
             return
-        stale = self.repository.superseded_version_ids(
-            project_slug=self._project_scope_aliases(
-                request.project_slug, owner_user_id=request.owner_user_id)[1],
-            source_kind=request.source_kind,
-            title=request.title,
-            owner_user_id=request.owner_user_id,
-            exclude_entry_id=entry_id,
-            case_sensitive=not is_windows_scope(request.project_slug),
-        )
-        for old_id in stale:
-            self.delete_entry(old_id, reason="superseded by newer version", owner_user_id=request.owner_user_id)
+        self._supersede_doc_versions(
+            [(request.project_slug, request.title, entry_id)], owner_user_id=request.owner_user_id)
+
+    def _prior_doc_entry_ids(self, request: JournalRecordRequest, entry_id: str) -> list[str]:
+        """The live older versions of the doc ``request`` writes: the entries whose stored
+        vectors ``_embed_with_reuse`` may copy. Exactly the set ``_supersede_prior_doc_versions``
+        retires afterwards (same scope aliases, same title identity), so memory entries and
+        non-latest-wins writes get none."""
+        if (request.source_kind != "doc" or request.dedupe_policy != "return_existing"
+                or not request.title
+                or not hasattr(self.vector_store, "reusable_vectors_by_content")):
+            return []
+        return list(self._live_doc_versions(
+            [(request.project_slug, request.title, entry_id)],
+            owner_user_id=request.owner_user_id))
+
+    def _supersede_doc_versions(
+        self, winners: Sequence[tuple[str, str, str]], *, owner_user_id: str | None,
+    ) -> int:
+        """Retire every older live version of the given files, in one pass.
+
+        ``winners`` are (project_slug, title, winning entry_id).  Each scope's live docs are
+        read once for all of its titles, the stale ids of every file are collected, and the
+        retirement is one SQL soft delete plus one vector delete - not a scope scan, an alias
+        lookup and a delete round trip per file.  Returns how many entries were retired."""
+        stale = self._live_doc_versions(winners, owner_user_id=owner_user_id)
+        if not stale:
+            return 0
+        removed_ids, _ = self._delete_entries(
+            list(stale), reason="superseded by newer version", owner_user_id=owner_user_id)
+        return len(removed_ids)
+
+    def _live_doc_versions(
+        self, winners: Sequence[tuple[str, str, str]], *, owner_user_id: str | None,
+    ) -> dict[str, None]:
+        """Every live entry of the winners' files other than the winner itself, in order.
+
+        The one definition of "older version of this file" (scope aliases and Windows case
+        rules included): latest-wins retirement deletes these, and the embed step reads their
+        stored vectors first. ``winners`` are (project_slug, title, winning entry_id)."""
+        aliases_by_slug: dict[str, list[str]] = {}
+        groups: dict[tuple[tuple[str, ...], bool], list[tuple[str, str]]] = defaultdict(list)
+        for project_slug, title, winner_id in winners:
+            if project_slug not in aliases_by_slug:
+                aliases_by_slug[project_slug] = self._project_scope_aliases(
+                    project_slug, owner_user_id=owner_user_id)[1]
+            key = (tuple(aliases_by_slug[project_slug]), not is_windows_scope(project_slug))
+            groups[key].append((title, winner_id))
+        stale: dict[str, None] = {}
+        for (aliases, case_sensitive), files in groups.items():
+            by_identity = self.repository.live_doc_ids_by_identity(
+                project_slug=list(aliases), source_kind="doc", owner_user_id=owner_user_id,
+                titles=[title for title, _ in files], case_sensitive=case_sensitive)
+            for title, winner_id in files:
+                identity = stored_relative_path_identity(title, case_sensitive=case_sensitive)
+                for entry_id in by_identity.get(identity, []):
+                    if entry_id != winner_id:
+                        stale[entry_id] = None
+        return stale
 
     def list_entries(
         self,
@@ -550,6 +746,8 @@ class JournalService:
             owner_user_id=owner_user_id,
             limit=limit,
             offset=offset,
+            load_chunks=False,
+            load_body=False,
         )
         return JournalEntryListResponse(
             entries=[self._entry_response(e, include_body=False, include_chunks=False) for e in rows],
@@ -632,20 +830,18 @@ class JournalService:
                 reason="empty snapshot; stale doc sweep skipped",
             )
 
-        existing_titles = self.repository.live_doc_titles(
+        inventory = self.repository.doc_inventory(
             project_slug=project_slugs,
             owner_user_id=owner_user_id,
         )
         case_sensitive = not is_windows_scope(project_slug)
         existing_identities = {
-            identity for title in existing_titles
-            if (identity := stored_relative_path_identity(
-                title, case_sensitive=case_sensitive)) is not None
+            identity for _, title in inventory if title is not None
+            if (identity := path_identity(title, case_sensitive)) is not None
         }
         live_identities = {
             identity for title in normalized_titles
-            if (identity := stored_relative_path_identity(
-                title, case_sensitive=case_sensitive)) is not None
+            if (identity := path_identity(title, case_sensitive)) is not None
         }
         if existing_identities and existing_identities.isdisjoint(live_identities):
             return JournalDocReconcileResponse(
@@ -656,10 +852,9 @@ class JournalService:
                 reason="snapshot is disjoint from existing docs; stale doc sweep skipped",
             )
 
-        stale_ids = self.repository.stale_doc_entry_ids_for_snapshot(
-            project_slug=project_slugs,
+        stale_ids = self.repository.stale_doc_entry_ids(
+            inventory,
             live_titles=normalized_titles,
-            owner_user_id=owner_user_id,
             max_depth=max_depth,
             patterns=patterns,
             case_sensitive=case_sensitive,
@@ -676,7 +871,80 @@ class JournalService:
             skipped=False,
         )
 
-    def _resolve_path_glob_ids(self, request: JournalSearchRequest) -> "_GlobResolution":
+    def _resolve_scope_redirect(self, request: JournalSearchRequest):
+        """The indexed ancestor that covers a requested directory with nothing of its own.
+
+        None means "search ``request.project_slug`` as given": no catalog is wired, the
+        caller is anonymous, the scope holds entries of its own (docs, memory or
+        conversation segments) or doc rows in the catalog, nothing above it is indexed,
+        or the lookup failed (search stays available)."""
+        if self.catalog is None or request.owner_user_id is None:
+            return None
+        try:
+            _canonical, project_slugs = self._project_scope_aliases(
+                request.project_slug, owner_user_id=request.owner_user_id)
+            if self.repository.scope_has_live_entries(
+                    project_slug=project_slugs, owner_user_id=request.owner_user_id):
+                return None
+            return self.catalog.resolve_indexed_scope(
+                owner_user_id=request.owner_user_id, kind="doc",
+                scope=request.project_slug, known_scopes=project_slugs)
+        except Exception:  # noqa: BLE001 - preserve search availability on catalog outage
+            logger.exception(
+                "journal ancestor-scope lookup failed for project_slug=%s",
+                request.project_slug)
+            return None
+
+    def _resolve_prefix_ids(
+        self, request: JournalSearchRequest, project_slugs: list[str], path_prefix: str,
+    ) -> "_GlobResolution":
+        """Docs below ``path_prefix`` (narrowed by a path_glob relative to it) plus, when
+        no glob names specific docs, the scope's ``.conversations/`` segments and the
+        permission to keep every non-doc entry."""
+        case_sensitive = not is_windows_scope(request.project_slug)
+        prefix_identity = path_identity(path_prefix, case_sensitive) or path_prefix
+
+        def docs_below(directory: str) -> list[tuple[str, str]]:
+            below = []
+            for entry_id, title in self.repository.scoped_live_doc_id_titles(
+                    project_slug=project_slugs, owner_user_id=request.owner_user_id,
+                    case_sensitive=case_sensitive, path_prefix=directory):
+                identity = path_identity(title, case_sensitive)
+                if identity is not None and identity.startswith(directory + "/"):
+                    below.append((entry_id, identity[len(directory) + 1:]))
+            return below
+
+        under = docs_below(prefix_identity)
+        if request.path_glob:
+            ids = [entry_id for entry_id, relative in under
+                   if _path_matches(relative, request.path_glob,
+                                    case_sensitive=case_sensitive)]
+            return _GlobResolution(
+                ids=ids, scope_doc_count=len(under), sample_title=None,
+                docs_under_prefix=len(under))
+        conversation_prefix = path_identity(CONVERSATION_DIR, case_sensitive)
+        ids = [entry_id for entry_id, _ in under]
+        ids += [entry_id for entry_id, _ in docs_below(conversation_prefix)]
+        return _GlobResolution(
+            ids=ids, scope_doc_count=len(under), sample_title=None,
+            include_non_doc=True, docs_under_prefix=len(under))
+
+    @staticmethod
+    def _prefix_notice(request: JournalSearchRequest, path_prefix: str | None,
+                       res: "_GlobResolution") -> str | None:
+        """Explain a subdirectory search whose directory holds no indexed doc."""
+        if not path_prefix or res.docs_under_prefix != 0:
+            return None
+        history = ("; its memory and conversation entries were searched"
+                   if res.include_non_doc else "")
+        return (f"Parent scope {request.project_slug!r} has no indexed docs under "
+                f"{path_prefix!r} (typically excluded by .gitignore, or never indexed)"
+                f"{history}. Index {path_prefix!r} on its own with journal_index_dir to "
+                "search its files.")
+
+    def _resolve_path_glob_ids(
+        self, request: JournalSearchRequest, path_prefix: str | None = None,
+    ) -> "_GlobResolution":
         """Resolve request.path_glob to the entry_ids it matches inside this scope, so the
         match-set can be pushed down as a search filter (top_k fills only from matching
         docs — never post-filter-squeezed, so no top_k is ever dropped). A doc's title IS
@@ -689,28 +957,35 @@ class JournalService:
         count + a sample title ride along so an empty hit can be EXPLAINED (the glob is
         scope-relative and the user's depth is wrong) rather than silently returning
         nothing while the scope in fact has docs."""
-        if not request.path_glob:
+        if not request.path_glob and not path_prefix:
             return _GlobResolution(ids=None, scope_doc_count=0, sample_title=None)
         _canonical, project_slugs = self._project_scope_aliases(
             request.project_slug, owner_user_id=request.owner_user_id)
+        if path_prefix:
+            return self._resolve_prefix_ids(request, project_slugs, path_prefix)
+        case_sensitive = not is_windows_scope(request.project_slug)
+        # SQL narrows the scope's docs to a superset of the glob's matches; the exact
+        # gitignore semantics are still decided by path_matches.
         pairs = self.repository.scoped_live_doc_id_titles(
             project_slug=project_slugs,
             owner_user_id=request.owner_user_id,
+            path_glob=request.path_glob,
+            case_sensitive=case_sensitive,
         )
         ids = [
             entry_id
             for entry_id, title in pairs
-            if _path_matches(
-                title,
-                request.path_glob,
-                case_sensitive=not is_windows_scope(request.project_slug),
-            )
+            if _path_matches(title, request.path_glob, case_sensitive=case_sensitive)
         ]
-        titles = [title for _, title in pairs if title]
-        # Shortest (then lexical) title = the most representative example of the scope's
-        # actual path shape — deterministic so the notice is stable.
-        sample = min(titles, key=lambda t: (len(t), t)) if titles else None
-        return _GlobResolution(ids=ids, scope_doc_count=len(pairs), sample_title=sample)
+        if ids:
+            return _GlobResolution(ids=ids, scope_doc_count=len(ids), sample_title=None)
+        # Only an empty match is explained, so the scope's size and a sample title (the
+        # shortest, then lexical, title - deterministic, and the most representative of the
+        # scope's path shape) are fetched then, as two aggregate reads, rather than by
+        # listing every doc on each search.
+        doc_count, sample = self.repository.scope_doc_summary(
+            project_slug=project_slugs, owner_user_id=request.owner_user_id)
+        return _GlobResolution(ids=ids, scope_doc_count=doc_count, sample_title=sample)
 
     @staticmethod
     def _path_glob_empty_notice(request: JournalSearchRequest, res: "_GlobResolution") -> str | None:
@@ -718,6 +993,11 @@ class JournalService:
         docs (else a hint about 'docs in scope' would be misleading). None ⇒ plain no-match."""
         if res.scope_doc_count == 0:
             return None
+        if res.docs_under_prefix is not None:
+            return (f"path_glob {request.path_glob!r} matched 0 of {res.docs_under_prefix} "
+                    f"doc(s) below the requested directory in scope "
+                    f"{request.project_slug!r}. path_glob is relative to the requested "
+                    "directory, not to the scope root.")
         sample = f" A doc here looks like {res.sample_title!r}." if res.sample_title else ""
         return (f"path_glob {request.path_glob!r} matched 0 of {res.scope_doc_count} doc(s) in "
                 f"scope {request.project_slug!r}. path_glob is relative to THIS scope's root; "
@@ -740,15 +1020,34 @@ class JournalService:
         )
 
     def search(self, request: JournalSearchRequest) -> JournalSearchResponse:
+        redirect = self._resolve_scope_redirect(request)
+        if redirect is None:
+            return self._search_in_scope(request, None)
+        # Everything below judges the scope that holds the entries; the response still
+        # names the directory the caller asked about.
+        response = self._search_in_scope(
+            request.model_copy(update={"project_slug": redirect.scope}),
+            redirect.path_prefix)
+        return response.model_copy(update={
+            "project_slug": request.project_slug,
+            "resolved_scope": redirect.scope,
+            "resolved_path_prefix": redirect.path_prefix,
+        })
+
+    def _search_in_scope(
+        self, request: JournalSearchRequest, path_prefix: str | None,
+    ) -> JournalSearchResponse:
         if request.mode == "keyword":
-            return self._keyword_search(request)
+            return self._keyword_search(request, path_prefix)
         _canonical, project_slugs = self._project_scope_aliases(
             request.project_slug, owner_user_id=request.owner_user_id)
-        res = self._resolve_path_glob_ids(request)
+        res = self._resolve_path_glob_ids(request, path_prefix)
         glob_ids = res.ids
-        if glob_ids is not None and not glob_ids:
+        if glob_ids is not None and not glob_ids and not res.include_non_doc:
             return self._empty_search_response(
-                request, engine="qdrant", notice=self._path_glob_empty_notice(request, res))
+                request, engine="qdrant",
+                notice=(self._prefix_notice(request, path_prefix, res)
+                        or self._path_glob_empty_notice(request, res)))
         t0 = time.perf_counter()
         dense, sparse = self._embed(
             [request.query], True, priority="interactive")
@@ -769,7 +1068,14 @@ class JournalService:
             filters["level"] = request.level
         if request.tags:
             filters["tags"] = request.tags
-        if glob_ids is not None:
+        if glob_ids is not None and res.include_non_doc:
+            # Subdirectory search: docs by id, every non-doc entry of the scope as is.
+            if glob_ids:
+                filters["__should__"] = [
+                    {"entry_id": glob_ids}, {"__exclude__": {"source_kind": "doc"}}]
+            else:
+                filters["__exclude__"] = {"source_kind": "doc"}
+        elif glob_ids is not None:
             # Push the matching id-set down as a MatchAny filter so top_k fills only from
             # matching docs — dense/sparse/hybrid alike — with no post-filter drop.
             filters["entry_id"] = glob_ids
@@ -798,6 +1104,8 @@ class JournalService:
         entries = self.repository.get_entries_by_ids(
             [chunk.entry_id for chunk in chunk_hits],
             owner_user_id=request.owner_user_id,
+            load_chunks=False,
+            load_body=False,
         )
         chunks_by_entry: dict[str, list[JournalChunkResponse]] = defaultdict(list)
         for chunk in chunk_hits:
@@ -830,6 +1138,7 @@ class JournalService:
             mode=request.mode,
             total=len(hits),
             hits=hits,
+            notice=self._prefix_notice(request, path_prefix, res),
             metrics={
                 "retrieve_ms": retrieve_ms,
                 "rerank_ms": rerank_ms,
@@ -842,15 +1151,19 @@ class JournalService:
             },
         )
 
-    def _keyword_search(self, request: JournalSearchRequest) -> JournalSearchResponse:
+    def _keyword_search(
+        self, request: JournalSearchRequest, path_prefix: str | None = None,
+    ) -> JournalSearchResponse:
         """Embedding-free FTS5 keyword search — resilient when embed endpoint is down."""
         _canonical, project_slugs = self._project_scope_aliases(
             request.project_slug, owner_user_id=request.owner_user_id)
-        res = self._resolve_path_glob_ids(request)
+        res = self._resolve_path_glob_ids(request, path_prefix)
         glob_ids = res.ids
-        if glob_ids is not None and not glob_ids:
+        if glob_ids is not None and not glob_ids and not res.include_non_doc:
             return self._empty_search_response(
-                request, engine="fts5", notice=self._path_glob_empty_notice(request, res))
+                request, engine="fts5",
+                notice=(self._prefix_notice(request, path_prefix, res)
+                        or self._path_glob_empty_notice(request, res)))
         t0 = time.perf_counter()
         limit = request.top_k * 5 if request.rerank else request.top_k
         rows, _ = self.repository.keyword_search(
@@ -859,6 +1172,7 @@ class JournalService:
             source_kind=request.source_kind,
             owner_user_id=request.owner_user_id,
             entry_ids=glob_ids,
+            include_non_doc=res.include_non_doc,
             limit=limit,
             load_chunks=not (request.include_chunks and request.chunk_limit is not None),
         )
@@ -877,6 +1191,7 @@ class JournalService:
             mode="keyword",
             total=len(hits),
             hits=hits,
+            notice=self._prefix_notice(request, path_prefix, res),
             metrics={"retrieve_ms": retrieve_ms, "engine": "fts5",
                      "candidates": len(rows), "returned": len(hits)},
         )
@@ -990,6 +1305,7 @@ class JournalService:
         chunk_hits = self._dedup_chunks_by_entry(chunk_hits)[:top_k]
         entries = self.repository.get_entries_by_ids(
             [chunk.entry_id for chunk in chunk_hits], owner_user_id=owner_user_id,
+            load_chunks=False, load_body=False,
         )
         hits = []
         for chunk in chunk_hits:
@@ -1021,6 +1337,7 @@ class JournalService:
         rows, total = self.repository.list_entries(
             project_slug=project_slug, source_kind=source_kind, q=q,
             owner_user_id=owner_user_id, limit=limit, offset=offset,
+            load_chunks=False, load_body=False,
         )
         return JournalEntryListResponse(
             entries=[self._entry_response(e, include_body=False, include_chunks=False) for e in rows],
@@ -1220,5 +1537,6 @@ _SERVICE: JournalService | None = None
 def get_journal_service() -> JournalService:
     global _SERVICE
     if _SERVICE is None:
-        _SERVICE = JournalService()
+        from app.services.index_catalog.service import get_index_catalog_service
+        _SERVICE = JournalService(catalog=get_index_catalog_service())
     return _SERVICE

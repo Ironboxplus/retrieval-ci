@@ -12,7 +12,7 @@ import {
   RocketOutlined, CheckCircleOutlined, LoadingOutlined,
   ExperimentOutlined, SortAscendingOutlined, FontSizeOutlined,
   FilePdfOutlined, ReadOutlined, AppstoreOutlined, GlobalOutlined,
-  CopyOutlined, HistoryOutlined,
+  CopyOutlined, HistoryOutlined, StopOutlined,
 } from '@ant-design/icons';
 import { useSearchStream } from '../api/hooks/useSearchStream';
 import type { StreamStage, StreamProgress } from '../api/hooks/useSearchStream';
@@ -29,6 +29,9 @@ import { copyText } from '../utils/clipboard';
 import CodeSearchView from './CodeSearchView';
 import ModeSwitch from '../components/ModeSwitch';
 import { useIsWide } from '../hooks/useIsWide';
+import {
+  includeWithdrawnField, readIncludeWithdrawn, withdrawnMarks, writeIncludeWithdrawn,
+} from './withdrawnModel';
 
 // Same breakpoint and stacked-vs-same-row structure as CodeSearchView.tsx's
 // own NARROW_BREAKPOINT (round-3 review, 390px) — kept identical between the
@@ -59,6 +62,7 @@ type SearchUIState = {
   venues: string[];
   years: number[];
   titleOnly: boolean;
+  includeWithdrawn: boolean;
   chunkMode: boolean;
   sourceType: SourceTypeFilter;
   sortBy: 'score' | 'year' | 'citations';
@@ -72,7 +76,7 @@ type SearchUIState = {
 // uiToRequest 在非 paper 下根本不发 title_only，后端默认 false——所以默认关闭才是
 // 一直以来的实际行为；把 sourceType 默认改成 'paper' 时它被顺带打开了。
 const DEFAULT_UI: SearchUIState = {
-  query: '', method: 'hybrid', topK: 20, titleOnly: false, chunkMode: false,
+  query: '', method: 'hybrid', topK: 20, titleOnly: false, includeWithdrawn: false, chunkMode: false,
   venues: [], years: [], sourceType: 'paper', sortBy: 'score',
 };
 
@@ -101,6 +105,7 @@ function readUI(sp: URLSearchParams): SearchUIState {
     // 跟着 DEFAULT_UI 翻过来：缺省即关闭，'1' 才打开。旧链接里的 titleOnly=0 仍然
     // 读作关闭，语义不变；变的只是「不带这个参数」从开变成了关。
     titleOnly: sp.get('titleOnly') === '1',
+    includeWithdrawn: readIncludeWithdrawn(sp),
     chunkMode: sp.get('chunk') === '1',
     sourceType: ((sp.get('source') as SourceTypeFilter) || DEFAULT_UI.sourceType),
     sortBy: ((sp.get('sortBy') as 'score' | 'year' | 'citations') || 'score'),
@@ -115,6 +120,7 @@ function writeUI(ui: SearchUIState): URLSearchParams {
   if (ui.venues.length) sp.set('venues', ui.venues.join(','));
   if (ui.years.length) sp.set('years', ui.years.slice().sort((a, b) => a - b).join(','));
   if (ui.titleOnly) sp.set('titleOnly', '1');
+  writeIncludeWithdrawn(sp, ui.includeWithdrawn);
   if (ui.chunkMode) sp.set('chunk', '1');
   if (ui.sourceType !== DEFAULT_UI.sourceType) sp.set('source', ui.sourceType);
   if (ui.sortBy !== DEFAULT_UI.sortBy) sp.set('sortBy', ui.sortBy);
@@ -137,6 +143,8 @@ function uiToRequest(ui: SearchUIState): SearchRequest {
     // false 时同一 query 得到 0.983 的正文。开关本身也只在 paper 下渲染，用户在其他
     // 来源下关不掉它——照发就是发一个必然为空的检索。
     title_only: ui.sourceType === 'paper' ? ui.titleOnly : undefined,
+    // 撤稿只存在于 arXiv 论文；后端默认排除，开关打开才带回。随请求体进缓存键。
+    include_withdrawn: includeWithdrawnField(ui.sourceType, ui.includeWithdrawn),
     // 展开片段 = 关闭按论文去重（每篇返回全部命中 chunk）；默认 undefined（后端默认
     // dedup=true，每篇仅最高分）保持缓存键干净。结果始终按论文分组排序，与此开关无关。
     dedup_by_paper: ui.chunkMode ? false : undefined,
@@ -306,6 +314,7 @@ function PaperCard({ p, rank, query }: { p: PaperGroup; rank: number; query: str
   const trackType = meta.track_type as string | undefined;
   const impactLevel = meta.impact_level as string | undefined;
   const citationCount = meta.citation_count as number | undefined;
+  const withdrawnMark = withdrawnMarks(meta);
   const pdfUrl = meta.pdf_url as string | undefined;
   const crawledAt = meta.crawled_at as string | undefined;
   const sourceUrl = (meta.source as string | undefined) || p.source;
@@ -413,6 +422,8 @@ function PaperCard({ p, rank, query }: { p: PaperGroup; rank: number; query: str
             {venue && <Tag color={venueColors[venue] || '#6366f1'} style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>{venue}</Tag>}
             {year && <Tag style={{ borderRadius: 4, background: token.colorFillSecondary, border: 'none', color: token.colorTextSecondary, fontSize: 11, margin: 0 }}>{year}</Tag>}
             {venueTier && <Tag color="gold" style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>{venueTier}</Tag>}
+            {withdrawnMark.withdrawn && <Tag color="red" style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>已撤稿</Tag>}
+            {withdrawnMark.versionLabel && <Tag style={{ borderRadius: 4, background: token.colorFillSecondary, border: 'none', color: token.colorTextSecondary, fontSize: 11, margin: 0 }}>{withdrawnMark.versionLabel}</Tag>}
             {(() => {
               const nonMain: Record<string, string> = {
                 poster: '海报', demo: '演示', tutorial: '教程', keynote: '主旨演讲',
@@ -754,6 +765,13 @@ export default function Search() {
                   <FontSizeOutlined style={{ color: ui.titleOnly ? token.colorPrimary : token.colorTextSecondary, fontSize: 14 }} />
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>仅标题</Typography.Text>
                   <Switch size="small" checked={ui.titleOnly} onChange={(v) => patchUI({ titleOnly: v })} />
+                </Space>
+              )}
+              {ui.sourceType === 'paper' && (
+                <Space size={4}>
+                  <StopOutlined style={{ color: ui.includeWithdrawn ? token.colorPrimary : token.colorTextSecondary, fontSize: 14 }} />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>包含撤稿</Typography.Text>
+                  <Switch size="small" checked={ui.includeWithdrawn} onChange={(v) => patchUI({ includeWithdrawn: v })} />
                 </Space>
               )}
             </Space>

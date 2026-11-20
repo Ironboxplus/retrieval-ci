@@ -22,10 +22,46 @@ const TYPE_LABEL: Record<string, string> = {
   upload_pipeline: '上传处理',
   medical_corpus_download: '医学语料下载',
   batch_index: '批量索引',
+  journal_index: 'Journal 索引',
+  code_index: '代码索引',
+  code_duplicates: '重复代码检测',
 };
 
 export function taskTypeLabel(taskType: string): string {
   return TYPE_LABEL[taskType] ?? taskType;
+}
+
+const PUBLIC_CODE_OPERATION_LABEL: Record<string, string> = {
+  check_updates: '公开代码检查更新',
+  index: '公开代码索引',
+  import: '公开代码导入',
+};
+
+/** Card/detail title: `taskTypeLabel`, except public_code_job whose name
+ * depends on `params.operation`. */
+export function taskDisplayLabel(task: TaskLike): string {
+  if (task.task_type === 'public_code_job') {
+    return PUBLIC_CODE_OPERATION_LABEL[String((task.params ?? {}).operation)] ?? '公开代码';
+  }
+  return taskTypeLabel(task.task_type);
+}
+
+// These runners are backed by in-process queues (app/services/pipeline/
+// queue_tasks.py): the client re-submits, the task API cannot restart them.
+const NON_RETRYABLE_TYPES = new Set(['journal_index', 'code_index', 'code_duplicates', 'public_code_job']);
+
+export function taskCanRetry(task: TaskLike): boolean {
+  return !NON_RETRYABLE_TYPES.has(task.task_type);
+}
+
+// public_code_job cancel always answers 409 (app/services/public_code/jobs.py
+// `_cancel_task_job` raises TaskNotCancellable), so the button is not offered.
+export function taskCanCancel(task: TaskLike): boolean {
+  return task.task_type !== 'public_code_job';
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 // Paper ids in this app are consistently "{venue-slug}-{year}-{suffix}"
@@ -71,6 +107,12 @@ export function taskGroupKey(task: TaskLike): string {
     case 'ingest_pipeline':
     case 'icml2026_external_pipeline':
       return `${task.task_type}:${p.venue ?? ''}:${p.year ?? ''}`;
+    case 'journal_index':
+    case 'code_index':
+    case 'code_duplicates':
+      return `${task.task_type}:${p.project ?? ''}`;
+    case 'public_code_job':
+      return `public_code_job:${p.operation ?? ''}:${stringList(p.source_ids).join(',')}`;
     default:
       return `${task.task_type}:${taskSubject(task)}`;
   }
@@ -118,6 +160,16 @@ export function taskSubject(task: TaskLike): string {
       // `file_path` (app/services/pipeline/upload_service.py), so its
       // basename is never a meaningful subject — always empty here. The real
       // document title is fetched by `doc_id` at the JSX layer instead.
+      return '';
+    }
+    case 'journal_index':
+    case 'code_index':
+    case 'code_duplicates':
+      return typeof p.project === 'string' ? p.project : '';
+    case 'public_code_job': {
+      const ids = stringList(p.source_ids);
+      if (ids.length === 1) return ids[0];
+      if (ids.length > 1) return `${ids.length} 个来源`;
       return '';
     }
     case 'medical_corpus_download': {
