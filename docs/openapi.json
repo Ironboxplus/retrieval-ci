@@ -510,7 +510,7 @@
           "任务管理"
         ],
         "summary": "Stream Task",
-        "description": "以 SSE 形式流式输出任务快照、事件和资源数据。",
+        "description": "以 SSE 形式流式输出任务快照、事件和资源数据（WHATWG HTML 9.2）。\n\n`task-event` 带 `id:`（= TaskEvent.id），断线重连时浏览器自动带 `Last-Event-ID`，\n只补发 id 更大的事件；`snapshot` / `resource` / `final` 不带 id。流首发 `retry:`，\n空闲每 15 s 发注释行保活。任务进入终态后发 `final` 并由服务器结束连接：\n**客户端收到 `final` 必须调用 `EventSource.close()`**，否则浏览器会按 `retry:` 自动重连，\n每次都再收到一份 snapshot + final。",
         "operationId": "stream_task_api_tasks__task_id__stream_get",
         "parameters": [
           {
@@ -543,6 +543,22 @@
               "default": 0,
               "title": "After Resource Id"
             }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
           }
         ],
         "responses": {
@@ -573,7 +589,7 @@
           "任务管理"
         ],
         "summary": "Stream Task Workflow",
-        "description": "以 SSE 形式流式输出任务详情、工作流图、事件和资源数据。",
+        "description": "以 SSE 形式流式输出任务详情、工作流图、事件和资源数据。\n\n重连、`id:`、保活与结束语义同 `/{task_id}/stream`：收到 `final` 后客户端必须 `close()`。",
         "operationId": "stream_task_workflow_api_tasks__task_id__workflow_stream_get",
         "parameters": [
           {
@@ -605,6 +621,22 @@
               "minimum": 0,
               "default": 0,
               "title": "After Resource Id"
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
             }
           }
         ],
@@ -2505,6 +2537,37 @@
             "description": "Include the per-dir/per-file tree (with content hashes). Default False = compact summary (project counts + freshness only); the full tree is ~10MB for a heavy indexer and the inventory tool never renders files."
           },
           {
+            "name": "lean",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "With detail=True, return only the fields an incremental diff compares (rel_path, kind, language, chunk_count, content_hash, size_bytes); indexed_at, collection and metadata come back empty. Servers that predate it ignore the flag and return the full tree.",
+              "default": false,
+              "title": "Lean"
+            },
+            "description": "With detail=True, return only the fields an incremental diff compares (rel_path, kind, language, chunk_count, content_hash, size_bytes); indexed_at, collection and metadata come back empty. Servers that predate it ignore the flag and return the full tree."
+          },
+          {
+            "name": "project_contains",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Compact summary only: render just the projects whose path contains this fragment (case-insensitive, backslash read as slash). users, hosts and totals still describe the whole inventory.",
+              "title": "Project Contains"
+            },
+            "description": "Compact summary only: render just the projects whose path contains this fragment (case-insensitive, backslash read as slash). users, hosts and totals still describe the whole inventory."
+          },
+          {
             "name": "X-Retrival-User-Id",
             "in": "header",
             "required": false,
@@ -3172,6 +3235,18 @@
               ],
               "title": "X-Retrival-User-Id"
             }
+          },
+          {
+            "name": "scope_notice",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Also claim and return the scope's undelivered analysis summary. Off by default: a client's own progress polling must not consume a message meant for a person.",
+              "default": false,
+              "title": "Scope Notice"
+            },
+            "description": "Also claim and return the scope's undelivered analysis summary. Off by default: a client's own progress polling must not consume a message meant for a person."
           }
         ],
         "responses": {
@@ -5616,6 +5691,679 @@
         }
       }
     },
+    "/api/schedules/kinds": {
+      "get": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "List schedulable job kinds",
+        "operationId": "list_kinds_api_schedules_kinds_get",
+        "parameters": [
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleKindResponse"
+                  },
+                  "title": "Response List Kinds Api Schedules Kinds Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules": {
+      "get": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "List schedules with live state",
+        "operationId": "list_schedules_api_schedules_get",
+        "parameters": [
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleResponse"
+                  },
+                  "title": "Response List Schedules Api Schedules Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Create a schedule",
+        "operationId": "create_schedule_api_schedules_post",
+        "parameters": [
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/{schedule_id}": {
+      "patch": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Edit a schedule",
+        "operationId": "patch_schedule_api_schedules__schedule_id__patch",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Schedule Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulePatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Delete a schedule",
+        "operationId": "delete_schedule_api_schedules__schedule_id__delete",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Schedule Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleDeleteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/{schedule_id}/run": {
+      "post": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Run a schedule now",
+        "operationId": "run_schedule_api_schedules__schedule_id__run_post",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Schedule Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleFireResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/{schedule_id}/ticks": {
+      "get": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Trigger history",
+        "operationId": "list_ticks_api_schedules__schedule_id__ticks_get",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Schedule Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Return ticks older than this tick id",
+              "title": "Before Id"
+            },
+            "description": "Return ticks older than this tick id"
+          },
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScheduleTickResponse"
+                  },
+                  "title": "Response List Ticks Api Schedules  Schedule Id  Ticks Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/schedules/preview": {
+      "post": {
+        "tags": [
+          "Schedules"
+        ],
+        "summary": "Preview a trigger's next fire times",
+        "operationId": "preview_trigger_api_schedules_preview_post",
+        "parameters": [
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulePreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulePreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Admin access required"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboard/overview": {
       "get": {
         "tags": [
@@ -6176,6 +6924,18 @@
               "title": "Page Size"
             },
             "description": "Results per page"
+          },
+          {
+            "name": "include_withdrawn",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include withdrawn arXiv papers (default: hidden)",
+              "default": false,
+              "title": "Include Withdrawn"
+            },
+            "description": "Include withdrawn arXiv papers (default: hidden)"
           }
         ],
         "responses": {
@@ -6749,6 +7509,172 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pipeline/download-batch": {
+      "post": {
+        "tags": [
+          "pipeline"
+        ],
+        "summary": "Start Download Batch",
+        "description": "One download-only ingest_pipeline task over the given slices (see DownloadBatchRequest).",
+        "operationId": "start_download_batch_api_pipeline_download_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DownloadBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pipeline/arxiv/runs/{task_id}/papers": {
+      "get": {
+        "tags": [
+          "pipeline"
+        ],
+        "summary": "Arxiv Run Papers",
+        "description": "The papers one arXiv daily-update run touched, by kind, from the files the run wrote\n(its frozen selection and its preindex report), titled from SQL.",
+        "operationId": "arxiv_run_papers_api_pipeline_arxiv_runs__task_id__papers_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "new",
+                "replaced",
+                "withdrawn",
+                "revived",
+                "html_missing",
+                "convert_rejected"
+              ],
+              "type": "string",
+              "description": "new: first indexed; replaced: a new version replaced the text; withdrawn / revived: the withdrawn flag turned on / off; html_missing: arXiv has no HTML yet; convert_rejected: the HTML has no usable article and is not retried",
+              "title": "Kind"
+            },
+            "description": "new: first indexed; replaced: a new version replaced the text; withdrawn / revived: the withdrawn flag turned on / off; html_missing: arXiv has no HTML yet; convert_rejected: the HTML has no usable article and is not retried"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArxivRunPapersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Internal authentication is required."
+          },
+          "403": {
+            "description": "Internal admin tier is required."
+          },
+          "404": {
+            "description": "The task is not an arXiv delta run."
           },
           "422": {
             "description": "Validation Error",
@@ -7705,7 +8631,7 @@
               }
             ],
             "title": "Execution Mode",
-            "description": "Where embed runs: local GPU, 'host' = the ssh embed host named by ssh_target (deploy/compute88/embed_hosts.json), or remote (kss)."
+            "description": "Where embed runs: local GPU (default), 'host' = the ssh embed host named by ssh_target (deploy/compute88/embed_hosts.json), or the retired kss 'remote' topology."
           },
           "ssh_target": {
             "anyOf": [
@@ -7765,6 +8691,122 @@
         ],
         "title": "ArxivIngestRequest",
         "description": "Start one ingest_pipeline task per arXiv batch (~2,000 papers) of the\ngiven months; they stream through the stages together."
+      },
+      "ArxivRunPaper": {
+        "properties": {
+          "paper_id": {
+            "type": "string",
+            "title": "Paper Id"
+          },
+          "arxiv_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arxiv Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "source_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Version"
+          },
+          "withdrawn": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withdrawn"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper_id"
+        ],
+        "title": "ArxivRunPaper"
+      },
+      "ArxivRunPapersResponse": {
+        "properties": {
+          "task_id": {
+            "type": "integer",
+            "title": "Task Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "new",
+              "replaced",
+              "withdrawn",
+              "revived",
+              "html_missing",
+              "convert_rejected"
+            ],
+            "title": "Kind"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Papers of this kind in the run"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts",
+            "description": "Papers per kind, for the tab labels"
+          },
+          "papers": {
+            "items": {
+              "$ref": "#/components/schemas/ArxivRunPaper"
+            },
+            "type": "array",
+            "title": "Papers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "kind",
+          "offset",
+          "limit",
+          "total",
+          "counts",
+          "papers"
+        ],
+        "title": "ArxivRunPapersResponse"
       },
       "BatchIndexResponse": {
         "properties": {
@@ -8446,6 +9488,18 @@
               }
             ],
             "title": "Finished At"
+          },
+          "scope_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Notice",
+            "description": "Server-decided, deliver-once message about this scope (e.g. duplicate code found after its last index). Present on exactly one response per result; clients show it verbatim above their output and keep no state."
           }
         },
         "type": "object",
@@ -8559,6 +9613,12 @@
             "maxItems": 100000,
             "title": "Removed Paths",
             "description": "Incremental only: exact repo-relative paths known to have been deleted. Filesystem watchers use this without enumerating a full manifest. Changed files in `files` take precedence over this list."
+          },
+          "removed_paths_complete": {
+            "type": "boolean",
+            "title": "Removed Paths Complete",
+            "description": "Incremental only: `removed_paths` lists EVERY file to delete, computed by the client against this scope's catalog inventory. The server then does not enumerate the project's paths in Qdrant to find removals; the delete-safety valve compares `manifest` with the catalog instead. Servers that predate the flag ignore it and reconcile `manifest` against Qdrant as before, so a client sends both.",
+            "default": false
           },
           "report": {
             "anyOf": [
@@ -8770,6 +9830,30 @@
             "title": "Scope Aliases",
             "description": "Legacy case-variant Windows scope spellings included for compatibility."
           },
+          "resolved_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Scope",
+            "description": "Set when the requested directory had no index of its own and the search ran in this indexed ancestor scope instead. Null when the requested scope itself was searched."
+          },
+          "resolved_path_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Path Prefix",
+            "description": "With resolved_scope: the requested directory relative to that ancestor. Only files below it were searched, and path_glob is relative to it."
+          },
           "scope_snapshot_state": {
             "type": "string",
             "enum": [
@@ -8811,6 +9895,18 @@
             ],
             "title": "Previous Completed Snapshot Available",
             "description": "During preparation, whether a previous completed snapshot is known to exist."
+          },
+          "scope_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Notice",
+            "description": "Server-decided, deliver-once message about this scope (e.g. duplicate code found after its last index). Present on exactly one response per result; clients show it verbatim above their output and keep no state."
           },
           "timings_ms": {
             "$ref": "#/components/schemas/CodeSearchTimingsMs"
@@ -9577,6 +10673,59 @@
         "type": "object",
         "title": "DocumentUpdateRequest",
         "description": "文档更新请求"
+      },
+      "DownloadBatchRequest": {
+        "properties": {
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Targets",
+            "description": "Manifest slices CONF:YEAR as in the manifest, e.g. [\"ECCV:2024\", \"IEEE S&P:2023\"]."
+          },
+          "min_interval_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 600.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Interval Seconds",
+            "description": "Seconds between two requests (default 3)."
+          },
+          "host_cooldown_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 3600.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Cooldown Seconds",
+            "description": "First cooldown of a refusing host, doubling per refusal (default 300)."
+          },
+          "collect": {
+            "type": "boolean",
+            "title": "Collect",
+            "description": "Collect first: slices with no manifest rows on this host are collected from their publishers into the manifest (backup first) before the download. Slices that already have rows are not re-collected.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "targets"
+        ],
+        "title": "DownloadBatchRequest",
+        "description": "Download the PDFs of several manifest slices as one ingest_pipeline task.\n\nOne serial queue that alternates download hosts (and venues), cools down a\nhost that refuses, and holds the shared ``net`` lock; ingest of each slice\nis a separate /ingest run later."
       },
       "EmbedRequest": {
         "properties": {
@@ -10407,8 +11556,8 @@
               "host"
             ],
             "title": "Execution Mode",
-            "description": "Where the GPU stages (extract/embed) run. 'remote' (default): KSS-style ssh + SMB + ship.sh — the original split topology. 'local': self-hosted, GPU work runs ON this box via local subprocesses (no ssh/SMB/ship.sh) — use when the orchestrator runs on the GPU machine itself (4090, W106). 'host' (arXiv only): embed on the ssh embed host named by ssh_target (deploy/compute88/embed_hosts.json). download/preindex/ingest run local in every mode.",
-            "default": "remote"
+            "description": "Where the GPU stages (extract/embed) run. 'local' (default): GPU work runs ON this box via local subprocesses (no ssh/SMB/ship.sh, W106). 'remote': retired KSS-style ssh + SMB + ship.sh topology, kept only for explicit reuse; its SMB tree no longer exists. 'host': embed (and, for a host with a 'marker' block, extract) on the ssh host named by ssh_target (deploy/compute88/embed_hosts.json). download/preindex/ingest run local in every mode.",
+            "default": "local"
           },
           "start_stage": {
             "anyOf": [
@@ -10467,6 +11616,19 @@
             ],
             "title": "Shard End",
             "description": "Required only when start_stage='ingest': final externally supplied vector shard number, exclusive. Must be greater than shard_start."
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options",
+            "description": "Per-run options handed to the stage context and stored in the task params, so a retry or restart resumes with the same values. Keys are defined by the venue's pipeline (arXiv: batch/delta options; the delta's source = 'volume' imports the bundles the GitHub Actions job left in the 115 volume options.volume (default /cfs-arxiv) and waits up to receive_deadline_hours (default 6) for a run to finish; Papers-Download: targets; conferences: download_from = 'push' to wait for the PDFs that the producing host pushes with scripts/sync/push_slice_bundle.py, or 'volume' to copy them from a 115 volume on this host's OpenList node (needs options.volume, e.g. /cfs-tier1; options.volume_prefix, default '<conference lower>/<year>'); extract_from = 'push' likewise for Markdown; receive_poll_seconds); other unknown keys are ignored."
           }
         },
         "type": "object",
@@ -10848,7 +12010,8 @@
               "queued",
               "running",
               "completed",
-              "failed"
+              "failed",
+              "cancelled"
             ],
             "title": "Status"
           },
@@ -10922,6 +12085,13 @@
               }
             ],
             "title": "Finished At"
+          },
+          "skipped_binary": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped Binary"
           }
         },
         "type": "object",
@@ -11023,6 +12193,13 @@
               }
             ],
             "title": "Client Job Id"
+          },
+          "client": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Client",
+            "default": "mcp"
           }
         },
         "type": "object",
@@ -11838,6 +13015,42 @@
             ],
             "title": "Notice",
             "description": "Set only on an empty result that needs explaining — e.g. a path_glob that matched 0 docs while the scope DOES have docs (tells the user the glob is scope-relative and their depth is wrong)."
+          },
+          "resolved_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Scope",
+            "description": "Set when the requested directory had no index of its own and the search ran in this indexed ancestor scope instead. Null when the requested scope itself was searched."
+          },
+          "resolved_path_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Path Prefix",
+            "description": "With resolved_scope: the requested directory relative to that ancestor. Only docs below it were searched (and path_glob is relative to it); the ancestor's memory entries and .conversations/ segments still take part."
+          },
+          "scope_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Notice",
+            "description": "Server-decided, deliver-once message about this scope (e.g. duplicate code found after its last index). Present on exactly one response per result; clients show it verbatim above their output and keep no state."
           }
         },
         "type": "object",
@@ -14077,6 +15290,725 @@
         "title": "RetrievalMethod",
         "description": "检索方法"
       },
+      "ScheduleCreateRequest": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "trigger": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trigger"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "catchup": {
+            "type": "string",
+            "title": "Catchup",
+            "default": "latest"
+          },
+          "misfire_grace_s": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Misfire Grace S"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "kind",
+          "title",
+          "trigger"
+        ],
+        "title": "ScheduleCreateRequest"
+      },
+      "ScheduleDeleteResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "ScheduleDeleteResponse"
+      },
+      "ScheduleFireResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "enqueued | skipped | noop"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "ScheduleFireResponse"
+      },
+      "ScheduleKindDefault": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "trigger": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trigger"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "catchup": {
+            "type": "string",
+            "title": "Catchup"
+          },
+          "misfire_grace_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Misfire Grace S"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "title",
+          "trigger",
+          "params",
+          "catchup",
+          "enabled"
+        ],
+        "title": "ScheduleKindDefault"
+      },
+      "ScheduleKindResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "params_schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params Schema",
+            "description": "JSON Schema of the kind's parameters"
+          },
+          "defaults": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleKindDefault"
+            },
+            "type": "array",
+            "title": "Defaults"
+          },
+          "retry": {
+            "$ref": "#/components/schemas/ScheduleRetryPolicy"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "title",
+          "params_schema",
+          "defaults",
+          "retry"
+        ],
+        "title": "ScheduleKindResponse"
+      },
+      "ScheduleMetric": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ScheduleMetric",
+        "description": "One labelled gauge on a schedule card."
+      },
+      "SchedulePatchRequest": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "trigger": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "catchup": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catchup"
+          },
+          "misfire_grace_s": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Misfire Grace S"
+          }
+        },
+        "type": "object",
+        "title": "SchedulePatchRequest",
+        "description": "Only the fields present in the body change."
+      },
+      "SchedulePreviewRequest": {
+        "properties": {
+          "trigger": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trigger"
+          },
+          "count": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "default": 5
+          }
+        },
+        "type": "object",
+        "required": [
+          "trigger"
+        ],
+        "title": "SchedulePreviewRequest"
+      },
+      "SchedulePreviewResponse": {
+        "properties": {
+          "next_fire_times": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Next Fire Times",
+            "description": "ISO-8601 with the trigger's UTC offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "next_fire_times"
+        ],
+        "title": "SchedulePreviewResponse"
+      },
+      "ScheduleResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "system": {
+            "type": "boolean",
+            "title": "System"
+          },
+          "trigger_json": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Trigger Json",
+            "description": "daily | weekly | interval, with timezone"
+          },
+          "params_json": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params Json"
+          },
+          "catchup": {
+            "type": "string",
+            "title": "Catchup",
+            "description": "latest | skip"
+          },
+          "misfire_grace_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Misfire Grace S",
+            "description": "null = the kind's default"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "next_run_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run Time",
+            "description": "From the engine; null while paused or engine idle"
+          },
+          "next_fire_times": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Next Fire Times",
+            "description": "Next 5 slots, ISO-8601 with offset"
+          },
+          "last_tick": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleTickResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running_task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleRunningTask"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleMetric"
+            },
+            "type": "array",
+            "title": "Metrics"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "kind",
+          "title",
+          "enabled",
+          "system",
+          "trigger_json",
+          "params_json",
+          "catchup"
+        ],
+        "title": "ScheduleResponse"
+      },
+      "ScheduleRetryPolicy": {
+        "properties": {
+          "max_retries": {
+            "type": "integer",
+            "title": "Max Retries"
+          },
+          "base_delay_s": {
+            "type": "integer",
+            "title": "Base Delay S"
+          },
+          "backoff": {
+            "type": "number",
+            "title": "Backoff"
+          },
+          "max_delay_s": {
+            "type": "integer",
+            "title": "Max Delay S"
+          }
+        },
+        "type": "object",
+        "required": [
+          "max_retries",
+          "base_delay_s",
+          "backoff",
+          "max_delay_s"
+        ],
+        "title": "ScheduleRetryPolicy"
+      },
+      "ScheduleRunningTask": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "task_type": {
+            "type": "string",
+            "title": "Task Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "progress": {
+            "type": "integer",
+            "title": "Progress",
+            "default": 0
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At",
+            "description": "RFC 3339 with offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "task_type",
+          "status"
+        ],
+        "title": "ScheduleRunningTask"
+      },
+      "ScheduleTaskBrief": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "result_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Json"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "ScheduleTaskBrief",
+        "description": "The Task a tick started, as of now."
+      },
+      "ScheduleTickResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "schedule_id": {
+            "type": "integer",
+            "title": "Schedule Id"
+          },
+          "scheduled_for": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled For",
+            "description": "The slot the trigger was due, UTC ISO-8601"
+          },
+          "fired_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fired At"
+          },
+          "trigger": {
+            "type": "string",
+            "title": "Trigger",
+            "description": "cron | manual | retry"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "enqueued | skipped | missed | error"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "attempt": {
+            "type": "integer",
+            "title": "Attempt",
+            "default": 0
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScheduleTaskBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "schedule_id",
+          "trigger",
+          "status"
+        ],
+        "title": "ScheduleTickResponse"
+      },
       "ScopeConflict": {
         "properties": {
           "project": {
@@ -14220,6 +16152,12 @@
             "type": "boolean",
             "title": "Include Preprints",
             "description": "是否混入 arXiv 预印本（venue_tier=preprint）。默认不混入；只检索预印本请用 /api/arxiv/search。已按 venue_tier / paper_ids / doc_ids / venue=arXiv 限定范围的请求不受此项影响。",
+            "default": false
+          },
+          "include_withdrawn": {
+            "type": "boolean",
+            "title": "Include Withdrawn",
+            "description": "是否包含已撤稿的 arXiv 预印本。默认排除；按 paper_ids / doc_ids 限定的请求不受此项影响，仍能找到撤稿论文。命中的 metadata.withdrawn 标记撤稿。",
             "default": false
           },
           "title_only": {

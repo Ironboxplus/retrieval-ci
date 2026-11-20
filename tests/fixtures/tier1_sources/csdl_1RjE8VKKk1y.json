@@ -1,0 +1,76 @@
+{
+ "data": {
+  "proceeding": {
+   "id": "1RjE8VKKk1y",
+   "acronym": "sp",
+   "title": "2024 IEEE Symposium on Security and Privacy (SP)",
+   "year": "2024"
+  },
+  "articlesByProceeding": {
+   "totalResults": 4,
+   "articleResults": [
+    {
+     "id": "1WPcVnDQlLq",
+     "doi": "10.1109/SP54263.2024.00186",
+     "idPrefix": "sp",
+     "fno": "313000z001",
+     "isOpenAccess": true,
+     "pages": "1-1",
+     "sectionTitle": null,
+     "title": "Title Page i",
+     "year": "2024",
+     "authors": []
+    },
+    {
+     "id": "1WPcVoJoSIM",
+     "doi": "10.1109/SP54263.2024.00187",
+     "idPrefix": "sp",
+     "fno": "313000z003",
+     "isOpenAccess": true,
+     "pages": "3-3",
+     "sectionTitle": null,
+     "title": "Title Page iii",
+     "year": "2024",
+     "authors": []
+    },
+    {
+     "id": "1ZZvkD6GwZa",
+     "doi": "10.1109/SP54263.2024.00188",
+     "idPrefix": "sp",
+     "fno": "313000z005",
+     "isOpenAccess": true,
+     "pages": "5-39",
+     "sectionTitle": null,
+     "title": "Table of Contents",
+     "year": "2024",
+     "authors": []
+    },
+    {
+     "id": "1RjE9FWOWsw",
+     "doi": "10.1109/SP54263.2024.00001",
+     "idPrefix": "sp",
+     "fno": "313000a001",
+     "isOpenAccess": true,
+     "pages": "4678-4695",
+     "sectionTitle": null,
+     "title": "Side-Channel-Assisted Reverse-Engineering of Encrypted DNN Hardware Accelerator IP and Attack Surface Exploration",
+     "year": "2024",
+     "authors": [
+      {
+       "fullName": "Cheng Gongye"
+      },
+      {
+       "fullName": "Yukui Luo"
+      },
+      {
+       "fullName": "Xiaolin Xu"
+      },
+      {
+       "fullName": "Yunsi Fei"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

@@ -16,6 +16,15 @@ def bundle_module():
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    # The release list names private notes; the public CI snapshot leaves them out. Skip
+    # (visibly) only when exactly those are missing — any other missing file still fails.
+    private_notes = {"env.md", "overview.md", "INDEX.md", "plan.md", "journal.md"}
+    missing = {line.strip() for line in module.FILE_LIST_PATH.read_text(encoding="utf-8").splitlines()
+               if line.strip() and not line.strip().startswith("#")
+               and not (module.PROJECT_ROOT / line.strip()).is_file()}
+    if missing and missing <= private_notes:
+        pytest.skip("private doc, excluded from the public CI snapshot "
+                    "(ci_snapshot.PUBLIC_EXCLUDE_PATHSPECS)")
     return module
 
 

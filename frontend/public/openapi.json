@@ -404,6 +404,18 @@
               "title": "Page Size"
             },
             "description": "Results per page"
+          },
+          {
+            "name": "include_withdrawn",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include withdrawn arXiv papers (default: hidden)",
+              "default": false,
+              "title": "Include Withdrawn"
+            },
+            "description": "Include withdrawn arXiv papers (default: hidden)"
           }
         ],
         "responses": {
@@ -1690,6 +1702,73 @@
         ],
         "title": "AggregatedResult",
         "description": "按文档聚合的结果"
+      },
+      "CodeSearchTimingsMs": {
+        "properties": {
+          "embed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed",
+            "description": "Query embedding."
+          },
+          "retrieve": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieve",
+            "description": "Qdrant vector search."
+          },
+          "fuse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fuse",
+            "description": "RRF fusion across legs. Null for a single-leg (non-federated) search."
+          },
+          "rerank": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank",
+            "description": "Cross-encoder rescoring."
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total",
+            "description": "Whole request, wall time."
+          }
+        },
+        "type": "object",
+        "title": "CodeSearchTimingsMs",
+        "description": "Per-phase wall time in milliseconds (F2-b). A phase this request never ran\n(e.g. ``rerank`` when ``rerank=false``, ``fuse`` on a single-leg search) is null,\nnever 0 — 0 would misrepresent \"ran instantly\" as \"did not run\"."
       },
       "FederatedCodeHit": {
         "properties": {
@@ -3393,6 +3472,18 @@
             ],
             "title": "Venue Tier"
           },
+          "include_preprints": {
+            "type": "boolean",
+            "title": "Include Preprints",
+            "description": "是否混入 arXiv 预印本（venue_tier=preprint）。默认不混入；只检索预印本请用 /api/arxiv/search。已按 venue_tier / paper_ids / doc_ids / venue=arXiv 限定范围的请求不受此项影响。",
+            "default": false
+          },
+          "include_withdrawn": {
+            "type": "boolean",
+            "title": "Include Withdrawn",
+            "description": "是否包含已撤稿的 arXiv 预印本。默认排除；按 paper_ids / doc_ids 限定的请求不受此项影响，仍能找到撤稿论文。命中的 metadata.withdrawn 标记撤稿。",
+            "default": false
+          },
           "title_only": {
             "type": "boolean",
             "title": "Title Only",
@@ -3418,7 +3509,22 @@
               }
             ],
             "title": "Paper Ids",
-            "description": "限定检索范围到指定的一个或多个论文（paper_id）。只在这些论文的 chunk 上检索，其余论文一律不参与。用于「在指定论文内检索」——配合 dedup_by_paper=False + 较大的 top_k，可拿到单篇论文全部命中片段及其分数，看清论文不同部分与查询的匹配程度。"
+            "description": "限定检索范围到指定的一个或多个论文（paper_id）。只在这些论文的 chunk 上检索，其余论文一律不参与。用于「在指定论文内检索」——配合 dedup_by_paper=False + 较大的 top_k，可拿到单篇论文全部命中片段及其分数，看清论文不同部分与查询的匹配程度。只对 source_type=paper/review 有效：上传文档和网页没有 paper_id（见 core/storage/papers_payload.py 的 profile 表），要用 doc_ids。"
+          },
+          "doc_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Ids",
+            "description": "限定检索范围到指定的一个或多个文档（documents.id）。上传的书/网页没有 paper_id，doc_id 是它们唯一的主键，所以「在这本书里检索」只能走这里。对论文同样可用。值一律按字符串下推——Qdrant 的 doc_id KEYWORD 索引只收字符串，整数值的历史点位不在索引里（papers_payload.py D2）。"
           }
         },
         "type": "object",
@@ -3656,73 +3762,6 @@
           "avg_score"
         ],
         "title": "YearAggregation"
-      },
-      "CodeSearchTimingsMs": {
-        "properties": {
-          "embed": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Embed",
-            "description": "Query embedding."
-          },
-          "retrieve": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Retrieve",
-            "description": "Qdrant vector search."
-          },
-          "fuse": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fuse",
-            "description": "RRF fusion across legs. Null for a single-leg (non-federated) search."
-          },
-          "rerank": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rerank",
-            "description": "Cross-encoder rescoring."
-          },
-          "total": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total",
-            "description": "Whole request, wall time."
-          }
-        },
-        "type": "object",
-        "title": "CodeSearchTimingsMs",
-        "description": "Per-phase wall time in milliseconds (F2-b). A phase this request never ran\n(e.g. ``rerank`` when ``rerank=false``, ``fuse`` on a single-leg search) is null,\nnever 0 — 0 would misrepresent \"ran instantly\" as \"did not run\"."
       }
     },
     "securitySchemes": {

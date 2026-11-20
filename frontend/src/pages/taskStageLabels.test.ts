@@ -49,6 +49,7 @@ describe('nodeNameLabel', () => {
     expect(nodeNameLabel('Download SIGIR 2026 PDFs')).toBe('下载 SIGIR 2026 PDF');
     expect(nodeNameLabel('Extract SIGIR 2026 (KSS marker)')).toBe('解析 SIGIR 2026（KSS 标记）');
     expect(nodeNameLabel('Extract SIGIR 2026 (local marker)')).toBe('解析 SIGIR 2026（本地标记）');
+    expect(nodeNameLabel('Extract KDD 2026 (local pvl_worker)')).toBe('解析 KDD 2026（本地 pvl_worker）');
     expect(nodeNameLabel('Preindex SIGIR 2026 → SQL')).toBe('预索引 SIGIR 2026 → SQL');
     expect(nodeNameLabel('Embed SIGIR 2026 (KSS BGE-M3)')).toBe('向量化 SIGIR 2026（KSS BGE-M3）');
     expect(nodeNameLabel('Embed SIGIR 2026 (local BGE-M3)')).toBe('向量化 SIGIR 2026（本地 BGE-M3）');
@@ -102,6 +103,8 @@ describe('workflowNodeLabel', () => {
   it('resolves the fixed short label from the title when subtask_key is null (real .88 data shape)', () => {
     expect(workflowNodeLabel(null, 'ingest_pipeline', 'Download SIGIR 2026 PDFs')).toBe('下载');
     expect(workflowNodeLabel(null, 'ingest_pipeline', 'Extract SIGIR 2026 (local marker)')).toBe('转换');
+    expect(workflowNodeLabel(null, 'ingest_pipeline', 'Extract KDD 2026 (local pvl_worker)')).toBe('转换');
+    expect(workflowNodeLabel('extract', 'ingest_pipeline', 'Extract KDD 2026 (local pvl_worker)')).toBe('转换');
     expect(workflowNodeLabel(null, 'ingest_pipeline', 'Preindex SIGIR 2026 → SQL')).toBe('预索引');
     expect(workflowNodeLabel(null, 'ingest_pipeline', 'Embed SIGIR 2026 (local BGE-M3)')).toBe('向量化');
     expect(workflowNodeLabel(null, 'ingest_pipeline', 'Ingest SIGIR 2026 → Qdrant')).toBe('入库');

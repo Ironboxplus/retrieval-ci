@@ -35,6 +35,31 @@ PAPER_PROFILE_KEYS: FrozenSet[str] = frozenset({
     "venue", "year", "venue_tier", "content",
 })
 
+# Keys a paper/review point MAY carry beyond the 8 above. Unlike those, an
+# optional key is absent unless it says something: `withdrawn` is written only as
+# True (an arXiv paper whose newest version is a withdrawal). A False/None value
+# is dropped, never stored, so the ~13.5M existing points need no migration and
+# "not withdrawn" stays the absence of the key. Qdrant matches an absent key as
+# not-equal, so `must_not withdrawn=true` keeps points without it; see
+# lib/segment/src/index/query_estimator.rs::invert_estimation. A BOOL payload
+# index covers the key (scripts/recreate_qdrant_collection.py).
+# `preprint_full_text` follows the same rule: True only when the indexed text is
+# an arXiv/open-repository copy rather than the publisher's version (SQL
+# papers.full_text_source says which); absent means publisher or unknown.
+OPTIONAL_PAPER_KEYS: FrozenSet[str] = frozenset({"withdrawn", "preprint_full_text"})
+_OPTIONAL_KEYS_BY_SOURCE_TYPE: Dict[str, FrozenSet[str]] = {
+    "paper": OPTIONAL_PAPER_KEYS,
+    "review": OPTIONAL_PAPER_KEYS,
+}
+
+# Keys EVERY profile may carry, kept only as a non-empty string. `embed_fp` is the
+# fingerprint of the embedding profile that produced the point's vectors
+# (core.indexing.embedding_profile); a point without it predates the profile and
+# is the one a re-embed selects. A KEYWORD payload index covers it
+# (scripts/recreate_qdrant_collection.py); it is not in OPTIONAL_PAPER_KEYS because
+# those are BOOL-indexed paper flags.
+COMMON_OPTIONAL_STRING_KEYS: FrozenSet[str] = frozenset({"embed_fp"})
+
 # Exact production key set for `upload` (plan.md 1.1, sampled 2026-09-01).
 # No paper_id — an upload is not a paper. `data_source` IS legitimate here
 # (real business provenance: system vs. user-uploaded).
@@ -99,11 +124,20 @@ def project_papers_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
             f"{sorted(PROFILE_BY_SOURCE_TYPE)}"
         )
 
+    optional = _OPTIONAL_KEYS_BY_SOURCE_TYPE.get(source_type, frozenset())
     out: Dict[str, Any] = {}
     dropped: list[str] = []
     for key, value in raw.items():
         if key == "doc_id":
             continue  # handled below — needs str normalization, not a raw copy
+        if key in COMMON_OPTIONAL_STRING_KEYS:
+            if isinstance(value, str) and value:
+                out[key] = value
+            continue
+        if key in optional:
+            if value is True:
+                out[key] = True
+            continue
         if key not in profile:
             dropped.append(key)
             continue

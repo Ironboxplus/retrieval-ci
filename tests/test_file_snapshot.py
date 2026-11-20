@@ -140,3 +140,27 @@ def test_standalone_mcp_snapshot_envelope_does_not_cross_delete_other_patterns(t
     assert unchanged == {"notes.md"}
     assert replace_safe is True
     assert reason is None
+
+
+def test_journal_known_in_envelope_excludes_dot_directory_rows():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    plugin = Path(__file__).resolve().parents[1] / "mcp_plugin" / "retrieval_mcp.py"
+    spec = importlib.util.spec_from_file_location("snapshot_plugin_dot_dirs", plugin)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    known = {
+        ".conversations/claude/2026-11-04_x/001.md": {"content_hash": "a" * 64},
+        "docs/.hidden/x.md": {"content_hash": "b" * 64},
+        ".conversations\\codex\\y\\001.md": {"content_hash": "c" * 64},
+        "notes/a.md": {"content_hash": "d" * 64},
+        "notes/.dotfile.md": {"content_hash": "e" * 64},  # dot FILE, normal directory
+    }
+
+    for max_depth in (None, 8):
+        envelope = module._journal_known_in_envelope(known, ["*.md"], max_depth)
+        assert set(envelope) == {"notes/a.md", "notes/.dotfile.md"}

@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from conftest import git_init_repo
+from tests.conftest import git_init_repo
 
 # Code KB chunking needs chonkie[code] (bundles the tree-sitter grammar pack); skip
 # cleanly where it's absent (it's a required dep in requirements.txt, optional on CI).

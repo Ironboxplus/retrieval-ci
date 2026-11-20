@@ -18,7 +18,14 @@ Lifecycle per stage:
   7. complete    — mark subtask done; release the lock; advance.
 
 Any halt fails the parent task and stops the pipeline. The lock is released
-on every exit path (try/finally inside `locks.hold`). Resumability is built on
+on every exit path (try/finally inside `locks.hold`).
+
+Every task-status write is a compare-and-set (`TaskStore.compare_and_set_status`),
+never a read-then-write: the cancel path (PipelineRunner.cancel, the Tasks API)
+can commit `cancelled` at any moment, and a plain write here would turn it back
+into `running`/`completed`. The orchestrator only moves any-but-cancelled -> running
+and running -> terminal; losing that race means somebody else already decided the
+final state, and it is reported as-is. Resumability is built on
 DB state + artifact probes, so a backend restart (W61) re-attaches cleanly: a
 fresh orchestrator over the same task skips completed stages and resumes — the
 in-memory lock is rebuilt fresh, and re-acquired naturally on the resumed run.
@@ -26,13 +33,23 @@ in-memory lock is rebuilt fresh, and re-acquired naturally on the resumed run.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, List, Optional
 
 from loguru import logger
 
-from app.services.pipeline.spec import Progress, StageSpec
+from app.services.pipeline.spec import GateResult, Progress, StageSpec
 from app.services.pipeline.stage_lock import StageLockSet
 from app.services.pipeline.store import TaskStore
+
+# A preflight that fails for a condition that clears by itself (GateResult.transient: no GPU has the
+# memory free because another process holds it) is a wait, not a failure. The stage keeps its place
+# at the head of the resource queue and asks again (pause doubling from the initial to the maximum)
+# while the tasks behind it wait, still in grant order; only after the deadline does it fail, with
+# the preflight's own message. 2026-11-16: one held card failed 18 queued ingest tasks in a second.
+PREFLIGHT_WAIT_INITIAL_S = 60.0
+PREFLIGHT_WAIT_MAX_S = 600.0
+PREFLIGHT_WAIT_DEADLINE_S = 6 * 3600.0
 
 
 class _Poller:
@@ -85,6 +102,11 @@ class PipelineOrchestrator:
         self.ctx = ctx
         self.store = store
         self.abort = abort or threading.Event()
+        # Stage callbacks reach the Event through their ctx (run_local(abort=c.abort)),
+        # so the ctx must carry the SAME Event the runner sets on cancel. ctx is
+        # opaque to the orchestrator; contexts without an `abort` slot opt out.
+        if hasattr(ctx, "abort"):
+            ctx.abort = self.abort
         # When None, every stage runs free-for-all (no inter-task mutex). Tests
         # that don't care about concurrency get this default; production passes
         # a shared StageLockSet via PipelineRunner so concurrent ingest_pipeline
@@ -102,12 +124,16 @@ class PipelineOrchestrator:
         if parent_probe_spec is not None and total != 1:
             raise ValueError("parent_progress_from_probe requires a single-stage pipeline")
         # A generic Tasks cancellation can be committed by another backend
-        # process before this orchestrator gets CPU.  Never resurrect it.
-        current = store.get_task(self.task_id)
-        if current is not None and current.get("status") == "cancelled":
+        # process before this orchestrator gets CPU.  Never resurrect it: the
+        # claim is one conditional UPDATE, so a cancel landing between a read and
+        # a write cannot be lost.
+        # Any status but `cancelled` may be (re)driven: pending is a fresh start,
+        # running a resume, failed/timeout/completed a re-run of the same task.
+        if not store.compare_and_set_status(
+            self.task_id, expect={"pending", "running", "completed", "failed", "timeout"}, new="running",
+        ):
             store.emit_event(self.task_id, None, "pipeline already cancelled before start", level="warning", event_type="pipeline.cancelled")
             return "cancelled"
-        store.set_task_status(self.task_id, "running")
         if parent_probe_spec is None:
             store.set_task_progress(self.task_id, 0, total)
         else:
@@ -122,7 +148,7 @@ class PipelineOrchestrator:
         completed = 0
         for spec in self.specs:
             if self.abort.is_set():
-                store.set_task_status(self.task_id, "cancelled")
+                self._finish("cancelled")
                 store.emit_event(self.task_id, None, "pipeline cancelled", level="warning", event_type="pipeline.cancelled")
                 logger.warning(f"pipeline.cancelled task={self.task_id}")
                 return "cancelled"
@@ -135,14 +161,16 @@ class PipelineOrchestrator:
                 continue
 
             if outcome == "cancelled":
-                store.set_task_status(self.task_id, "cancelled")
+                self._finish("cancelled")
                 store.emit_event(self.task_id, None, "pipeline cancelled", level="warning", event_type="pipeline.cancelled")
                 logger.warning(f"pipeline.cancelled task={self.task_id} stage={spec.key}")
                 return "cancelled"
 
             # halted
             reason = f"stage '{spec.key}' failed"
-            store.set_task_status(self.task_id, "failed", error=reason)
+            final = self._finish("failed", error=reason)
+            if final != "failed":
+                return final
             store.emit_event(self.task_id, None, reason, level="error", event_type="pipeline.failed")
             logger.error(f"pipeline.failed task={self.task_id} stage={spec.key}")
             return "failed"
@@ -151,11 +179,13 @@ class PipelineOrchestrator:
         # user-visible terminal choice, never something a late completion may
         # overwrite.
         if self.abort.is_set():
-            store.set_task_status(self.task_id, "cancelled")
+            self._finish("cancelled")
             store.emit_event(self.task_id, None, "pipeline cancelled", level="warning", event_type="pipeline.cancelled")
             logger.warning(f"pipeline.cancelled task={self.task_id} after final stage")
             return "cancelled"
-        store.set_task_status(self.task_id, "completed")
+        final = self._finish("completed")
+        if final != "completed":
+            return final
         if parent_probe_spec is None:
             store.set_task_progress(self.task_id, total, total)
         else:
@@ -164,6 +194,18 @@ class PipelineOrchestrator:
         store.emit_event(self.task_id, None, "pipeline completed", event_type="pipeline.completed")
         logger.info(f"pipeline.completed task={self.task_id}")
         return "completed"
+
+    def _finish(self, status: str, *, error: Optional[str] = None) -> str:
+        """Write the task's terminal status if it is still `running`.
+
+        Returns the status that is now in effect: `status` when this call won,
+        otherwise whatever the winner (normally the cancel path) wrote.
+        """
+        if self.store.compare_and_set_status(self.task_id, expect={"running"}, new=status, error=error):
+            return status
+        actual = (self.store.get_task(self.task_id) or {}).get("status") or status
+        logger.info(f"pipeline.finish.lost task={self.task_id} wanted={status} actual={actual}")
+        return actual
 
     def _run_stage(self, spec: StageSpec) -> str:
         """Run one stage. Returns 'completed' | 'skipped' | 'failed'."""
@@ -199,17 +241,32 @@ class PipelineOrchestrator:
         # downstream stage of task A can run in parallel with an upstream stage
         # of task B (different keys), but two tasks at the SAME stage queue up.
         # Empty resource_key = no serialization (legacy / tests).
+        #
+        # Grant order is (resumed first, then oldest task): a stage resuming work
+        # that may still be running on the resource (W78: a surviving remote
+        # worker) goes ahead of everything, then the lowest task id, so a task's
+        # embed is never starved by younger tasks' extracts.
+        #
+        # Resume guard: if the subtask was previously started but never
+        # completed, a remote worker (marker / embed tmux) is likely still
+        # alive — its own resource use will then make preflight fail (it
+        # would refuse the GPUs WE are already running on). Detect this and
+        # skip preflight, letting run() re-attach via probe poll. See W67.
+        is_resume_attempt = bool(sub and sub.get("started_at"))
+        priority = (0 if is_resume_attempt else 1, self.task_id)
         store.emit_event(
             self.task_id, key,
             f"{spec.title}: queued for resource '{spec.resource_key}'"
             if spec.resource_key else f"{spec.title}: queued",
             event_type="stage.queued",
         )
-        with self.locks.hold(spec.resource_key, self.abort, owner=self.task_id) as acquired:
+        with self.locks.hold(
+            spec.resource_key, self.abort, owner=self.task_id, priority=priority,
+        ) as acquired:
             if not acquired:
                 # Abort raised while waiting → caller cancelled; halt cleanly.
                 store.cancel_subtask(self.task_id, key, "cancelled while waiting for resource")
-                store.set_task_status(self.task_id, "cancelled")
+                self._finish("cancelled")
                 store.emit_event(
                     self.task_id, key,
                     "cancelled while waiting for resource",
@@ -226,17 +283,21 @@ class PipelineOrchestrator:
 
             # 4. preflight safety check (before doing any work, INSIDE the lock —
             # otherwise we'd race against a peer pipeline grabbing the resource
-            # between our preflight and our run).
-            #
-            # Resume guard: if the subtask was previously started but never
-            # completed, a remote worker (marker / embed tmux) is likely still
-            # alive — its own resource use will then make preflight fail (it
-            # would refuse the GPUs WE are already running on). Detect this and
-            # skip preflight, letting run() re-attach via probe poll. See W67.
-            sub_now = store.get_subtask(self.task_id, key) or {}
-            is_resume_attempt = bool(sub_now.get("started_at"))
+            # between our preflight and our run). Skipped on a resume attempt
+            # (see the resume guard above).
             if spec.preflight is not None and not is_resume_attempt:
                 g = spec.preflight(self.ctx)
+                if not g.ok and g.transient:
+                    g, cancelled = self._wait_out_transient_preflight(spec, g)
+                    if cancelled:
+                        store.cancel_subtask(self.task_id, key, "cancelled while waiting for resource")
+                        self._finish("cancelled")
+                        store.emit_event(
+                            self.task_id, key, "cancelled while waiting for resource",
+                            level="warning", event_type="stage.cancelled",
+                        )
+                        logger.warning(f"stage.cancelled.queued task={self.task_id} stage={key}")
+                        return "cancelled"
                 if not g.ok:
                     store.fail_subtask(self.task_id, key, f"preflight: {g.reason}")
                     store.emit_event(self.task_id, key, f"preflight failed: {g.reason}", level="error", event_type="stage.preflight.failed")
@@ -297,6 +358,7 @@ class PipelineOrchestrator:
                 store.set_task_progress(self.task_id, pr2.done, pr2.total)
 
             # 6. acceptance gate (after run)
+            note = ""
             if spec.gate is not None:
                 g = spec.gate(self.ctx)
                 if not g.ok:
@@ -304,12 +366,39 @@ class PipelineOrchestrator:
                     store.emit_event(self.task_id, key, f"gate failed: {g.reason}", level="error", event_type="stage.gate.failed")
                     logger.error(f"stage.gate.failed task={self.task_id} stage={key}: {g.reason}")
                     return "failed"
+                note = g.reason  # a gate that passes may still say what it let through
 
             # 7. done
-            store.complete_subtask(self.task_id, key, message="completed")
-            store.emit_event(self.task_id, key, f"{spec.title}: completed", event_type="stage.completed")
+            store.complete_subtask(self.task_id, key, message=f"completed: {note}" if note else "completed")
+            store.emit_event(self.task_id, key, f"{spec.title}: completed" + (f" ({note})" if note else ""), event_type="stage.completed")
             logger.info(f"stage.done task={self.task_id} stage={key}")
             return "completed"
+
+    def _wait_out_transient_preflight(self, spec: StageSpec, gate: GateResult) -> tuple[GateResult, bool]:
+        """Ask a preflight again, while the stage holds its resource, as long as it fails with a
+        transient condition (``GateResult.transient``): the tasks queued behind this one could not
+        pass the same check, so they wait in grant order instead of failing one after another.
+        Returns (the last verdict, whether the pipeline was cancelled while waiting). After
+        ``PREFLIGHT_WAIT_DEADLINE_S`` the last verdict stands and the stage fails with its message."""
+        started = time.monotonic()
+        delay = PREFLIGHT_WAIT_INITIAL_S
+        while not gate.ok and gate.transient:
+            remaining = PREFLIGHT_WAIT_DEADLINE_S - (time.monotonic() - started)
+            if remaining <= 0:
+                break
+            pause = min(delay, remaining)
+            self.store.emit_event(
+                self.task_id, spec.key,
+                f"{spec.title}: waiting, asking again in {pause:.0f}s: {gate.reason}",
+                level="warning", event_type="stage.preflight.waiting",
+            )
+            logger.warning(f"stage.preflight.waiting task={self.task_id} stage={spec.key} "
+                           f"retry_in={pause:.0f}s: {gate.reason}")
+            if self.abort.wait(pause):
+                return gate, True
+            delay = min(delay * 2, PREFLIGHT_WAIT_MAX_S)
+            gate = spec.preflight(self.ctx)
+        return gate, False
 
     def _safe_probe(self, spec: StageSpec) -> Progress:
         try:

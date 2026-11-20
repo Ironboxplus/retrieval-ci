@@ -168,6 +168,13 @@ describe('sortStacksForColumn', () => {
     expect(sortStacksForColumn('running', stacks).map((s) => s.latest.id)).toEqual([3, 2, 1]);
   });
 
+  it('compares timestamps as instants, not as text', () => {
+    // 10:00+08:00 is 02:00Z: earlier than 05:00Z although it sorts later as a string.
+    const stacks = [stack(1, '2026-09-25T10:00:00+08:00'), stack(2, '2026-09-25T05:00:00Z')];
+    expect(sortStacksForColumn('completed', stacks).map((s) => s.latest.id)).toEqual([2, 1]);
+    expect(sortStacksForColumn('running', stacks).map((s) => s.latest.id)).toEqual([2, 1]);
+  });
+
   it('keeps the other columns newest-created first', () => {
     const stacks = [stack(1, '2026-09-25T01:00:00', '2026-09-25T23:00:00'), stack(2, '2026-09-25T02:00:00')];
     expect(sortStacksForColumn('completed', stacks).map((s) => s.latest.id)).toEqual([2, 1]);

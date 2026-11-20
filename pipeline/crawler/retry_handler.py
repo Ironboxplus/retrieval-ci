@@ -6,8 +6,7 @@ import random
 import time
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Optional, Callable, List, Set, Any, TypeVar, Awaitable
-from functools import wraps
+from typing import Optional, Callable, List, Set, Any, Awaitable
 import logging
 
 logger = logging.getLogger(__name__)
@@ -293,103 +292,6 @@ class RetryHandler:
                 # 等待延迟
                 await asyncio.sleep(delay)
 
-    def sync_execute_with_retry(
-        self,
-        func: Callable[[], Any],
-        cancelled_check: Optional[Callable[[], bool]] = None
-    ) -> Any:
-        """
-        同步版本的重试执行
-
-        Args:
-            func: 要执行的同步函数
-            cancelled_check: 检查是否取消的函数
-
-        Returns:
-            函数执行结果
-        """
-        state = RetryState()
-
-        while True:
-            state.attempt += 1
-
-            if cancelled_check and cancelled_check():
-                raise RuntimeError("Operation was cancelled")
-
-            try:
-                return func()
-
-            except Exception as e:
-                state.errors.append(e)
-                status_code = getattr(e, 'status_code', None)
-                retry_after = getattr(e, 'retry_after', None)
-
-                if not self.should_retry(e, state.attempt, status_code):
-                    raise
-
-                delay = self.calculate_delay(state.attempt, retry_after)
-                state.total_delay += delay
-
-                logger.info(
-                    f"Retry {state.attempt}/{self.config.max_retries} "
-                    f"after {delay:.2f}s delay. Error: {e}"
-                )
-
-                if self.config.on_retry:
-                    try:
-                        self.config.on_retry(state.attempt, e, delay)
-                    except Exception:
-                        pass
-
-                if cancelled_check and cancelled_check():
-                    raise RuntimeError("Operation was cancelled")
-
-                time.sleep(delay)
-
-
-# 装饰器版本
-T = TypeVar('T')
-
-
-def with_retry(
-    config: Optional[RetryConfig] = None,
-    max_retries: int = 3,
-    initial_delay: float = 1.0,
-    backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL_JITTER
-):
-    """
-    重试装饰器
-
-    Args:
-        config: 完整的重试配置
-        max_retries: 最大重试次数（如果未提供config）
-        initial_delay: 初始延迟（如果未提供config）
-        backoff_strategy: 退避策略（如果未提供config）
-
-    Example:
-        @with_retry(max_retries=3)
-        async def fetch_data():
-            ...
-    """
-    if config is None:
-        config = RetryConfig(
-            max_retries=max_retries,
-            initial_delay=initial_delay,
-            backoff_strategy=backoff_strategy
-        )
-
-    handler = RetryHandler(config)
-
-    def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
-        @wraps(func)
-        async def wrapper(*args, **kwargs) -> T:
-            async def execute():
-                return await func(*args, **kwargs)
-            return await handler.execute_with_retry(execute)
-        return wrapper
-
-    return decorator
-
 
 class RateLimiter:
     """请求频率限制器"""
@@ -440,24 +342,3 @@ class RateLimiter:
                 self.tokens = 0
                 self.last_update = time.time()
                 return wait_time
-
-    def sync_acquire(self) -> float:
-        """同步版本的获取请求许可"""
-        now = time.time()
-        elapsed = now - self.last_update
-
-        self.tokens = min(
-            self.burst_size,
-            self.tokens + elapsed * self.requests_per_second
-        )
-        self.last_update = now
-
-        if self.tokens >= 1:
-            self.tokens -= 1
-            return 0.0
-        else:
-            wait_time = (1 - self.tokens) / self.requests_per_second
-            time.sleep(wait_time)
-            self.tokens = 0
-            self.last_update = time.time()
-            return wait_time

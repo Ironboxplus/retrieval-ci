@@ -1,0 +1,158 @@
+{
+ "paper": "vldb-2022-p183-chen",
+ "page": 12,
+ "attempt": 0,
+ "scale": 2.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "text",
+    "block_bbox": [
+     101,
+     172,
+     593,
+     522
+    ],
+    "block_content": "similarity and randomly selecting candidates from each bucket to be evaluated by the cost model. TVM [4, 5] uses manual templates with tunable parameters to define the search space, and searches the best parameters to optimize an operator. FlexTensor [28] automatically generates a search space of an operator by enumerating the transformation steps in a specific order. Ansor [27] defines a hierarchical search space with two levels: sketch and annotation (as we have introduced in Section 2). Tensor Comprehensions (TC) [22] leverages polyhedral compilation and auto-tuning (on specified parameters) to optimize operators. We use the hierarchical search space of Ansor in this paper, because it is large and enables flexible optimization combinations. However, the reuse-based optimization idea (learning hardware preference for particular types of tensor programs from the performance ones) can also be applied to other search spaces, because GPU tensor programs all satisfy the general pattern (mentioned in Section 2)."
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     102,
+     522,
+     594,
+     653
+    ],
+    "block_content": "Search-based compilation acceleration. A common workflow of search-based compilation [1, 3–5, 27, 28] is an iterative process, i.e., searching candidate tensor programs based on a cost model, measuring the programs on hardware, and updating the cost model with the measurement results, so existing works focus on more efficient search algorithms or better cost models."
+   },
+   {
+    "block_id": 2,
+    "block_label": "text",
+    "block_bbox": [
+     102,
+     653,
+     595,
+     1181
+    ],
+    "block_content": "Halide uses importance sampling [1] and hierarchical sampling [3] to select candidates tensor programs for measurement. Another work, CHAMELEON [2], expedites the convergence of optimization with reinforcement learning and reduces the number of hardware measurements with adaptive sampling. FlexTensor [28] combines a simulated annealing based method with Q-learning in search. An evolutionary search method designed specifically for tensor programs is used by Ansor [27]. However, these methods do not consider reusing the information from a performance tensor program in search. Selective Tuning (ST) [19] reuses the transformation steps of performance tensor programs from other operators directly in optimization, however, their performance may be limited by the design of the operator similarity model and the number of similar operator groups in the given operators. Experiments show that ETO is more effective than it and has higher overall optimization efficiency. We also conducted more experiments on the variants of ST by changing the parameters in ST, and the results can be found in the technical report [8]. TC [20, 22] uses a compilation cache to reuse the tensor programs in a way similar to ST: it can directly apply the transformation steps in an optimized tensor program of another similar operator, or alternatively it can use that set of transformation steps as a starting point of its genetic search algorithm. Due to lack of enough details of the compilation cache usage in TC, we did not include it in the current experiments."
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     101,
+     1180,
+     595,
+     1424
+    ],
+    "block_content": "As for better cost models, transfer learning is used by autoTVM [5] to make use of the historical data collected during optimizing previous workloads, so as to speed up the optimization. Halide [1, 3] supports the one-shot mode of searching, i.e., searching a set of tensor programs completely depending on a pretrained cost model without hardware measurement and outputting the tensor program ranked best by the cost model. Using this mode, the search can finish in seconds, but the optimized throughput is worse than searching with hardware measurements, because of the limited accuracy of the cost models. A recent work [18] designs a cost model, which can be pretrained, using LSTM over engineered features to accurately estimate the expected performance of a partial schedule. Given the cost model, it makes a sequence of optimization decisions greedily, and outperforms [1] in effectiveness. This method can be combined with our reuse-based tuner by using the trained cost model to rank the generated tensor programs, instead of hardware measurements. To save the overall search time of a set of optimization tasks, Ansor [27] and DynaTune [26] dynamically allocate time slots to tasks, instead of sequentially optimizing them. Since ETO does not run in iterations, there is no task scheduling issue. Experiments show ETO searches performance in tensor programs more efficiently than Ansor despite its task scheduling strategy."
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     629,
+     171,
+     1123,
+     414
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 5,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     631,
+     471,
+     1038,
+     493
+    ],
+    "block_content": "9 CONCLUSION AND FUTURE WORK"
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     630,
+     501,
+     1120,
+     718
+    ],
+    "block_content": "Efficient execution of DNNs is important in many applications. In this work, we propose ETO, which (1) reuses the information of performance tensor programs to speed up operator optimization, and (2) determines the information reuse relationships among operators with the minimum total search cost, reaching a trade-off between operator performance and optimization efficiency. Furthermore, we have introduced a concept, bridge operators, to offer indirect reuse opportunities among operators. Compared with the existing works, the experimental results confirm the effectiveness and efficiency of ETO in optimizing operators of DNNs."
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     629,
+     720,
+     1121,
+     1006
+    ],
+    "block_content": "One limitation of ETO is that the operator frequency is not considered when optimizing a set of operators. How to change the search method and schedule the tuning time to improve the overall inference performance is an interesting problem. Besides, ETO takes several minutes on average to optimize an operator, so another interesting problem is how to make use of more powerful cost models to further reduce the search time on a single operator. We can also consider combining our search method with existing methods to improve the optimization effectiveness and efficiency, like using the tensor programs in our pruned search space as the starting points of the genetic search algorithm in [22, 27]. Lastly, we can explore the possibility of incorporating ETO into existing systems which support dynamic neural networks."
+   },
+   {
+    "block_id": 8,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     631,
+     1061,
+     874,
+     1084
+    ],
+    "block_content": "ACKNOWLEDGMENTS"
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     628,
+     1092,
+     1123,
+     1424
+    ],
+    "block_content": "Yanyan Shen is partially supported by Shanghai Municipal Science and Technology Major Project (2021SHZDZX0102) and SJTU Global Strategic Partnership Fund (2021 SJTU-HKUST). Yue Wang is partially supported by China NSFC (No. 62002235) and Guangdong Basic and Applied Basic Research Foundation (No. 2019A15110473). Lei Chen's work is partially supported by National Key Research and Development Program of China Grant No. 2018AAA0101100, the Hong Kong RGC GRF Project 16202218, CRF Project C6030-18G, C1031-18G, C5026-18G, RIF Project R6020-19, AOE Project AoE/E-603/18, Theme-based project TRS T41-603/20R, China NSFC No. 61729201, Guangdong Basic and Applied Basic Research Foundation 2019B151530001, Hong Kong ITC ITF grants ITS/044/18FX and ITS/470/18FX, Microsoft Research Asia Collaborative Research Grant, HKUST-NAVER/LINE AI Lab, HKUST-Webank joint research lab grants. The corresponding author of this paper is Yanyan Shen."
+   },
+   {
+    "block_id": 10,
+    "block_label": "number",
+    "block_bbox": [
+     593,
+     1507,
+     631,
+     1528
+    ],
+    "block_content": "194"
+   }
+  ],
+  "width": 1224.0,
+  "height": 1584.0,
+  "page_index": 0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['15110473']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 0,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 0.988,
+   "omission_min_coverage": 0.988,
+   "numbers_unknown": 1,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.001,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}
