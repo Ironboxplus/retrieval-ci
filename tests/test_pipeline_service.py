@@ -183,11 +183,40 @@ def test_resume_relaunches_running_pipeline(store):
     assert store.get_task(rid)["status"] == "completed"
 
 
-def test_resume_orders_inflight_tasks_first(store):
-    """W78: tasks with an in-flight (started_at set, non-terminal) subtask
-    launch before fresh peers, so the in-flight task grabs its resource lock
-    first and fresh peers naturally queue behind it instead of racing into
-    preflight against a busy GPU/SQL/Qdrant."""
+def test_resume_grants_inflight_task_first_even_when_launched_last(tmp_path):
+    """W78: a task with an in-flight (started_at set) stage must reach a busy
+    resource before fresh peers. Tasks relaunch in id order with no hand-off
+    pause; the lock's priority does the ordering, so the in-flight task (the
+    NEWEST id here) still runs first once the resource is released."""
+    import threading
+    import time
+
+    from sqlalchemy.pool import NullPool
+
+    from app.services.pipeline.stage_lock import StageLockSet
+
+    # File-backed + NullPool: three orchestrator threads write concurrently.
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'resume.db'}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    Base.metadata.create_all(engine)
+    Local = sessionmaker(bind=engine, expire_on_commit=False)
+
+    @contextmanager
+    def factory():
+        s = Local()
+        try:
+            yield s
+            s.commit()
+        except Exception:
+            s.rollback()
+            raise
+        finally:
+            s.close()
+
+    store = TaskStore(factory)
     seen_order: list[int] = []
 
     def builder(ctx):
@@ -197,24 +226,35 @@ def test_resume_orders_inflight_tasks_first(store):
                 run=lambda c, s: seen_order.append(c.task_id),
                 probe=lambda c: Progress(0, 1),
                 poll_interval_s=0.0,
+                resource_key="gpu",
             )
         ]
 
-    runner = PipelineRunner(store=store, pipeline_builder=builder)
+    locks = StageLockSet()
+    runner = PipelineRunner(store=store, pipeline_builder=builder, stage_locks=locks)
 
-    # Three tasks. Create in order: fresh A, in-flight B, fresh C.
+    # Fresh A, fresh B, in-flight C (highest id): launch order is A, B, C.
     a = store.create_task(task_type=INGEST_PIPELINE, params={"venue": "CVPR", "year": 2024})
     b = store.create_task(task_type=INGEST_PIPELINE, params={"venue": "CVPR", "year": 2025})
     c = store.create_task(task_type=INGEST_PIPELINE, params={"venue": "CVPR", "year": 2026})
     for tid in (a, b, c):
         store.set_task_status(tid, "running")
         store.ensure_subtask(tid, "extract", subtask_type="pipeline_stage", name="extract", order=0)
-    # Mark only B's extract as in-flight (started_at set, still pending status).
-    store.start_subtask(b, "extract", message="running", stage="extract")
-    # Roll B back to "pending" so the test still runs its stage; we keep started_at.
-    sub_b = store.get_subtask(b, "extract")
-    assert sub_b["started_at"] is not None  # sanity: started_at survives
+    store.start_subtask(c, "extract", message="running", stage="extract")
+    assert store.get_subtask(c, "extract")["started_at"] is not None  # sanity: started_at survives
 
-    resumed = runner.resume_running(wait=True)
-    # B (in-flight) must come first; fresh A/C come after in id order.
-    assert resumed[0] == b, f"expected in-flight task {b} first, got {resumed}"
+    # Occupy the resource so all three orchestrators queue on it.
+    assert locks.acquire("gpu", threading.Event(), owner="other") is True
+    resumed = runner.resume_running(wait=False)
+    assert resumed == [a, b, c]  # id order, no in-flight-first sort
+    deadline = time.monotonic() + 5
+    while locks._waiting("gpu") < 3:
+        assert time.monotonic() < deadline, f"only {locks._waiting('gpu')} of 3 queued"
+        time.sleep(0.005)
+    locks.release("gpu")
+
+    deadline = time.monotonic() + 5
+    while len(seen_order) < 3:
+        assert time.monotonic() < deadline, f"ran only {seen_order}"
+        time.sleep(0.005)
+    assert seen_order == [c, a, b], f"in-flight {c} must be granted first, got {seen_order}"

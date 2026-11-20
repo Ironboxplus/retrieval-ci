@@ -21,6 +21,7 @@ from app.api.identity import resolve_admin, resolve_owner
 from app.api.routes.public_code import _run_service as _run_public_code_service
 from app.services.code_federation import CodeFederationCandidate, fuse_code_hits
 from app.services.code_kb import get_code_kb_service
+from app.services.code_kb.analysis_store import claim_scope_notice
 from app.services.code_kb.jobs import (
     CodeIndexJob,
     CodeIndexJobAlreadyEnded,
@@ -33,7 +34,7 @@ from app.services.index_audit import (
     emit_index_audit,
     push_index_audit_bg,
 )
-from app.services.index_catalog.service import get_index_catalog_service
+from app.services.index_catalog.service import ResolvedScope, get_index_catalog_service
 from app.services.public_code import get_public_code_search_service
 from app.services.public_code.search_service import PublicCodeSearchRequest
 from app.services.scope_paths import canonicalize_scope_path, is_windows_scope
@@ -291,7 +292,14 @@ async def list_index_jobs(
 
 
 @router.get("/jobs/{job_id}", response_model=CodeIndexJobOut)
-async def get_index_job(job_id: str, request: Request, user_id: str | None = _UserId):
+async def get_index_job(
+    job_id: str, request: Request, user_id: str | None = _UserId,
+    scope_notice: bool = Query(
+        default=False,
+        description="Also claim and return the scope's undelivered analysis summary. "
+                    "Off by default: a client's own progress polling must not consume a "
+                    "message meant for a person."),
+):
     """Progress of one index job (404 for unknown or another owner's job)."""
     owner = resolve_owner(request, user_id)
     # A poll is read-only.  Do not construct a Qdrant-backed queue/worker merely to
@@ -300,7 +308,12 @@ async def get_index_job(job_id: str, request: Request, user_id: str | None = _Us
     job = queue.get(job_id, owner_user_id=owner) if queue is not None else None
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
-    return _job_out(job)
+    out = _job_out(job)
+    if scope_notice:
+        notice = await asyncio.to_thread(claim_scope_notice, owner, job.project)
+        if notice:
+            out = out.model_copy(update={"scope_notice": notice})
+    return out
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=CodeIndexJobOut)
@@ -420,6 +433,33 @@ def _private_scope_decision(
     )
 
 
+def _resolve_indexed_ancestor(
+    *, owner: str, project: str | None, aliases: list[str] | None,
+) -> ResolvedScope | None:
+    """The indexed ancestor that covers a requested directory nobody indexed, if any.
+
+    Scopes are matched exactly, but the nested-scope guard refuses to index a directory
+    inside an indexed one, so such a directory could never be searched. ``None`` means
+    "search ``project`` as given" - including when the catalog cannot be read."""
+    if not project:
+        return None
+    try:
+        return get_index_catalog_service().resolve_indexed_scope(
+            owner_user_id=owner, kind="code", scope=project, known_scopes=aliases)
+    except Exception:  # noqa: BLE001 - preserve search availability on catalog outage
+        logger.exception("code search ancestor-scope lookup failed for project=%s", project)
+        return None
+
+
+def _with_resolved_scope(
+    response: CodeSearchResponse, resolved: ResolvedScope | None,
+) -> CodeSearchResponse:
+    if resolved is None:
+        return response
+    return response.model_copy(update={
+        "resolved_scope": resolved.scope, "resolved_path_prefix": resolved.path_prefix})
+
+
 def _run_private_code_search(body: CodeSearchRequest, owner: str) -> CodeSearchResponse:
     """The private-plane search body, off the event loop. Extracted (W-federated-search
     A1) so the federated-search route can reuse the scope-snapshot fencing/withheld-scope
@@ -436,13 +476,39 @@ def _run_private_code_search(body: CodeSearchRequest, owner: str) -> CodeSearchR
             logger.exception(
                 "code search scope-alias lookup failed for project=%s", body.project)
             aliases = [body.project]
+    resolved = _resolve_indexed_ancestor(owner=owner, project=body.project, aliases=aliases)
+    if resolved is not None:
+        # Everything below (visibility fence, withheld state, vector filter) must judge the
+        # scope that actually holds the vectors, not the directory the caller named.
+        body = body.model_copy(update={"project": resolved.scope})
+        aliases = resolved.aliases if is_windows_scope(resolved.scope) else None
+    response = _with_resolved_scope(
+        _search_private_scope(
+            body, owner, aliases=aliases,
+            path_prefix=resolved.path_prefix if resolved is not None else None),
+        resolved)
+    # body.project is the scope that holds the vectors (the resolved ancestor when a
+    # subdirectory was redirected). A withheld scope shows no results, so it does not
+    # spend the one delivery either.
+    if response.scope_snapshot_state == "completed":
+        notice = claim_scope_notice(owner, body.project)
+        if notice:
+            return response.model_copy(update={"scope_notice": notice})
+    return response
+
+
+def _search_private_scope(
+    body: CodeSearchRequest, owner: str, *, aliases: list[str] | None,
+    path_prefix: str | None,
+) -> CodeSearchResponse:
     service = get_code_kb_service()
     # Keep the base service contract unchanged for ordinary POSIX / unscoped
     # searches. Only Windows scopes need the legacy-case compatibility extension.
     def invoke_search() -> CodeSearchResponse:
+        extra = {"path_prefix": path_prefix} if path_prefix else {}
         if aliases is None:
-            return service.search(body, owner_user_id=owner)
-        return service.search(body, owner_user_id=owner, project_aliases=aliases)
+            return service.search(body, owner_user_id=owner, **extra)
+        return service.search(body, owner_user_id=owner, project_aliases=aliases, **extra)
 
     # Code KB mutates Qdrant scopes in place.  Take the owner fence BEFORE looking at
     # queue state: a pre-fence ``None`` can race a writer that immediately starts a
@@ -596,6 +662,11 @@ class FederatedPrivatePlan:
     excluded_projects: list[str] | None
     excluded_scopes: list[dict]
     searched_projects: list[str]
+    # Requested directories that had no index of their own: (ancestor scope spellings,
+    # path prefix below it). Each needs its own query because a prefix is per scope.
+    prefixed_groups: tuple[tuple[tuple[str, ...], str], ...] = ()
+    # True when every requested scope is a prefixed group (nothing for the plain query).
+    only_prefixed: bool = False
 
 
 def _plan_federated_private_scopes(
@@ -608,10 +679,17 @@ def _plan_federated_private_scopes(
 
     if body.projects:
         included_groups: list[list[str]] = []
+        prefixed_groups: list[tuple[tuple[str, ...], str]] = []
         for raw in body.projects:
             aliases = _scope_aliases(owner=owner, project=raw)
+            resolved = _resolve_indexed_ancestor(owner=owner, project=raw, aliases=aliases)
+            if resolved is not None:
+                # Judge the scope that holds the vectors, exactly like a plain request.
+                aliases = list(resolved.aliases)
             decision = _private_scope_decision(owner=owner, projects=aliases, queue=queue)
-            if decision.allowed:
+            if decision.allowed and resolved is not None:
+                prefixed_groups.append((tuple(aliases), resolved.path_prefix))
+            elif decision.allowed:
                 included_groups.append(aliases)
             else:
                 excluded_scopes.append({
@@ -619,7 +697,7 @@ def _plan_federated_private_scopes(
                     "state": decision.scope_snapshot_state,
                     "active_index_job_id": decision.active_job_id,
                 })
-        if not included_groups:
+        if not included_groups and not prefixed_groups:
             # Every requested scope is withheld: report the first one's state rather
             # than the "completed" default, which would read as a genuine no-match.
             return FederatedPrivatePlan(
@@ -638,9 +716,11 @@ def _plan_federated_private_scopes(
             )
         flat = list(dict.fromkeys(p for group in included_groups for p in group))
         return FederatedPrivatePlan(
-            withheld=None, project=flat[0], project_aliases=(flat[1:] or None),
+            withheld=None, project=(flat[0] if flat else None),
+            project_aliases=(flat[1:] or None),
             excluded_projects=None, excluded_scopes=excluded_scopes,
             searched_projects=list(body.projects),
+            prefixed_groups=tuple(prefixed_groups), only_prefixed=not flat,
         )
 
     # body.projects == []: search everything the owner has, excluding individually
@@ -680,6 +760,25 @@ def _plan_federated_private_scopes(
     )
 
 
+def _merge_private_responses(
+    responses: list[CodeSearchResponse], pool: int,
+) -> CodeSearchResponse:
+    """One response from the per-scope-group searches of the private leg.
+
+    Every group embeds the same query in the same mode, so their scores are comparable
+    and a plain best-first merge keeps the pool's strongest candidates."""
+    if len(responses) == 1:
+        return responses[0]
+    hits = sorted(
+        (hit for response in responses for hit in response.hits),
+        key=lambda hit: hit.score, reverse=True)[:pool]
+    notices = [response.notice for response in responses if response.notice]
+    return responses[0].model_copy(update={
+        "hits": hits, "total": len(hits),
+        "notice": " ".join(dict.fromkeys(notices)) or None,
+    })
+
+
 def _run_federated_private_leg(
     body: FederatedCodeSearchRequest, owner: str, *, pool: int,
 ) -> tuple[CodeSearchResponse, list[dict], list[str]]:
@@ -693,16 +792,17 @@ def _run_federated_private_leg(
 
     def do_search(
         *, project: str | None, project_aliases: list[str] | None,
-        excluded_projects: list[str] | None,
+        excluded_projects: list[str] | None, path_prefix: str | None = None,
     ) -> CodeSearchResponse:
         request = CodeSearchRequest(
             query=body.query, project=project, top_k=pool, mode=body.mode,
             rerank=False, language=body.language, path_glob=body.path_glob,
             max_per_file=body.max_per_file,
         )
+        extra = {"path_prefix": path_prefix} if path_prefix else {}
         return service.search(
             request, owner_user_id=owner, project_aliases=project_aliases,
-            excluded_projects=excluded_projects,
+            excluded_projects=excluded_projects, **extra,
         )
 
     if not hasattr(service, "scope_snapshot"):
@@ -717,11 +817,18 @@ def _run_federated_private_leg(
         plan = _plan_federated_private_scopes(owner=owner, body=body, queue=queue)
         if plan.withheld is not None:
             return plan.withheld, plan.excluded_scopes, plan.searched_projects
-        response = do_search(
-            project=plan.project, project_aliases=plan.project_aliases,
-            excluded_projects=plan.excluded_projects,
-        )
-        return response, plan.excluded_scopes, plan.searched_projects
+        responses = []
+        if not plan.only_prefixed:
+            responses.append(do_search(
+                project=plan.project, project_aliases=plan.project_aliases,
+                excluded_projects=plan.excluded_projects))
+        for aliases, prefix in plan.prefixed_groups:
+            responses.append(do_search(
+                project=aliases[0], project_aliases=(list(aliases[1:]) or None),
+                excluded_projects=None, path_prefix=prefix))
+        return (
+            _merge_private_responses(responses, pool),
+            plan.excluded_scopes, plan.searched_projects)
 
 
 def _private_candidates(response: CodeSearchResponse) -> list[CodeFederationCandidate]:

@@ -14,13 +14,14 @@ import json
 import re
 import sys
 import threading
+import time
 import tomllib
 from pathlib import Path
 
 import httpx
 import pytest
 
-from conftest import git_init_repo
+from tests.conftest import git_init_repo
 
 PLUGIN = Path(__file__).resolve().parents[1] / "mcp_plugin" / "retrieval_mcp.py"
 REPO_ROOT = PLUGIN.parents[1]
@@ -288,21 +289,34 @@ def test_release_metadata_and_owned_mcp_sample_are_command_only():
     assert plugin_entry["args"] == []
     assert "env" not in plugin_entry
 
-    for document in (
-        REPO_ROOT / "README.md",
-        REPO_ROOT / "mcp_plugin" / "README.md",
-        REPO_ROOT / "mcp_server" / "README.md",
-        REPO_ROOT / "overview.md",
-        # env.md carries the uvx install command operators copy-paste. It was
-        # outside this set, so it could go stale silently — the one document
-        # where a wrong version is executed rather than read.
-        REPO_ROOT / "env.md",
-    ):
-        text = document.read_text(encoding="utf-8")
-        assert version in text, f"{document.name} does not mention release {version}"
-        assert '"url":' not in text
-        assert "--transport" not in text
-        assert "retrieval-mcp start" not in text
+
+PRIVATE_DOC_SKIP = ("private doc, excluded from the public CI snapshot "
+                    "(ci_snapshot.PUBLIC_EXCLUDE_PATHSPECS)")
+
+
+@pytest.mark.parametrize("name", [
+    "README.md",
+    "mcp_plugin/README.md",
+    "mcp_server/README.md",
+    # overview.md and env.md are private notes the public CI snapshot leaves out; they
+    # skip (visibly) when absent and are asserted like the others when present. env.md
+    # carries the uvx install command operators copy-paste, so a stale version there is
+    # executed rather than read.
+    "overview.md",
+    "env.md",
+])
+def test_release_version_is_documented_and_docs_stay_command_only(name):
+    package = tomllib.loads((REPO_ROOT / "mcp_plugin" / "pyproject.toml").read_text(
+        encoding="utf-8"))
+    version = package["project"]["version"]
+    document = REPO_ROOT / name
+    if name in {"overview.md", "env.md"} and not document.exists():
+        pytest.skip(PRIVATE_DOC_SKIP)
+    text = document.read_text(encoding="utf-8")
+    assert version in text, f"{document.name} does not mention release {version}"
+    assert '"url":' not in text
+    assert "--transport" not in text
+    assert "retrieval-mcp start" not in text
 
 
 def test_singleton_cli_package_contract_and_command_only_examples():
@@ -315,9 +329,11 @@ def test_singleton_cli_package_contract_and_command_only_examples():
     wheel = package["tool"]["hatch"]["build"]["targets"]["wheel"]
     assert set(wheel["only-include"]) == {
         "retrieval_mcp.py", "retrieval_mcp_cli.py", "retrieval_mcp_daemon.py",
+        "retrieval_mcp_conversations.py",
     }
     assert set(wheel["sources"]) == {
         "retrieval_mcp.py", "retrieval_mcp_cli.py", "retrieval_mcp_daemon.py",
+        "retrieval_mcp_conversations.py",
     }
     assert daemon.TOOL_SURFACE_NAMES == EXPECTED
     assert len(daemon.TOOL_SURFACE_NAMES) == 35
@@ -1178,20 +1194,24 @@ def test_paper_artifact_helpers_match_repo_client():
 def test_plugin_tells_clients_to_search_with_retrieval_before_shell_tools():
     mod = _load()
     instructions = mod.mcp.instructions
-    assert "Retrieval-first" in instructions
-    assert "use search_code for code (your indexed repositories, the curated public corpus, or both)" in instructions
-    assert "the grep replacement" in instructions
-    assert "search_papers, search_arxiv (arXiv preprints) and search_within_paper for papers" in instructions
-    assert "journal_search for Journal/project history" in instructions
-    assert "ordered list" in instructions
-    assert "independent searches would otherwise be serial" in instructions
-    assert "This is not Retrieval-only" in instructions
-    for permitted_evidence in (
-        "rg", "Git history", "direct working-tree reads", "official paper sources",
-        "unindexed/current files", "exhaustive every-occurrence listing", "cross-checking",
-        "supplementation", "MCP/tool failure",
+    assert "Retrieval-first rule" in instructions
+    # A rule, not a suggestion: the first search is a Retrieval call, shell search after.
+    assert "your FIRST search must be a Retrieval MCP call" in instructions
+    assert 'search_code (mode="keyword" for exact identifiers and strings, the grep replacement' in instructions
+    assert "journal_search for project history" in instructions
+    assert "search_papers / search_arxiv / search_within_paper for papers" in instructions
+    assert "Do not start with grep, rg, find, git grep, Grep or Glob" in instructions
+    assert "After at least one Retrieval call in the task, use them freely" in instructions
+    for exception in (
+        "you already know the exact file path",
+        "the content was written in this session",
+        "Retrieval failed or reported the scope is not indexed",
     ):
-        assert permitted_evidence in instructions
+        assert exception in instructions
+    assert "Batch independent queries as one list" in instructions
+    assert "This is not Retrieval-only" not in instructions
+    # The rule replaced a longer text; it must not grow every client's context.
+    assert len(instructions) <= 1150
 
     tools = {tool.name: tool for tool in asyncio.run(mod.mcp.list_tools())}
     # Recommendations state the advantage over rg/grep, not just "prefer this tool".
@@ -1212,7 +1232,6 @@ def test_plugin_tells_clients_to_search_with_retrieval_before_shell_tools():
         assert "list of independent queries" in query["description"]
         assert "same other arguments" in query["description"]
         assert "input order" in query["description"]
-    assert "each list item runs independently" in mod.mcp.instructions
 
 
 def test_published_schemas_carry_no_generated_titles():
@@ -2132,7 +2151,7 @@ def test_index_code_uploads_chunks_and_bundles_report(monkeypatch):
         {"rel_path": "b.py", "language": "python",
          "chunks": [{"start_line": 1, "end_line": 2, "label": "", "content": "# path: b.py\ny", "code": "y"}]},
     ])
-    out = _index_code_to_completion(mod, repo_root=".")
+    out = _index_code_to_completion(mod, repo_root=".", docs=False)
     paths = [p for p, _ in cap.posts]
     assert paths == ["/api/index/policy", "/api/code/index"]
     policy = cap.posts[0][1]
@@ -2238,7 +2257,7 @@ def test_index_code_returns_job_id_immediately_without_blocking(monkeypatch):
         {"rel_path": "a.py", "language": "python", "chunks": [
             {"start_line": 1, "end_line": 1, "label": "", "content": "# path: a.py\nx", "code": "x"}]}])
     async def scenario():
-        out = await mod.index_code(repo_root=".")
+        out = await mod.index_code(repo_root=".", docs=False)
         match = re.search(r"job ([0-9a-f]+)", out)
         assert match and "[preparing]" in out and "index_code_status" in out
         assert cap.posts == [], (
@@ -2454,7 +2473,7 @@ def test_lost_submit_response_recovers_by_durable_receipt(monkeypatch):
         }],
     }])
 
-    out = _index_code_to_completion(mod, repo_root=".", auto_refresh=False)
+    out = _index_code_to_completion(mod, repo_root=".", auto_refresh=False, docs=False)
 
     local_job_id = re.search(r"job ([0-9a-f]+)", out).group(1)
     assert receipt_queries == [local_job_id]
@@ -2758,7 +2777,7 @@ def test_real_filesystem_watcher_indexes_create_and_delete_events(tmp_path, monk
             "host": "desktop", "project": project, "kind": "code",
             "root_dir": str(tmp_path), "auto_refresh": True,
             "respect_gitignore": True, "exclude_globs": [],
-            "min_check_interval_s": 3600,
+            "min_check_interval_s": 0,
         },
         "/api/index/inventory": {"users": []},
         "/api/code/index": {"job_id": "watch-real", "status": "queued"},
@@ -2767,6 +2786,7 @@ def test_real_filesystem_watcher_indexes_create_and_delete_events(tmp_path, monk
         },
     })
     _wire(mod, cap)
+    monkeypatch.setattr(mod, "_AUTO_INDEX_MIN_INTERVAL_S", 0)  # this test is not about throttling
     monkeypatch.setattr(
         mod, "_collect_incremental",
         lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("watch event must not scan")),
@@ -2861,6 +2881,7 @@ def test_watcher_coalesces_events_while_one_index_job_is_running(tmp_path, monke
             await release_first_job.wait()
         return {"job_id": job_id, "status": "completed"}
 
+    monkeypatch.setattr(mod, "_AUTO_INDEX_MIN_INTERVAL_S", 0)  # this test is not about throttling
     monkeypatch.setattr(mod, "_get_code_policy", policy)
     monkeypatch.setattr(mod, "_known_code_hashes", lambda _project: asyncio.sleep(0, result={}))
     monkeypatch.setattr(mod, "_watch_changes", watch_changes)
@@ -2973,6 +2994,7 @@ def test_failed_watcher_job_does_not_advance_known_hash(tmp_path, monkeypatch):
     async def failed_job(_job_id):
         return {"job_id": "failed-job", "status": "failed", "error": "embed failed"}
 
+    monkeypatch.setattr(mod, "_AUTO_INDEX_MIN_INTERVAL_S", 0)  # this test is not about throttling
     monkeypatch.setattr(mod, "_get_code_policy", policy)
     monkeypatch.setattr(mod, "_watch_changes", watch_changes)
     monkeypatch.setattr(mod, "_submit_watched_code_paths", submit)
@@ -3030,6 +3052,7 @@ def test_failed_active_job_does_not_drop_pending_ignore_reconcile(tmp_path, monk
     async def failed_job(_job_id):
         return {"job_id": "active-job", "status": "failed", "error": "upsert failed"}
 
+    monkeypatch.setattr(mod, "_AUTO_INDEX_MIN_INTERVAL_S", 0)  # this test is not about throttling
     monkeypatch.setattr(mod, "_get_code_policy", policy)
     monkeypatch.setattr(mod, "_known_code_hashes", lambda _project: asyncio.sleep(0, result={}))
     monkeypatch.setattr(mod, "_watch_changes", watch_changes)
@@ -3978,3 +4001,837 @@ def test_merged_search_code_rejects_contradictory_arguments(arguments, message):
     mod = _load()
     with pytest.raises(ValueError, match=message):
         asyncio.run(mod.search_code(query="x", **arguments))
+
+
+def test_plugin_search_arxiv_sends_include_withdrawn_only_when_asked(monkeypatch):
+    """Withdrawn arXiv papers are hidden server-side by default; the tool opts in
+    explicitly, for a single query and for each item of a query list."""
+    mod = _load()
+    sent = []
+
+    async def fake_post(path, payload):
+        sent.append((path, payload))
+        return {"papers": [{
+            "paper_id": "arxiv-2611.00002", "doc_id": "7", "doc_title": "Gone",
+            "max_score": 0.9, "metadata": {"venue": "arXiv", "year": 2026, "withdrawn": True},
+            "chunks": [{"content": "text"}],
+        }, {
+            "paper_id": "arxiv-2611.00001", "doc_id": "6", "doc_title": "Kept",
+            "max_score": 0.8, "metadata": {"venue": "arXiv", "year": 2026, "withdrawn": False},
+            "chunks": [{"content": "text"}],
+        }]}
+
+    monkeypatch.setattr(mod, "_post", fake_post)
+    default = asyncio.run(mod.search_arxiv(query="q"))
+    assert "include_withdrawn" not in sent[-1][1]
+    assert sent[-1][1]["venue_tier"] == "preprint"
+    assert default.count("[WITHDRAWN]") == 1
+    assert "Gone  [arXiv 2026]  score=0.900  [WITHDRAWN]" in default
+    assert "Kept  [arXiv 2026]  score=0.800\n" in default
+
+    asyncio.run(mod.search_arxiv(query="q", include_withdrawn=True))
+    assert sent[-1][1]["include_withdrawn"] is True
+    asyncio.run(mod.search_arxiv(query=["a", "b"], include_withdrawn=True))
+    assert [p["include_withdrawn"] for _, p in sent[-2:]] == [True, True]
+
+
+def test_plugin_search_arxiv_schema_exposes_include_withdrawn_and_search_papers_does_not():
+    mod = _load()
+    tools = {t.name: t for t in asyncio.run(mod.mcp.list_tools())}
+    arxiv = tools["search_arxiv"].inputSchema["properties"]
+    assert arxiv["include_withdrawn"]["type"] == "boolean"
+    assert arxiv["include_withdrawn"]["default"] is False
+    assert "include_withdrawn" not in tools["search_papers"].inputSchema["properties"]
+
+
+# --------------------------------------------------------------------------- #
+# index_code also indexes documents (plan P1 I1-I4): one walk, one scope, two jobs
+# --------------------------------------------------------------------------- #
+
+import hashlib  # noqa: E402  (kept next to the tests that need it)
+import os  # noqa: E402
+
+_DOC_GLOBS = ["*.md", "*.mdx", "*.markdown", "*.rst", "*.adoc", "*.txt"]
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _write(path: Path, text: str) -> None:
+    """Write exact bytes: Path.write_text turns "
+" into CRLF on Windows, and these
+    tests compare content hashes and uploaded bodies against the literal text."""
+    path.write_bytes(text.encode("utf-8"))
+
+
+def _http_404(path: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", f"http://backend{path}")
+    return httpx.HTTPStatusError(
+        f"HTTP 404 from GET {path}", request=request, response=httpx.Response(404, request=request))
+
+
+class _Backend(_Capture):
+    """A small stateful stand-in for the backend routes index_code and its watcher touch.
+
+    It keeps the per-kind scope policy and the per-kind catalog the way the real server
+    does (policy upsert is keyed by kind, inventory is filtered by kind), so a test
+    observes what the client would have read, not a canned reply keyed only by path."""
+
+    def __init__(self, *, code_job_status="completed", doc_job_status="completed",
+                 doc_job_error=None, overlap=None):
+        super().__init__()
+        self.policies: dict[str, dict] = {}
+        self.inventory: dict[str, list[dict]] = {"code": [], "doc": []}
+        self.code_job_status = code_job_status
+        self.doc_job_status = doc_job_status
+        self.doc_job_error = doc_job_error
+        self.overlap_blocks: dict[str, list[dict]] = overlap or {}
+        self.bulk_jobs: dict[str, dict] = {}
+
+    # The watcher holds automatic submissions to one per interval; these tests exercise
+    # what the watcher submits, so the fake backend reports no interval unless one asks.
+    min_check_interval_s = 0
+
+    def seed_policies(self, root: str, *, docs: bool = True, interval: int | None = None) -> None:
+        for kind in ("code", "doc") if docs else ("code",):
+            self.policies[kind] = {
+                "host": "desktop", "kind": kind, "root_dir": root, "auto_refresh": True,
+                "respect_gitignore": False, "exclude_globs": [],
+                "min_check_interval_s": self.min_check_interval_s if interval is None else interval}
+
+    def code_posts(self) -> list[dict]:
+        return [body for path, body in self.posts if path == "/api/code/index"]
+
+    def bulk_posts(self) -> list[dict]:
+        return [body for path, body in self.posts if path == "/api/journal/bulk-index"]
+
+    def posted(self, path: str) -> list[dict]:
+        return [body for item, body in self.posts if item == path]
+
+    async def post(self, path: str, payload: dict) -> dict:
+        self.posts.append((path, payload))
+        if path == "/api/index/policy":
+            self.policies[payload["kind"]] = dict(
+                payload, min_check_interval_s=self.min_check_interval_s)
+            return payload
+        if path == "/api/code/index":
+            return {"job_id": f"code-{len(self.code_posts())}", "status": "queued"}
+        if path == "/api/journal/bulk-index":
+            job_id = f"doc-{len(self.bulk_posts())}"
+            self.bulk_jobs[job_id] = payload
+            return {"job_id": job_id, "status": "queued"}
+        if path == "/api/journal/docs/reconcile":
+            return {"removed_entries": 1, "skipped": False}
+        if path == "/api/index/report":
+            return {"total_files": len(payload["files"])}
+        return {}
+
+    async def get(self, path: str, params: dict | None = None, *, headers=None) -> dict:
+        self.gets.append((path, params))
+        params = params or {}
+        if path == "/api/index/policy":
+            policy = self.policies.get(params.get("kind"))
+            if policy is None:
+                raise _http_404(path)
+            return policy
+        if path == "/api/index/inventory":
+            rows = self.inventory.get(params.get("kind"), [])
+            return {"users": [{"hosts": [{"projects": [{"dirs": [{"files": rows}]}]}]}]}
+        if path == "/api/index/scope-overlap":
+            return {"ancestor_blocks": self.overlap_blocks.get(params.get("kind"), []),
+                    "ancestor_widenings": [], "child_warnings": []}
+        if path == "/api/code/jobs":
+            return {"jobs": []}
+        if path.startswith("/api/code/jobs/"):
+            return {"job_id": path.rsplit("/", 1)[-1], "status": self.code_job_status,
+                    "progress": 1.0, "indexed": 1, "chunks_done": 1, "chunks_total": 1}
+        if path.startswith("/api/journal/bulk-index/jobs/"):
+            job_id = path.rsplit("/", 1)[-1]
+            files = len((self.bulk_jobs.get(job_id) or {}).get("files") or [])
+            return {"job_id": job_id, "status": self.doc_job_status, "files_total": files,
+                    "files_done": files, "chunks_total": 3, "chunks_done": 3, "indexed": 3,
+                    "progress": 1.0, "error": self.doc_job_error}
+        return {}
+
+
+def _doc_row(rel_path: str, content: str, chunk_count: int = 1) -> dict:
+    return {"rel_path": rel_path, "kind": "doc", "collection": "journal_chunks",
+            "chunk_count": chunk_count, "content_hash": _sha(content),
+            "size_bytes": len(content.encode("utf-8"))}
+
+
+def _make_code_and_docs_repo(root: Path) -> None:
+    _write((root / "a.py"), "def a():\n    return 1\n")
+    _write((root / "README.md"), "# Readme\nhello\n")
+    (root / "docs").mkdir()
+    _write((root / "docs" / "guide.rst"), "Guide\n=====\n")
+    _write((root / "notes.txt"), "plain notes\n")
+    (root / "node_modules" / "pkg").mkdir(parents=True)
+    _write((root / "node_modules" / "pkg" / "README.md"), "vendored\n")
+
+
+def _host(mod) -> str:
+    return mod._env("RETRIEVAL_HOST", "RETRIVAL_HOST", default=mod.socket.gethostname()) or ""
+
+
+# ---- I1: one walk, two kinds ------------------------------------------------
+
+def test_walk_repo_files_classifies_code_and_documents_in_one_walk(tmp_path, monkeypatch):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    _write((tmp_path / "CMakeLists.txt"), "project(x)\n")  # code, not a doc
+    _write((tmp_path / "page.MDX"), "# mdx\n")
+    _write((tmp_path / "spec.adoc"), "= spec\n")
+    _write((tmp_path / "essay.markdown"), "# essay\n")
+    (tmp_path / "image.png").write_bytes(b"\x89PNG")
+    (tmp_path / ".github").mkdir()
+    _write((tmp_path / ".github" / "CONTRIBUTING.md"), "hidden dir\n")
+    (tmp_path / "private").mkdir()
+    _write((tmp_path / "private" / "secret.md"), "excluded\n")
+    (tmp_path / "drafts").mkdir()
+    _write((tmp_path / "drafts" / "wip.md"), "retrievalignore\n")
+    _write((tmp_path / "drafts" / "wip.py"), "x = 1\n")
+    _write((tmp_path / ".retrievalignore"), "drafts/\n")
+
+    walks = []
+    real_walk = os.walk
+
+    def counting_walk(*args, **kwargs):
+        walks.append(args[0])
+        return real_walk(*args, **kwargs)
+
+    monkeypatch.setattr(mod.os, "walk", counting_walk)
+    found = {rel: kind for _path, rel, kind in mod._walk_repo_files(
+        str(tmp_path), respect_gitignore=False, exclude_globs=["private/"])}
+
+    assert len(walks) == 1, "code and documents must come from ONE directory walk"
+    assert found == {
+        "a.py": "code", "CMakeLists.txt": "code",
+        "README.md": "doc", "docs/guide.rst": "doc", "notes.txt": "doc",
+        "page.MDX": "doc", "spec.adoc": "doc", "essay.markdown": "doc",
+    }
+    assert mod.DOC_EXTS == {".md", ".mdx", ".markdown", ".rst", ".adoc", ".txt"}
+
+
+def test_walk_repo_files_applies_gitignore_identically_to_both_kinds(tmp_path):
+    mod = _load()
+    git_init_repo(tmp_path)
+    _write((tmp_path / ".gitignore"), "ignored.py\nignored.md\n")
+    for name in ("kept.py", "ignored.py", "kept.md", "ignored.md"):
+        _write((tmp_path / name), "x = 1\n")
+
+    found = {rel: kind for _path, rel, kind in mod._walk_repo_files(str(tmp_path))}
+    assert found == {"kept.py": "code", "kept.md": "doc"}
+
+    everything = {rel for _path, rel, _kind in mod._walk_repo_files(
+        str(tmp_path), respect_gitignore=False)}
+    assert {"ignored.py", "ignored.md"} <= everything
+
+
+def test_iter_repo_files_stays_code_only(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    assert {rel for _path, rel in mod._iter_repo_files(str(tmp_path))} == {"a.py"}
+
+
+# ---- I2: index_code sends documents through the journal pipeline -------------
+
+def test_index_code_indexes_documents_in_the_same_run(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    backend = _Backend()
+    _wire(mod, backend)
+
+    out = _index_code_to_completion(mod, repo_root=str(tmp_path), auto_refresh=False)
+
+    code = backend.code_posts()
+    assert len(code) == 1
+    assert {item["rel_path"] for item in code[0]["files"]} == {"a.py"}, \
+        "documents must never be chunked into the code index"
+    bulk = backend.bulk_posts()
+    assert len(bulk) == 1
+    body = bulk[0]
+    assert {item["title"] for item in body["files"]} == {"README.md", "docs/guide.rst", "notes.txt"}
+    assert body["patterns"] == _DOC_GLOBS
+    assert body["max_depth"] is None
+    assert body["replace"] is True
+    assert body["project_slug"] == mod._scope_path(str(tmp_path))
+    assert body["root_dir"] == mod._session_abspath(str(tmp_path))
+    assert {row["rel_path"] for row in body["report_files"]} == {
+        "README.md", "docs/guide.rst", "notes.txt"}
+    assert all(row["kind"] == "doc" and row["collection"] == "journal_chunks"
+               for row in body["report_files"])
+    assert set(body["live_titles"]) == {"README.md", "docs/guide.rst", "notes.txt"}
+    assert any(path == "/api/journal/bulk-index/jobs/doc-1" for path, _ in backend.gets), \
+        "the document job must be polled through the journal endpoint"
+    status_line = out.splitlines()[-1]
+    assert "[completed]" in status_line
+    assert "doc-1" in status_line and "— docs: job doc-1 [completed]" in status_line
+
+
+def test_index_code_registers_document_refresh_policy_like_the_code_policy(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    backend = _Backend()
+    _wire(mod, backend)
+    _index_code_to_completion(
+        mod, repo_root=str(tmp_path), auto_refresh=True, respect_gitignore=False,
+        exclude_globs=["private/"])
+    # the watcher is running now; stop it so the test leaves no task behind
+    for task in list(mod._CODE_WATCH_TASKS.values()):
+        task.cancel()
+    assert backend.policies["code"]["auto_refresh"] is True
+    assert backend.policies["doc"]["auto_refresh"] is True
+    assert backend.policies["doc"]["respect_gitignore"] is False
+    assert backend.policies["doc"]["exclude_globs"] == ["private/"]
+    assert backend.policies["doc"]["root_dir"] == backend.policies["code"]["root_dir"]
+
+
+def test_index_code_without_auto_refresh_does_not_enable_document_refresh(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    backend = _Backend()
+    _wire(mod, backend)
+    _index_code_to_completion(mod, repo_root=str(tmp_path), auto_refresh=False)
+    assert backend.policies["code"]["auto_refresh"] is False
+    assert backend.policies["doc"]["auto_refresh"] is False
+
+
+def test_index_code_docs_false_indexes_only_code(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    backend = _Backend()
+    _wire(mod, backend)
+
+    out = _index_code_to_completion(
+        mod, repo_root=str(tmp_path), auto_refresh=False, docs=False)
+
+    assert [path for path, _ in backend.posts] == ["/api/index/policy", "/api/code/index"]
+    assert backend.policies.keys() == {"code"}
+    assert "— docs:" not in out.splitlines()[-1]
+
+
+def test_index_code_docs_false_turns_document_refresh_off_for_a_previously_enabled_scope(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path))
+    _wire(mod, backend)
+
+    _index_code_to_completion(mod, repo_root=str(tmp_path), auto_refresh=False, docs=False)
+
+    assert backend.policies["doc"]["auto_refresh"] is False
+    assert backend.bulk_posts() == []
+
+
+def test_index_code_document_envelope_leaves_other_catalog_rows_alone(tmp_path):
+    # Rows outside *.{md,mdx,markdown,rst,adoc,txt}, or under a dot-dir, belong to other
+    # callers (journal_index_dir --pattern "*.json", .conversations/). They are not part of
+    # this run's envelope, so they must neither block replace nor be swept.
+    mod = _load()
+    _write((tmp_path / "README.md"), "# hi\n")
+    backend = _Backend()
+    backend.inventory["doc"] = [
+        _doc_row("data.json", "{}"), _doc_row(".conversations/x.md", "chat\n"),
+        _doc_row("README.md", "# old text\n")]
+    _wire(mod, backend)
+
+    _index_code_to_completion(mod, repo_root=str(tmp_path), auto_refresh=False)
+
+    body = backend.bulk_posts()[0]
+    assert body["patterns"] == _DOC_GLOBS and body["max_depth"] is None
+    assert body["live_titles"] == ["README.md"]
+    # README.md overlaps the in-envelope catalog rows, so the snapshot may replace; had
+    # data.json / .conversations/x.md leaked into the envelope this would still hold, so
+    # also prove they were not sent as files or live titles:
+    assert body["replace"] is True
+    assert {item["title"] for item in body["files"]} == {"README.md"}
+
+
+def test_index_code_skips_unchanged_documents(tmp_path):
+    mod = _load()
+    content = "# Readme\nhello\n"
+    _write((tmp_path / "README.md"), content)
+    backend = _Backend()
+    backend.inventory["doc"] = [_doc_row("README.md", content)]
+    _wire(mod, backend)
+
+    out = _index_code_to_completion(mod, repo_root=str(tmp_path), auto_refresh=False)
+
+    assert backend.bulk_posts() == []
+    assert "1 unchanged" in out
+
+
+def test_index_code_doc_scope_block_is_reported_and_does_not_block_code(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    parent = mod._scope_path(str(tmp_path.parent))
+    backend = _Backend(overlap={"doc": [{"project": parent, "host": "h1"}]})
+    _wire(mod, backend)
+
+    out = _index_code_to_completion(mod, repo_root=str(tmp_path), auto_refresh=False)
+
+    assert len(backend.code_posts()) == 1, "a doc-side block must not stop the code index"
+    assert backend.bulk_posts() == []
+    assert "Doc scope" in out and "already covered by ancestor scope" in out
+    assert out.splitlines()[-1].count("[completed]") == 1
+    assert backend.policies.get("doc", {}).get("auto_refresh", False) is False
+
+
+def test_index_code_code_scope_block_does_not_stop_documents(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    parent = mod._scope_path(str(tmp_path.parent))
+    backend = _Backend(overlap={"code": [{"project": parent, "host": "h1"}]})
+    _wire(mod, backend)
+
+    out = _index_code_to_completion(mod, repo_root=str(tmp_path), auto_refresh=False)
+
+    assert backend.code_posts() == []
+    assert "Code scope" in out and "not indexed" in out
+    assert len(backend.bulk_posts()) == 1
+
+
+@pytest.mark.parametrize("code_status, doc_status, expected", [
+    ("completed", "completed", "completed"),
+    ("completed", "failed", "failed"),
+    ("failed", "completed", "failed"),
+])
+def test_index_code_status_reports_code_and_document_jobs_and_fails_if_either_fails(
+        tmp_path, code_status, doc_status, expected):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    backend = _Backend(code_job_status=code_status, doc_job_status=doc_status,
+                       doc_job_error="embed exploded" if doc_status == "failed" else None)
+    _wire(mod, backend)
+
+    out = _index_code_to_completion(mod, repo_root=str(tmp_path), auto_refresh=False)
+
+    line = out.splitlines()[-1]
+    assert f"[{expected}]" in line
+    assert "code-1" in line, "the code job must stay visible"
+    assert "doc-1" in line, "the document job must be visible next to it"
+    if doc_status == "failed":
+        assert "embed exploded" in line
+    listing = asyncio.run(mod.index_code_status())
+    assert f"[{expected}]" in listing and "doc-1" in listing
+
+
+def test_index_code_status_polls_a_running_document_job(tmp_path):
+    mod = _load()
+    _make_code_and_docs_repo(tmp_path)
+    backend = _Backend(doc_job_status="running")
+    _wire(mod, backend)
+
+    async def scenario():
+        reply = await mod.index_code(repo_root=str(tmp_path), auto_refresh=False)
+        local = re.search(r"job ([0-9a-f]+)", reply).group(1)
+        await _wait_until(lambda: backend.bulk_posts(), what="the document job submission")
+        await _wait_until(
+            lambda: any(path.startswith("/api/journal/bulk-index/jobs/") for path, _ in backend.gets),
+            what="the document job poll")
+        line = await mod.index_code_status(local)
+        assert "doc-1" in line and "running" in line
+        # a doc job still in flight keeps the whole index_code job open
+        key = (_host(mod), mod._scope_path(str(tmp_path)))
+        assert mod._active_code_preparation(key) is not None
+        backend.doc_job_status = "completed"
+        await mod._CODE_PREPARATION_TASKS[local]
+        assert "[completed]" in await mod.index_code_status(local)
+
+    asyncio.run(scenario())
+
+
+def test_index_code_documents_the_journal_destination_and_docs_flag():
+    mod = _load()
+    parameters = inspect.signature(mod.index_code).parameters
+    assert parameters["docs"].default is True
+    tool = next(t for t in asyncio.run(mod.mcp.list_tools()) if t.name == "index_code")
+    assert "journal_search" in tool.description
+    assert "docs" in tool.inputSchema["properties"]
+    assert tool.inputSchema["properties"]["docs"]["default"] is True
+
+
+# ---- I4: journal_index_dir is a thin, deprecated wrapper --------------------
+
+def test_journal_index_dir_delegates_to_the_shared_document_pipeline(tmp_path, monkeypatch):
+    mod = _load()
+    _write((tmp_path / "a.md"), "# a\n")
+    _write((tmp_path / "b.txt"), "b\n")
+    backend = _Backend()
+    _wire(mod, backend)
+    calls = []
+    real = mod._index_doc_files
+
+    async def spy(*args, **kwargs):
+        calls.append(inspect.signature(real).bind(*args, **kwargs).arguments)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "_index_doc_files", spy)
+
+    out = asyncio.run(mod.journal_index_dir(
+        str(tmp_path), recursive=True, pattern="*.{md,txt}", max_depth=2))
+
+    assert len(calls) == 1
+    assert calls[0]["patterns"] == ["*.md", "*.txt"]
+    assert calls[0]["max_depth"] == 2
+    assert {Path(p).name for p in calls[0]["files"]} == {"a.md", "b.txt"}
+    assert "Queued Journal bulk index job 'doc-1' for 2 changed file(s)" in out
+    assert "poll journal_index_status(job_id='doc-1')" in out
+
+
+def test_journal_index_dir_keeps_its_signature_and_announces_the_deprecation():
+    mod = _load()
+    parameters = list(inspect.signature(mod.journal_index_dir).parameters.items())
+    assert [(name, p.default) for name, p in parameters] == [
+        ("dir", "."), ("recursive", False), ("pattern", "*.md"), ("max_depth", None),
+        ("respect_gitignore", True)]
+    assert inspect.getdoc(mod.journal_index_dir).startswith("Deprecated")
+    assert "index_code" in inspect.getdoc(mod.journal_index_dir).split("\n\n")[0]
+    tool = next(t for t in asyncio.run(mod.mcp.list_tools()) if t.name == "journal_index_dir")
+    assert tool.description.lstrip().startswith("Deprecated")
+
+
+# ---- I3: the watcher keeps documents fresh ---------------------------------
+
+async def _wait_until(predicate, timeout_seconds=10.0, what="the filesystem watcher event"):
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while not predicate():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        await asyncio.sleep(0.05)
+
+
+def _start_watcher(mod, root: Path):
+    # `_load()` gives every test its own module, so this does not leak. The 5-minute floor
+    # on automatic submissions would hold every second event of these tests; the policy a
+    # test seeds (default 0) then decides the interval.
+    mod._AUTO_INDEX_MIN_INTERVAL_S = 0
+    project = mod._scope_path(str(root))
+    task = mod._ensure_code_watcher(project=project, host="desktop", repo_root=str(root))
+    assert task is not None
+    return project, task
+
+
+async def _stop(task) -> None:
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+def test_collect_watched_changes_routes_documents_apart_from_code(tmp_path):
+    mod = _load()
+    _write((tmp_path / "a.py"), "value = 1\n")
+    _write((tmp_path / "new.md"), "# new\n")
+    _write((tmp_path / "same.md"), "same\n")
+    _write((tmp_path / "edited.md"), "edited now\n")
+    (tmp_path / "private").mkdir()
+    _write((tmp_path / "private" / "skip.md"), "excluded\n")
+    (tmp_path / ".github").mkdir()
+    _write((tmp_path / ".github" / "hidden.md"), "hidden\n")
+    (tmp_path / "node_modules").mkdir()
+    _write((tmp_path / "node_modules" / "README.md"), "vendored\n")
+    known_docs = {
+        "same.md": {"content_hash": _sha("same\n")},
+        "edited.md": {"content_hash": "old"},
+        "gone.md": {"content_hash": "old"},
+        "private/skip.md": {"content_hash": "old"},
+    }
+    changed = {str(tmp_path / name) for name in (
+        "a.py", "new.md", "same.md", "edited.md", "gone.md", "private/skip.md",
+        ".github/hidden.md", "node_modules/README.md")}
+
+    result = mod._collect_watched_changes(
+        str(tmp_path), changed, {}, known_docs, False, ["private/"])
+
+    assert {payload["rel_path"] for payload in result.payloads} == {"a.py"}
+    assert {c.rel_path for c in result.doc_changed} == {"new.md", "edited.md"}
+    assert all(c.readable for c in result.doc_changed)
+    assert result.doc_removed == ["gone.md", "private/skip.md"]
+    assert result.removed == [] and result.requires_reconcile is False
+
+    # code-only callers see exactly what they saw before documents existed
+    payloads, removed, _current, reconcile = mod._collect_watched_code_changes(
+        str(tmp_path), changed, {}, False, ["private/"])
+    assert {payload["rel_path"] for payload in payloads} == {"a.py"}
+    assert removed == [] and reconcile is False
+
+
+def test_collect_watched_changes_ignores_documents_when_the_scope_has_none_enabled(tmp_path):
+    mod = _load()
+    _write((tmp_path / "new.md"), "# new\n")
+    result = mod._collect_watched_changes(
+        str(tmp_path), {str(tmp_path / "new.md"), str(tmp_path / "gone.md")}, {}, None,
+        False, [])
+    assert result.doc_changed == [] and result.doc_removed == []
+
+
+def test_real_watcher_sends_changed_documents_with_replace_false(tmp_path):
+    mod = _load()
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path))
+    _wire(mod, backend)
+
+    async def scenario():
+        project, task = _start_watcher(mod, tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: mod._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+
+        _write((tmp_path / "a.py"), "value = 1\n")
+        await _wait_until(lambda: len(backend.code_posts()) >= 1, what="the code job")
+        doc_reads = [(p, q) for p, q in backend.gets
+                     if q and q.get("kind") == "doc" and p in {"/api/index/policy", "/api/index/inventory"}]
+        assert doc_reads == [], "a code-only event must not touch the document catalog"
+
+        _write((tmp_path / "notes.md"), "first\n")
+        await _wait_until(lambda: len(backend.bulk_posts()) >= 1, what="the first document job")
+        first = backend.bulk_posts()[0]
+        assert first["replace"] is False
+        assert [item["title"] for item in first["files"]] == ["notes.md"]
+        assert first["files"][0]["body"] == "first\n"
+        assert first["patterns"] == _DOC_GLOBS and first["max_depth"] is None
+        assert first["project_slug"] == project
+        assert [row["rel_path"] for row in first["report_files"]] == ["notes.md"]
+        assert len(backend.code_posts()) == 1, "a document event must not submit a code job"
+        assert any(p == "/api/index/inventory" and q.get("kind") == "doc" for p, q in backend.gets), \
+            "the known document set comes from the doc inventory"
+
+        _write((tmp_path / "notes.md"), "second\n")
+        await _wait_until(lambda: len(backend.bulk_posts()) >= 2, what="the edited document job")
+        second = backend.bulk_posts()[1]
+        assert second["replace"] is False
+        assert second["files"][0]["body"] == "second\n"
+        assert backend.posted("/api/journal/docs/reconcile") == []
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_real_watcher_reconciles_a_deleted_document_against_the_known_set(tmp_path):
+    mod = _load()
+    _write((tmp_path / "keep.md"), "keep\n")
+    _write((tmp_path / "gone.md"), "gone\n")
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path))
+    backend.inventory["doc"] = [_doc_row("keep.md", "keep\n"), _doc_row("gone.md", "gone\n"),
+                                _doc_row("data.json", "{}")]  # outside the envelope
+    _wire(mod, backend)
+
+    async def scenario():
+        project, task = _start_watcher(mod, tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: mod._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+        (tmp_path / "gone.md").unlink()
+        await _wait_until(lambda: len(backend.posted("/api/journal/docs/reconcile")) >= 1,
+                          what="the document reconcile")
+        reconcile = backend.posted("/api/journal/docs/reconcile")[0]
+        assert reconcile["project_slug"] == project
+        assert reconcile["live_titles"] == ["keep.md"]
+        assert reconcile["patterns"] == _DOC_GLOBS and reconcile["max_depth"] is None
+        report = backend.posted("/api/index/report")[0]
+        assert report["replace"] is True
+        assert [row["rel_path"] for row in report["files"]] == ["keep.md"]
+        assert report["patterns"] == _DOC_GLOBS and report["max_depth"] is None
+        order = [path for path, _ in backend.posts]
+        assert order.index("/api/index/report") < order.index("/api/journal/docs/reconcile")
+        assert backend.bulk_posts() == [] and backend.code_posts() == []
+        assert any(p == "/api/index/inventory" and q.get("kind") == "doc" for p, q in backend.gets)
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_real_watcher_never_deletes_the_last_document(tmp_path):
+    # The backend refuses an empty snapshot; the client must not even ask, and must not
+    # touch the catalog either, or journal and catalog would disagree.
+    mod = _load()
+    _write((tmp_path / "only.md"), "only\n")
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path))
+    backend.inventory["doc"] = [_doc_row("only.md", "only\n")]
+    _wire(mod, backend)
+
+    async def scenario():
+        project, task = _start_watcher(mod, tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: mod._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+        (tmp_path / "only.md").unlink()
+        await _wait_until(
+            lambda: any(p == "/api/index/inventory" and q.get("kind") == "doc"
+                        for p, q in backend.gets), what="the document baseline")
+        await asyncio.sleep(1.5)  # past the debounce: the batch has been processed
+        assert backend.posted("/api/journal/docs/reconcile") == []
+        assert backend.posted("/api/index/report") == []
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_real_watcher_ignores_documents_when_the_scope_has_no_document_policy(tmp_path):
+    mod = _load()
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path), docs=False)  # an older index_code run: code only
+    _wire(mod, backend)
+
+    async def scenario():
+        project, task = _start_watcher(mod, tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: mod._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+        _write((tmp_path / "notes.md"), "ignored\n")
+        await _wait_until(
+            lambda: any(p == "/api/index/policy" and q.get("kind") == "doc" for p, q in backend.gets),
+            what="the document policy lookup")
+        await asyncio.sleep(1.5)
+        _write((tmp_path / "a.py"), "value = 1\n")
+        await _wait_until(lambda: len(backend.code_posts()) >= 1, what="the code job")
+        assert backend.bulk_posts() == []
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_real_watcher_ignore_file_change_reconciles_documents_too(tmp_path):
+    mod = _load()
+    a_py = "value = 1\n"
+    _write((tmp_path / "a.py"), a_py)
+    _write((tmp_path / "README.md"), "# Readme\n")
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path))
+    backend.policies["code"]["respect_gitignore"] = True
+    backend.policies["doc"]["respect_gitignore"] = True
+    backend.inventory["code"] = [{
+        "rel_path": "a.py", "kind": "code", "content_hash": _sha(a_py), "chunk_count": 1,
+        "language": "python"}]
+    _wire(mod, backend)
+
+    async def scenario():
+        project, task = _start_watcher(mod, tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: mod._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+        _write((tmp_path / ".gitignore"), "*.log\n")
+        await _wait_until(lambda: len(backend.bulk_posts()) >= 1, what="the document reconcile job")
+        body = backend.bulk_posts()[0]
+        assert body["replace"] is True, "an ignore-file change is a full-snapshot reconcile"
+        assert [item["title"] for item in body["files"]] == ["README.md"]
+        assert body["patterns"] == _DOC_GLOBS and body["max_depth"] is None
+        assert backend.code_posts() == [], "code was already current"
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+# ---- automatic indexing runs at most once per interval per scope -------------
+
+def _code_post_files(backend) -> list[set[str]]:
+    return [{item["rel_path"] for item in body["files"]} for body in backend.code_posts()]
+
+
+def test_real_watcher_holds_changes_inside_the_interval_and_sends_one_batch(tmp_path):
+    mod = _load()
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path), docs=False, interval=2)
+    _wire(mod, backend)
+
+    async def scenario():
+        project, task = _start_watcher(mod, tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: mod._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+
+        _write((tmp_path / "a.py"), "value = 1\n")
+        await _wait_until(lambda: len(backend.code_posts()) >= 1, what="the first code job")
+        first_seen = time.monotonic()
+        assert _code_post_files(backend) == [{"a.py"}]
+
+        # Three writes to two files, all inside the interval of the first submission.
+        for name, text in (("a.py", "value = 2\n"), ("b.py", "other = 1\n"),
+                           ("a.py", "value = 3\n")):
+            _write((tmp_path / name), text)
+            await asyncio.sleep(0.1)
+        # Well past the 800 ms debounce but before 2 s since the first submission.
+        await asyncio.sleep(first_seen + 1.5 - time.monotonic())
+        assert len(backend.code_posts()) == 1, \
+            "a change inside the interval must be held, not submitted"
+
+        await _wait_until(lambda: len(backend.code_posts()) >= 2, timeout_seconds=5.0,
+                          what="the held batch after the interval")
+        await asyncio.sleep(0.5)
+        assert _code_post_files(backend) == [{"a.py"}, {"a.py", "b.py"}], \
+            "the held changes go out as one batch with both files"
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_real_watcher_sends_the_first_change_after_a_quiet_interval_without_waiting(tmp_path):
+    mod = _load()
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path), docs=False, interval=3)
+    _wire(mod, backend)
+
+    async def scenario():
+        project, task = _start_watcher(mod, tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: mod._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+
+        _write((tmp_path / "a.py"), "value = 1\n")
+        await _wait_until(lambda: len(backend.code_posts()) >= 1, what="the first code job")
+        first_seen = time.monotonic()
+        _write((tmp_path / "b.py"), "other = 1\n")
+        await asyncio.sleep(first_seen + 2.0 - time.monotonic())
+        assert len(backend.code_posts()) == 1, "the second change waits for the interval"
+        await _wait_until(lambda: len(backend.code_posts()) >= 2, timeout_seconds=5.0,
+                          what="the held change after the interval")
+
+        # A full interval passes with no change: the next change is not delayed again.
+        await asyncio.sleep(3.3)
+        started = time.monotonic()
+        _write((tmp_path / "c.py"), "third = 1\n")
+        await _wait_until(lambda: len(backend.code_posts()) >= 3, timeout_seconds=6.0,
+                          what="the change after a quiet interval")
+        latency = time.monotonic() - started
+        assert latency < 2.5, f"debounce plus margin expected, took {latency:.2f}s"
+        assert _code_post_files(backend)[2] == {"c.py"}
+        await _stop(task)
+
+    asyncio.run(scenario())
+
+
+def test_real_watcher_status_shows_pending_changes_and_time_to_next_refresh(tmp_path):
+    mod = _load()
+    backend = _Backend()
+    backend.seed_policies(str(tmp_path), docs=False, interval=3)
+    _wire(mod, backend)
+
+    async def scenario():
+        project, task = _start_watcher(mod, tmp_path)
+        key = ("desktop", project)
+        await _wait_until(lambda: mod._CODE_WATCH_STATUS.get(key, {}).get("state") == "watching",
+                          what="watcher start")
+
+        _write((tmp_path / "a.py"), "value = 1\n")
+        await _wait_until(lambda: len(backend.code_posts()) >= 1, what="the first code job")
+        _write((tmp_path / "b.py"), "other = 1\n")
+        await _wait_until(lambda: "next_refresh_in_s" in mod._CODE_WATCH_STATUS.get(key, {}),
+                          timeout_seconds=4.0, what="the waiting status")
+        status = dict(mod._CODE_WATCH_STATUS[key])
+        assert status["state"] == "watching"
+        assert status["pending_changes"] >= 1
+        assert 1 <= status["next_refresh_in_s"] <= 3
+        line = mod._format_refresh_status(status)
+        assert "next refresh in" in line
+        assert f"{status['pending_changes']} pending change(s)" in line
+        assert f"next refresh in {status['next_refresh_in_s']}s" in line
+        # Without a wait the line is what it always was.
+        assert mod._format_refresh_status({"state": "watching", "files": 3}) == (
+            "Index freshness: filesystem watcher active (3 files).")
+        await _stop(task)
+
+    asyncio.run(scenario())

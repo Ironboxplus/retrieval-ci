@@ -22,7 +22,7 @@ from qdrant_client.http import models as qmodels  # noqa: E402
 
 from app.services.code_kb.schemas import CodeChunkIn, CodeFileIn, CodeIndexRequest  # noqa: E402
 from app.services.code_kb.service import CodeKBService  # noqa: E402
-from app.services.code_kb.vector_store import CodeVectorStore  # noqa: E402
+from app.services.code_kb.vector_store import CodeVectorStore, point_id  # noqa: E402
 from core.storage.qdrant_store import QdrantStore  # noqa: E402
 
 # Loopback only and hardcoded, never from settings/QDRANT_URL.
@@ -167,3 +167,205 @@ def test_a_point_from_another_project_or_owner_is_never_reused(store):
                   owner_user_id="someone-else")
 
     assert len(embedded) == 4
+
+
+# ---------------------------------------------------------------------------------------
+# Content reuse (2026-11-15): a line shift changes the point id and the line payload but not
+# the embedded text, so the stored vector of a shifted chunk must be copied into the NEW
+# point instead of being re-embedded. Reuse only ever copies; the old points are still
+# pruned after the upsert, so there is never a headless or a duplicate chunk vector.
+# ---------------------------------------------------------------------------------------
+
+PIECE_A = "def alpha(x):\n    return x + 1\n"
+PIECE_B = "def beta(y):\n    return y * 2\n"
+PIECE_C = "def gamma(z):\n    return z - 3\n"
+PIECE_NEW = "def zero():\n    return 0\n"
+
+
+def _shift_file(path: str = "pkg/shift.py") -> tuple[CodeFileIn, CodeFileIn]:
+    """(before, after): after has one new chunk on top, so every old chunk moves 3 lines."""
+    before = _file(path, [(1, PIECE_A), (4, PIECE_B), (7, PIECE_C)])
+    after = _file(path, [(1, PIECE_NEW), (4, PIECE_A), (7, PIECE_B), (10, PIECE_C)])
+    return before, after
+
+
+def _expected_ids(file: CodeFileIn, project: str = PROJECT, rel_path: str | None = None) -> set[int]:
+    return {point_id(OWNER, project, rel_path or file.rel_path, chunk.start_line, chunk.label, ordinal)
+            for ordinal, chunk in enumerate(file.chunks)}
+
+
+def _points(store: CodeVectorStore, path: str, project: str = PROJECT) -> dict:
+    """id -> point (payload + dense/sparse) of one file of one scope, read straight from Qdrant."""
+    points = store.store.client.scroll(COLLECTION, limit=1000, with_payload=True,
+                                       with_vectors=True)[0]
+    return {point.id: point for point in points
+            if point.payload["path"] == path and point.payload["project"] == project
+            and point.payload["owner_user_id"] == OWNER}
+
+
+def _vector_by_content(points: dict) -> dict:
+    return {point.payload["content"]: (point.vector["dense"], point.vector["sparse"])
+            for point in points.values()}
+
+
+def _incremental(file: CodeFileIn, project: str = PROJECT) -> CodeIndexRequest:
+    return CodeIndexRequest(project=project, host="box", files=[file], incremental=True,
+                            manifest=[file.rel_path])
+
+
+def test_incremental_line_shift_embeds_only_the_inserted_chunk(store):
+    embedded: list[str] = []
+    service = _service(store, embedded)
+    before, after = _shift_file()
+    service.index(CodeIndexRequest(project=PROJECT, host="box", files=[before]),
+                  owner_user_id=OWNER)
+    old_points = _points(store, before.rel_path)
+    old_vectors = _vector_by_content(old_points)
+    assert len(old_points) == 3
+    embedded.clear()
+
+    response = service.index(_incremental(after), owner_user_id=OWNER)
+
+    assert embedded == [after.chunks[0].content]
+    assert response.indexed == 4
+    new_points = _points(store, after.rel_path)
+    assert set(new_points) == _expected_ids(after)               # exactly the new ids ...
+    assert not set(new_points) & set(old_points)                 # ... every old id pruned
+    assert len(new_points) == len(after.chunks)                  # one point per chunk, none headless
+    new_vectors = _vector_by_content(new_points)
+    for chunk in before.chunks:                                  # the copy equals the old vector
+        assert new_vectors[chunk.content] == old_vectors[chunk.content]
+    assert {point.payload["start_line"] for point in new_points.values()} == {1, 4, 7, 10}
+
+
+def test_full_index_line_shift_embeds_only_the_inserted_chunk(store):
+    embedded: list[str] = []
+    service = _service(store, embedded)
+    before, after = _shift_file()
+    steady = ASCII_FILE
+    service.index(CodeIndexRequest(project=PROJECT, host="box", files=[before, steady]),
+                  owner_user_id=OWNER)
+    old_points = _points(store, before.rel_path)
+    old_vectors = _vector_by_content(old_points)
+    steady_before = _vectors(store, steady)
+    embedded.clear()
+
+    response = service.index(
+        CodeIndexRequest(project=PROJECT, host="box", files=[after, steady]), owner_user_id=OWNER)
+
+    assert embedded == [after.chunks[0].content]
+    assert response.indexed == 6
+    new_points = _points(store, after.rel_path)
+    assert set(new_points) == _expected_ids(after)
+    assert not set(new_points) & set(old_points)
+    new_vectors = _vector_by_content(new_points)
+    for chunk in before.chunks:
+        assert new_vectors[chunk.content] == old_vectors[chunk.content]
+    assert _vectors(store, steady) == steady_before
+    everything = store.list_point_ids_for_paths(owner_user_id=OWNER, project=PROJECT)
+    assert everything == _expected_ids(after) | _expected_ids(steady)   # no stale id anywhere
+
+
+def test_a_stored_vector_under_another_embed_fp_is_never_reused_by_content(store):
+    embedded: list[str] = []
+    service = _service(store, embedded)
+    before, after = _shift_file()
+    service.index(CodeIndexRequest(project=PROJECT, host="box", files=[before]),
+                  owner_user_id=OWNER)
+    old_points = _points(store, before.rel_path)
+    foreign_id = next(identity for identity, point in old_points.items()
+                      if point.payload["content"] == before.chunks[1].content)
+    client = store.store.client
+    client.set_payload(COLLECTION, payload={"embed_fp": "some-older-model"},
+                       points=[foreign_id], wait=True)
+    poison = [0.0] * DIM
+    poison[DIM - 1] = 9.0
+    client.update_vectors(COLLECTION, points=[qmodels.PointVectors(
+        id=foreign_id, vector={"dense": poison})], wait=True)
+    embedded.clear()
+
+    service.index(_incremental(after), owner_user_id=OWNER)
+
+    # New chunk + the one whose stored vector belongs to another model; the other two copy.
+    assert sorted(embedded) == sorted([after.chunks[0].content, before.chunks[1].content])
+    new_vectors = _vector_by_content(_points(store, after.rel_path))
+    assert new_vectors[before.chunks[1].content][0] != poison
+    for point in _points(store, after.rel_path).values():
+        assert point.payload["embed_fp"] != "some-older-model"
+
+
+def test_a_stored_point_without_a_sparse_vector_is_not_reused_by_content(store):
+    embedded: list[str] = []
+    service = _service(store, embedded)
+    before, after = _shift_file()
+    service.index(CodeIndexRequest(project=PROJECT, host="box", files=[before]),
+                  owner_user_id=OWNER)
+    old_points = _points(store, before.rel_path)
+    lexical_less = next(identity for identity, point in old_points.items()
+                        if point.payload["content"] == before.chunks[2].content)
+    store.store.client.delete_vectors(COLLECTION, vectors=["sparse"], points=[lexical_less],
+                                      wait=True)
+    embedded.clear()
+
+    service.index(_incremental(after), owner_user_id=OWNER)
+
+    assert sorted(embedded) == sorted([after.chunks[0].content, before.chunks[2].content])
+    for point in _points(store, after.rel_path).values():
+        assert point.vector["sparse"] is not None
+
+
+def test_identical_chunks_in_one_file_each_get_a_vector_and_a_point(store):
+    embedded: list[str] = []
+    service = _service(store, embedded)
+    twin = "def twin(x):\n    return x\n"
+    before = _file("pkg/twins.py", [(1, twin), (4, twin), (7, PIECE_A)])
+    after = _file("pkg/twins.py", [(1, PIECE_NEW), (5, twin), (8, twin), (11, PIECE_A)])
+
+    service.index(CodeIndexRequest(project=PROJECT, host="box", files=[before]),
+                  owner_user_id=OWNER)
+
+    assert sorted(embedded) == sorted([before.chunks[0].content, before.chunks[2].content])
+    first = _points(store, before.rel_path)
+    assert len(first) == 3 and set(first) == _expected_ids(before)   # two distinct twin points
+    twin_points = [point for point in first.values() if point.payload["content"] == before.chunks[0].content]
+    assert len(twin_points) == 2
+    assert twin_points[0].vector["dense"] == twin_points[1].vector["dense"]
+    embedded.clear()
+
+    service.index(_incremental(after), owner_user_id=OWNER)
+
+    assert embedded == [after.chunks[0].content]
+    second = _points(store, after.rel_path)
+    assert set(second) == _expected_ids(after) and len(second) == 4
+    assert not set(second) & set(first)
+    twins_after = [point for point in second.values() if point.payload["content"] == before.chunks[0].content]
+    assert len(twins_after) == 2                                   # both twins kept a point
+    for point in twins_after:
+        assert point.vector["dense"] == twin_points[0].vector["dense"]
+        assert point.vector["sparse"] == twin_points[0].vector["sparse"]
+
+
+def test_fan_out_target_scope_gets_exactly_the_shifted_ids_without_re_embedding(store):
+    embedded: list[str] = []
+    service = _service(store, embedded)
+    child = "/repo/pkg"                       # the same physical file as /repo + pkg/shift.py
+    before, after = _shift_file("pkg/shift.py")
+    child_rel = "shift.py"
+    service.index(CodeIndexRequest(project=child, host="box",
+                                   files=[_file(child_rel, [(1, "def stale():\n    pass\n")])]),
+                  owner_user_id=OWNER)
+    service.index(CodeIndexRequest(project=PROJECT, host="box", files=[before]),
+                  owner_user_id=OWNER)
+    assert set(_points(store, child_rel, child)) == _expected_ids(before, child, child_rel)
+    old_child = _points(store, child_rel, child)
+    embedded.clear()
+
+    service.index(_incremental(after), owner_user_id=OWNER)
+
+    assert embedded == [after.chunks[0].content]
+    target = _points(store, child_rel, child)
+    assert set(target) == _expected_ids(after, child, child_rel)   # exactly the new ids
+    assert not set(target) & set(old_child)                        # nothing stale left behind
+    assert len(target) == len(after.chunks)
+    assert store.list_point_ids_for_paths(owner_user_id=OWNER, project=child) == set(target)
+    assert set(_points(store, after.rel_path)) == _expected_ids(after)

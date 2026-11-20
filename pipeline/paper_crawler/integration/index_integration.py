@@ -24,7 +24,7 @@ _project_root = Path(__file__).parent.parent.parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from config import settings as retrieval_settings
+from core.cache import DISTRIBUTION_TTL_SECONDS, TOTAL_COUNT_TTL_SECONDS, stats_cache
 from core.db.database import get_db_session
 from core.db.models import (
     Chunk as DBChunk,
@@ -35,13 +35,23 @@ from core.db.models import (
     SourceType,
 )
 from core.indexing.embedders import get_embedder as _get_shared_embedder
+from core.indexing.embedding_profile import current_embed_fp
 from app.models.schemas import AggregatedResult, SearchResult
-from pipeline.paper_crawler.runtime_files import load_json_with_recovery, write_json_atomic
 from app.services.index_service import IndexService
 from core.storage.qdrant_store import QdrantStore as ChromaStore
 
 DEFAULT_PAPER_COLLECTION_NAME = "papers"
 DEFAULT_PAPER_DATA_SOURCE = "system"
+
+
+def existing_doc_id(db, paper_id: str) -> Optional[int]:
+    """The SQL document currently holding `paper_id`'s text, or None.
+
+    `papers.doc_id` (UNIQUE FK -> documents.id) is the one mapping from a business
+    paper id to its document; it is written in the same transaction as the
+    document, so it cannot disagree with it the way a side JSON file could.
+    """
+    return db.query(DBPaper.doc_id).filter(DBPaper.paper_id == paper_id).scalar()
 
 
 def _load_module_from_path(module_name: str, module_path: Path):
@@ -160,17 +170,6 @@ class PaperIndexer:
         self._index_service: Optional[IndexService] = None
         self._new_embedder = None
         self._chroma_store: Optional[ChromaStore] = None
-        self._paper_doc_mapping: Dict[str, str] = {}
-        # Vector count cache — Qdrant get_collection() blocks 60s when indexing
-        # is in flight (W8). get_stats() uses the cached value with a bounded
-        # probe so /api/papers/stats stays responsive during Stage C nightly
-        # ingests. Tuple is (value, set_at_timestamp).
-        self._vector_count_cache: tuple[int, float] = (0, 0.0)
-        # chunk_levels GROUP BY scan is 68s on 6.68M rows without a compound
-        # index on (doc_id, level). Cache it with a 5 min TTL — value rarely
-        # changes mid-session, and a stale value is fine for a stats panel.
-        self._chunk_levels_cache: tuple[Dict[int, int], float] = ({}, 0.0)
-        self._load_paper_mapping()
 
     @property
     def index_service(self) -> IndexService:
@@ -193,23 +192,10 @@ class PaperIndexer:
     @property
     def chroma_store(self) -> ChromaStore:
         if self._chroma_store is None:
-            self._chroma_store = ChromaStore(collection_name=self.config.collection_name)
+            # `papers` resolves to the routed papers/arxiv/reviews corpus.
+            from core.storage.corpus_store import paper_store
+            self._chroma_store = paper_store(self.config.collection_name)
         return self._chroma_store
-
-    def _get_mapping_path(self) -> Path:
-        return Path(retrieval_settings.index_dir) / f"{self.config.collection_name}_paper_doc_mapping.json"
-
-    def _load_paper_mapping(self) -> None:
-        mapping_path = self._get_mapping_path()
-        try:
-            self._paper_doc_mapping = load_json_with_recovery(mapping_path, default_value={})
-        except Exception:
-            self._paper_doc_mapping = {}
-
-    def _save_paper_mapping(self) -> None:
-        mapping_path = self._get_mapping_path()
-        mapping_path.parent.mkdir(parents=True, exist_ok=True)
-        write_json_atomic(mapping_path, self._paper_doc_mapping)
 
     def _paper_source_value(self, paper) -> Optional[str]:
         source = getattr(paper, "source", None)
@@ -276,6 +262,7 @@ class PaperIndexer:
             "code_url": str(getattr(paper, "code_url", "")) if getattr(paper, "code_url", None) else None,
             "citations": getattr(paper, "citations", 0) or 0,
             "venue_track": getattr(paper, "venue_track", None),
+            "full_text_source": getattr(paper, "full_text_source", None),
             "markdown_path": str(markdown_path) if markdown_path else None,
         }
         return {key: value for key, value in metadata.items() if value is not None}
@@ -354,19 +341,26 @@ class PaperIndexer:
         paper,
         metadata: Dict[str, Any],
         markdown_path: Optional[Path],
-    ) -> None:
-        paper_row = db.query(DBPaper).filter(DBPaper.doc_id == doc_id).first()
+    ) -> DBPaper:
+        # 方案 X 后：paper_id 是 PK NOT NULL，必须显式 set。
+        # dataclass Paper.id 即业务 paper_id 字符串 (e.g. "aaai-2022-19873")。
+        biz_paper_id = getattr(paper, "id", None) or getattr(paper, "paper_id", None)
+        if not biz_paper_id:
+            raise ValueError(f"paper without business id; cannot insert: doc_id={doc_id}")
+        # One row per paper: a re-index writes a NEW document and re-points the
+        # existing row at it (papers.doc_id is UNIQUE, so the old document simply
+        # stops being referenced; the caller deletes it once its vectors are gone).
+        paper_row = db.get(DBPaper, str(biz_paper_id))
         if paper_row is None:
-            # 方案 X 后：paper_id 是 PK NOT NULL，必须显式 set。
-            # dataclass Paper.id 即业务 paper_id 字符串 (e.g. "aaai-2022-19873")。
-            biz_paper_id = getattr(paper, "id", None) or getattr(paper, "paper_id", None)
-            if not biz_paper_id:
-                raise ValueError(f"paper without business id; cannot insert: doc_id={doc_id}")
             paper_row = DBPaper(paper_id=str(biz_paper_id), doc_id=doc_id)
             db.add(paper_row)
+        else:
+            paper_row.doc_id = doc_id
 
         paper_row.arxiv_id = getattr(paper, "arxiv_id", None)
         paper_row.doi = getattr(paper, "doi", None)
+        if getattr(paper, "full_text_source", None):
+            paper_row.full_text_source = paper.full_text_source
         paper_row.title = paper.title
         paper_row.abstract = getattr(paper, "abstract", None)
         paper_row.authors_json = self._paper_authors(paper)
@@ -377,11 +371,18 @@ class PaperIndexer:
         paper_row.txt_path = str(markdown_path) if markdown_path else metadata.get("markdown_path")
         paper_row.citation_count = metadata.get("citations", 0)
         if not paper_row.venue_tier:
-            paper_row.venue_tier = getattr(paper, "venue_tier", None) or "CCF-A"
+            # The registry owns tiers; a blanket CCF-A default mislabelled IJCAI
+            # 2026 (CCF-B). A venue outside the registry stays untiered.
+            from pipeline.paper_crawler.ccf_a_main_corpus import registry_venue_tier
+
+            paper_row.venue_tier = (
+                getattr(paper, "venue_tier", None) or registry_venue_tier(paper_row.venue)
+            )
         if not paper_row.venue_source:
             paper_row.venue_source = paper_row.venue
         if not paper_row.track_type:
             paper_row.track_type = getattr(paper, "track_type", None) or "main"
+        return paper_row
 
     def _prepare_paper(self, paper, markdown_path: Optional[Path], content: Optional[str] = None) -> Dict[str, Any]:
         """Prepare paper content, metadata, and chunks (CPU only, no embedding)."""
@@ -421,7 +422,7 @@ class PaperIndexer:
         paper_url = self._paper_url(paper)
         extra_metadata = {**(prepared["vector_metadata"] or {}),
                           "title": paper.title, "source": paper_url,
-                          "doc_id": str_doc_id}
+                          "doc_id": str_doc_id, "embed_fp": current_embed_fp()}
         for chunk in chunks:
             chunk.doc_id = str_doc_id
             chunk.metadata.update(extra_metadata)
@@ -440,7 +441,6 @@ class PaperIndexer:
         doc.status = DocumentStatus.indexed
         self._upsert_paper_row(db=db, doc_id=doc.id, paper=paper,
                                metadata=prepared["metadata"], markdown_path=prepared["markdown_path"])
-        self._paper_doc_mapping[paper.id] = str(doc.id)
         return str_doc_id
 
     async def index_paper(
@@ -448,23 +448,17 @@ class PaperIndexer:
         paper,
         markdown_path: Optional[Path] = None,
         content: Optional[str] = None,
-        save_mapping: bool = True,
         force_reindex: bool = True,
         skip_whoosh: bool = False,
     ) -> str:
         prepared = self._prepare_paper(paper, markdown_path, content)
 
-        old_doc_id = self._paper_doc_mapping.get(paper.id)
         with get_db_session() as db:
+            old_doc_id = existing_doc_id(db, paper.id)
             if force_reindex and old_doc_id is not None:
-                try:
-                    old_doc_id_int = int(old_doc_id)
-                except ValueError:
-                    old_doc_id_int = None
-                if old_doc_id_int is not None:
-                    self.index_service.delete_document_index(old_doc_id_int, db=db, delete_db_records=True)
-                    db.query(DBPaper).filter(DBPaper.doc_id == old_doc_id_int).delete()
-                    db.query(DBDocument).filter(DBDocument.id == old_doc_id_int).delete()
+                self.index_service.delete_document_index(old_doc_id, db=db, delete_db_records=True)
+                db.query(DBPaper).filter(DBPaper.doc_id == old_doc_id).delete()
+                db.query(DBDocument).filter(DBDocument.id == old_doc_id).delete()
 
             self.index_service._ensure_index_device_ready()
             chunks = self.index_service.chunker.chunk_document(
@@ -476,8 +470,6 @@ class PaperIndexer:
                 sparse_vectors=sparse_vectors,
             )
 
-        if save_mapping:
-            self._save_paper_mapping()
         if self.config.progress_callback:
             self.config.progress_callback(1, 1, paper.title)
         return doc_id
@@ -541,7 +533,6 @@ class PaperIndexer:
                     failed += 1
                     results.append({"paper_id": prep["paper"].id, "status": "failed", "error": str(exc)})
 
-            self._save_paper_mapping()
             return {"indexed": indexed, "failed": failed, "results": results}
 
         if per_batch_timeout_sec > 0:
@@ -603,7 +594,7 @@ class PaperIndexer:
             )
             for document, paper in rows:
                 metadata = dict(document.metadata_json or {})
-                metadata.setdefault("paper_id", next((key for key, value in self._paper_doc_mapping.items() if value == str(document.id)), str(document.id)))
+                metadata.setdefault("paper_id", paper.paper_id if paper else str(document.id))
                 metadata.setdefault("title", document.title or "")
                 metadata.setdefault("source", paper.paper_source if paper else "")
                 metadata.setdefault("conference", paper.venue if paper else metadata.get("conference", "Other"))
@@ -839,136 +830,72 @@ class PaperIndexer:
             }
 
     def get_indexed_doc_id(self, paper_id: str) -> Optional[str]:
-        doc_id = self._paper_doc_mapping.get(paper_id)
-        if doc_id is None:
-            return None
-
-        try:
-            doc_id_int = int(doc_id)
-        except ValueError:
-            return None
-
         with get_db_session() as db:
             document = (
                 db.query(DBDocument.id)
+                .join(DBPaper, DBPaper.doc_id == DBDocument.id)
                 .filter(
-                    DBDocument.id == doc_id_int,
+                    DBPaper.paper_id == paper_id,
                     DBDocument.source_type == SourceType.paper,
                     DBDocument.status == DocumentStatus.indexed,
                 )
                 .first()
             )
-            if document is None:
-                return None
-
-        return str(doc_id_int)
+        return str(document[0]) if document is not None else None
 
     def delete_paper(self, paper_id: str) -> bool:
-        doc_id = self._paper_doc_mapping.get(paper_id)
-        if doc_id is None:
-            return False
-        try:
-            doc_id_int = int(doc_id)
-        except ValueError:
-            return False
-
         with get_db_session() as db:
-            self.index_service.delete_document_index(doc_id_int, db=db, delete_db_records=True)
-            db.query(DBPaper).filter(DBPaper.doc_id == doc_id_int).delete()
-            deleted = db.query(DBDocument).filter(DBDocument.id == doc_id_int).delete()
-            if deleted:
-                del self._paper_doc_mapping[paper_id]
-                self._save_paper_mapping()
-                return True
-        return False
+            doc_id = existing_doc_id(db, paper_id)
+            if doc_id is None:
+                return False
+            self.index_service.delete_document_index(doc_id, db=db, delete_db_records=True)
+            db.query(DBPaper).filter(DBPaper.doc_id == doc_id).delete()
+            return bool(db.query(DBDocument).filter(DBDocument.id == doc_id).delete())
 
     def get_indexed_paper_ids(self) -> List[str]:
-        return sorted(self._paper_doc_mapping.keys())
+        with get_db_session() as db:
+            return sorted(row[0] for row in db.query(DBPaper.paper_id).all())
 
-    def _cached_vector_count(
-        self,
-        max_age_s: float = 30.0,
-    ) -> int:
-        """Fire-and-forget refresh vector count; serve cache instantly.
+    def _cached_vector_count(self) -> int:
+        """Vector count from the shared stale-while-revalidate cache; never probes on the request path.
 
-        Qdrant's `get_collection()` blocks up to 60 s during in-flight HNSW
-        indexing (W8). We never wait for it on the request path — refresh
-        runs on a daemon thread and updates the cache out-of-band. First
-        call after process start returns 0; subsequent calls within
-        `max_age_s` of the latest successful probe return that value.
+        Qdrant's `get_collection()` blocks up to 60 s during in-flight HNSW indexing (W8), so a
+        cold call returns 0 at once and the first probe fills the cache on a daemon thread.
         """
-        import threading
-        import time
+        return stats_cache.get(
+            ("papers.vector_count", self.config.collection_name),
+            lambda: int(self.chroma_store.count()),
+            ttl=TOTAL_COUNT_TTL_SECONDS,
+            default=0,
+        )
 
-        value, set_at = self._vector_count_cache
-        now = time.time()
-        if set_at > 0 and (now - set_at) < max_age_s:
-            return value
+    def _compute_chunk_levels(self) -> Dict[int, int]:
+        with get_db_session() as db:
+            rows = (
+                db.query(DBChunk.level, func.count(DBChunk.id))
+                .join(DBDocument, DBChunk.doc_id == DBDocument.id)
+                .filter(DBDocument.source_type == SourceType.paper)
+                .group_by(DBChunk.level)
+                .all()
+            )
+        return {int(level if level is not None else 0): int(count) for level, count in rows}
 
-        if not getattr(self, "_vector_count_refresh_inflight", False):
-            self._vector_count_refresh_inflight = True
+    def _cached_chunk_levels(self) -> Dict[int, int]:
+        """Chunk-level histogram from the shared stale-while-revalidate cache.
 
-            def _refresh() -> None:
-                try:
-                    probed = int(self.chroma_store.count())
-                    self._vector_count_cache = (probed, time.time())
-                except Exception:
-                    pass  # keep stale value, retry on next miss
-                finally:
-                    self._vector_count_refresh_inflight = False
-
-            threading.Thread(
-                target=_refresh, daemon=True, name="vector-count-refresh"
-            ).start()
-        return value
-
-    def _cached_chunk_levels(self, max_age_s: float = 300.0) -> Dict[int, int]:
-        """Stale-on-miss chunk-level histogram with background refresh.
-
-        The underlying GROUP BY scans 6.68M rows without a compound index on
-        (doc_id, level) — 68 s wall clock. SQL queries can't be safely
-        interrupted, so instead of trying to bound the latency, we serve
-        whatever's in cache and refresh on a daemon thread when stale. First
-        call after process start returns {} immediately; cache fills ~68 s
-        later. TTL 5 min keeps this cheap.
+        The underlying GROUP BY scans 23M rows (19 s on the production host). A cold call returns
+        {} at once and the first scan fills the cache on a daemon thread; afterwards a stale
+        histogram is served while one background refresh runs every 10 minutes.
         """
-        import threading
-        import time
+        return stats_cache.get(
+            "papers.chunk_levels",
+            self._compute_chunk_levels,
+            ttl=DISTRIBUTION_TTL_SECONDS,
+            default={},
+        )
 
-        value, set_at = self._chunk_levels_cache
-        now = time.time()
-        if set_at > 0 and (now - set_at) < max_age_s:
-            return value
-
-        if not getattr(self, "_chunk_levels_refresh_inflight", False):
-            self._chunk_levels_refresh_inflight = True
-
-            def _refresh() -> None:
-                try:
-                    with get_db_session() as db:
-                        rows = (
-                            db.query(DBChunk.level, func.count(DBChunk.id))
-                            .join(DBDocument, DBChunk.doc_id == DBDocument.id)
-                            .filter(DBDocument.source_type == SourceType.paper)
-                            .group_by(DBChunk.level)
-                            .all()
-                        )
-                    levels = {
-                        int(level if level is not None else 0): int(count)
-                        for level, count in rows
-                    }
-                    self._chunk_levels_cache = (levels, time.time())
-                except Exception:
-                    pass  # keep stale value, retry on next miss
-                finally:
-                    self._chunk_levels_refresh_inflight = False
-
-            threading.Thread(
-                target=_refresh, daemon=True, name="chunk-levels-refresh"
-            ).start()
-        return value
-
-    def get_stats(self) -> Dict[str, Any]:
+    @staticmethod
+    def _count_paper_totals() -> Dict[str, int]:
         with get_db_session() as db:
             total_papers = db.query(func.count(DBPaper.paper_id)).scalar() or 0
             total_documents = (
@@ -984,11 +911,18 @@ class PaperIndexer:
                 .scalar()
                 or 0
             )
-
         return {
             "total_papers": total_papers,
             "total_documents": total_documents,
             "total_chunks": total_chunks,
+        }
+
+    def get_stats(self) -> Dict[str, Any]:
+        totals = stats_cache.get(
+            "papers.totals", self._count_paper_totals, ttl=TOTAL_COUNT_TTL_SECONDS
+        )
+        return {
+            **totals,
             "chunk_levels": self._cached_chunk_levels(),
             "vector_index_size": self._cached_vector_count(),
             "bm25_index_size": 0,
@@ -998,10 +932,16 @@ class PaperIndexer:
     def to_search_response(self, query: str, results: List[PaperSearchResult]) -> Dict[str, Any]:
         aggregated = []
         chunks: List[SearchResult] = []
+        with get_db_session() as db:
+            doc_ids = {
+                pid: str(doc_id)
+                for pid, doc_id in db.query(DBPaper.paper_id, DBPaper.doc_id)
+                .filter(DBPaper.paper_id.in_([r.paper_id for r in results])).all()
+            } if results else {}
         for result in results:
             aggregated.append(
                 AggregatedResult(
-                    doc_id=self._paper_doc_mapping.get(result.paper_id, result.paper_id),
+                    doc_id=doc_ids.get(result.paper_id, result.paper_id),
                     doc_title=result.title,
                     source=result.paper_page_url or result.source or result.paper_id,
                     hit_count=result.hit_count,

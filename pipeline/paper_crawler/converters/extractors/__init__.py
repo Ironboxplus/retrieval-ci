@@ -5,7 +5,7 @@ Public surface:
     from pipeline.paper_crawler.converters.extractors import (
         PdfExtractor, ExtractionResult, ExtractionStatus,
         MarkerExtractor, MinerUExtractor, PyMuPDFExtractor, FallbackExtractor,
-        create_extractor,
+        create_extractor,   # also "paddleocr_vl": PaddleOCRVLExtractor, imported on demand
     )
 
 Use :func:`create_extractor` to obtain a concrete extractor by name. To
@@ -14,7 +14,7 @@ chain a primary + fallback strategy together, wrap them in a
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 from .base import (
     ExtractionResult,
@@ -26,12 +26,21 @@ from .marker import MarkerExtractor
 from .mineru import MinerUExtractor
 from .pymupdf import PyMuPDFExtractor
 
-# Registry of strategy name → class. Adding a new extractor only requires
-# importing it here and adding one row — no caller branching needed.
-_REGISTRY: dict[str, type[PdfExtractor]] = {
+def _paddleocr_vl(**kwargs) -> PdfExtractor:
+    # Its verification needs lxml and a node KaTeX; processes that never
+    # convert with it (the backend) must not pay for those imports.
+    from .paddleocr_vl import PaddleOCRVLExtractor
+
+    return PaddleOCRVLExtractor(**kwargs)
+
+
+# Registry of strategy name → class (or a factory that imports one lazily). Adding a new
+# extractor only requires importing it here and adding one row — no caller branching needed.
+_REGISTRY: dict[str, Callable[..., PdfExtractor]] = {
     "marker": MarkerExtractor,
     "mineru": MinerUExtractor,
     "pymupdf": PyMuPDFExtractor,
+    "paddleocr_vl": _paddleocr_vl,
 }
 
 

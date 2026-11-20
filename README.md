@@ -13,7 +13,7 @@ Retrieval 是一个面向论文语料、项目工作记忆和代码知识库的�
 - 医学 OA 语料采集线（EuropePMC，internal-only，强制代理与限速）。
 - Index Catalog 与 ACE Playbook。
 - 公网 OIDC/API key、角色权限、额度计费、幂等退款和访问审计。
-- PyPI 当前稳定版为 `retrieval-mcp==0.5.7`（2026-10-13），**35 个** stdio 工具。0.5.7 撤掉 0.5.6 写死在文件 hash 里的切块代数，增量身份恢复为文件字节 sha256；修复旧客户端切出的块请对项目跑一次全量 `index_code`（默认即全量），后端对 id 与内容都未变的块直接复用已存向量，只有真正变了的块重新 embedding。0.5.6 修复代码切块：chonkie 返回 UTF-8 字节偏移，按字符切片使非 ASCII 字符之后的块整体错位（内容和行号都错），超过 384K 字符的源文件只有一个块；大文件改为按空行分段后正常切块。0.5.5 默认逐行显示代码源行号，search_code(show_line_numbers=False) 可返回纯代码；0.5.4 的 `index_inventory` 每个项目一行，默认最多 40 个（需关注的快照优先，其次最近索引），超出时注明"Listing k of n"，并新增 `project` 路径过滤；305 个 scope 曾输出 56,159 字符。0.5.3 的 `import_public_code_repo` 自动检查创建者在仓库路径下的私有索引，精确匹配的 chunk 复用 dense/sparse 向量，只有缺失或变化的部分重新 embedding；job results 返回 `reused_chunk_count`。私有索引保留，公开 payload 不带私有 owner/project/host，工具面与 0.5.2 完全相同。0.5.2 引入本地 clone → Git bundle → 服务端 mirror/index 导入；0.5.1 改善后端错误原因；0.5.0 将公共与联合检索并入 `search_code(sources="private"|"public"|"all")`。普通无参客户端通过轻量 shim 复用每用户唯一 daemon。
+- PyPI 当前稳定版为 `retrieval-mcp==0.5.14`（2026-11-15），**35 个** stdio 工具。0.5.14 让自动索引（文件监视器和自动刷新）每个 scope 至少间隔 5 分钟提交一次，间隔内的改动合并成一批，手动 `index_code` 不受限；后端把策略 `min_check_interval_s` 的下限定为 300 秒。0.5.13（2026-11-13）让 `index_code` 在同一次遍历里同时索引文档（进入 Journal，用 `journal_search` 查），自动索引一并覆盖文档；`journal_index_dir` 已弃用。0.5.12 显示服务端在索引后自动做的重复代码检测摘要（每个结果只出现一次，由服务端判定）。0.5.11 把初始化指令改成硬规则：任务里第一次搜索必须用检索 MCP，之后才用 grep 等命令，例外三条。0.5.10 减少整 scope 读取：基线用精简 inventory，未变化的 `journal_index_dir` 提前返回，增量 `index_code` 直接发送删除列表。0.5.9 可选把 Claude Code / Codex 对话同步进 Journal（`RETRIEVAL_JOURNAL_CONVERSATIONS=1`），deja 与 zstd 解码由插件自带。0.5.7 撤掉 0.5.6 写死在文件 hash 里的切块代数，增量身份恢复为文件字节 sha256；修复旧客户端切出的块请对项目跑一次全量 `index_code`（默认即全量），后端对 id 与内容都未变的块直接复用已存向量，只有真正变了的块重新 embedding。0.5.6 修复代码切块：chonkie 返回 UTF-8 字节偏移，按字符切片使非 ASCII 字符之后的块整体错位（内容和行号都错），超过 384K 字符的源文件只有一个块；大文件改为按空行分段后正常切块。0.5.5 默认逐行显示代码源行号，search_code(show_line_numbers=False) 可返回纯代码；0.5.4 的 `index_inventory` 每个项目一行，默认最多 40 个（需关注的快照优先，其次最近索引），超出时注明"Listing k of n"，并新增 `project` 路径过滤；305 个 scope 曾输出 56,159 字符。0.5.3 的 `import_public_code_repo` 自动检查创建者在仓库路径下的私有索引，精确匹配的 chunk 复用 dense/sparse 向量，只有缺失或变化的部分重新 embedding；job results 返回 `reused_chunk_count`。私有索引保留，公开 payload 不带私有 owner/project/host，工具面与 0.5.2 完全相同。0.5.2 引入本地 clone → Git bundle → 服务端 mirror/index 导入；0.5.1 改善后端错误原因；0.5.0 将公共与联合检索并入 `search_code(sources="private"|"public"|"all")`。普通无参客户端通过轻量 shim 复用每用户唯一 daemon。
 - `0.4.15` 新增 MCP 工具 `search_all_code`：一次调用同时检索私有 Code KB
   与受管 Public Code 语料，用 RRF（`rerank=false`，默认）或共享 cross-encoder
   （`rerank=true`）融合成一个排序，每条结果标注 `[private]` 或
@@ -21,7 +21,7 @@ Retrieval 是一个面向论文语料、项目工作记忆和代码知识库的�
   直接报错，绝不悄悄降级为纯私有结果。后端新增路由
   `POST /api/code/federated-search`（挂在 `/api/code/search` 旁，契约不变）。
   工具面 34 → **35 个**，其余 34 个工具的 digest 不变
-  （`.handfree-output/regen_digests.py --expect search_all_code`）。
+  （`scripts/maintenance/regen_digests.py --expect search_all_code`）。
 - 未发布的 `0.4.14` 候选让上传文档在检索之后可达，工具名与签名不变，仍为 **34 个**。
   `papers` 的 upload/webpage payload profile 里根本没有 `paper_id` 键，所以 `search_papers`
   搜到一本书时那行 `paper_id:` 是空的，`search_within_paper` / `get_paper_markdown` 无从

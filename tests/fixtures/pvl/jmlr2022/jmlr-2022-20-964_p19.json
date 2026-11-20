@@ -1,0 +1,126 @@
+{
+ "paper": "jmlr-2022-20-964",
+ "page": 19,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.040000000000000036,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     215,
+     78,
+     999,
+     102
+    ],
+    "block_content": "EXTENSIONS TO THE PROXIMAL DISTANCE METHOD OF CONSTRAINED OPTIMIZATION"
+   },
+   {
+    "block_id": 1,
+    "block_label": "table",
+    "block_bbox": [
+     175,
+     441,
+     1036,
+     1096
+    ],
+    "block_content": "<table><tr><td></td><td></td><td colspan=\"3\">Time (s)</td><td colspan=\"3\">Loss  $ \\times 10^{3} $</td><td colspan=\"3\">Distance  $ \\times 10^{4} $</td><td colspan=\"3\">MSE  $ \\times 10^{2} $</td></tr><tr><td>d</td><td>m</td><td>MM</td><td>SD</td><td>ADMM</td><td>MM</td><td>SD</td><td>ADMM</td><td>MM</td><td>SD</td><td>ADMM</td><td>MM</td><td>SD</td><td>ADMM</td></tr><tr><td>1</td><td>50</td><td>0.015(0.00477)</td><td>0.0109(0.00162)</td><td>0.0171(0.0033)</td><td>454</td><td>454</td><td>454</td><td>87.3</td><td>87.4</td><td>87.5</td><td>70.1</td><td>70.1</td><td>70.1</td></tr><tr><td></td><td>100</td><td>0.0382(0.002)</td><td>0.0311(0.000301)</td><td>0.0578(0.00179)</td><td>510</td><td>510</td><td>510</td><td>94.3</td><td>94.4</td><td>94.5</td><td>75.3</td><td>75.3</td><td>75.3</td></tr><tr><td></td><td>200</td><td>0.138(0.00662)</td><td>0.0991(0.00138)</td><td>0.205(0.00213)</td><td>471</td><td>471</td><td>471</td><td>92.2</td><td>92.2</td><td>92.2</td><td>71</td><td>71</td><td>71</td></tr><tr><td></td><td>400</td><td>0.565(0.012)</td><td>0.464(0.000493)</td><td>0.862(0.0184)</td><td>501</td><td>501</td><td>501</td><td>96.9</td><td>97</td><td>97</td><td>79.1</td><td>79.1</td><td>79.1</td></tr><tr><td>2</td><td>50</td><td>1.71(0.00334)</td><td>0.693(0.00341)</td><td>16(0.00511)</td><td>122</td><td>126</td><td>118</td><td>85.9</td><td>85.3</td><td>85.5</td><td>72.2</td><td>73.1</td><td>70.8</td></tr><tr><td></td><td>100</td><td>11.8(0.0189)</td><td>3.33(0.00704)</td><td>66.6(0.0844)</td><td>162</td><td>163</td><td>162</td><td>99.4</td><td>98</td><td>98.4</td><td>95.4</td><td>95.8</td><td>95.1</td></tr><tr><td></td><td>200</td><td>51.4(0.0701)</td><td>14.1(0.00805)</td><td>230(0.273)</td><td>233</td><td>234</td><td>233</td><td>98.1</td><td>94.2</td><td>96.8</td><td>123</td><td>123</td><td>122</td></tr><tr><td></td><td>400</td><td>200(1.06)</td><td>50.3(0.299)</td><td>917(1.48)</td><td>239</td><td>239</td><td>238</td><td>94.3</td><td>90.8</td><td>91.9</td><td>140</td><td>140</td><td>140</td></tr><tr><td>10</td><td>50</td><td>0.19(0.00281)</td><td>0.00722(9.99 \\times 10^{-5})</td><td>0.196(0.00743)</td><td>0.000891</td><td>0.00109</td><td>0.000838</td><td>0.821</td><td>2.23</td><td>0.488</td><td>8.59</td><td>8.63</td><td>8.61</td></tr><tr><td></td><td>100</td><td>0.854(0.0002)</td><td>0.0644(0.000503)</td><td>0.873(0.00191)</td><td>0.000937</td><td>0.00097</td><td>0.000943</td><td>0.154</td><td>0</td><td>0.11</td><td>10.3</td><td>10.2</td><td>10.3</td></tr><tr><td></td><td>200</td><td>3.77(0.00486)</td><td>0.398(0.00888)</td><td>3.89(0.0132)</td><td>0.000883</td><td>0.00099</td><td>0.00101</td><td>0.281</td><td>0</td><td>0.292</td><td>9.64</td><td>9.63</td><td>9.65</td></tr><tr><td></td><td>400</td><td>26.8(0.405)</td><td>3.17(0.0183)</td><td>27.6(0.0488)</td><td>0.000992</td><td>0.000997</td><td>0.000999</td><td>0.185</td><td>0.288</td><td>0.176</td><td>9.41</td><td>9.42</td><td>9.39</td></tr><tr><td>20</td><td>50</td><td>0.39(0.00132)</td><td>0.00791(2.6 \\times 10^{-5})</td><td>0.399(0.00193)</td><td>0.000991</td><td>0.00542</td><td>0.00091</td><td>0.027</td><td>7.06</td><td>0.0696</td><td>9.77</td><td>9.34</td><td>9.57</td></tr><tr><td></td><td>100</td><td>1.46(0.000164)</td><td>0.0684(0.000174)</td><td>1.58(0.0329)</td><td>0.000995</td><td>0.000965</td><td>0.000996</td><td>0.0308</td><td>0</td><td>0</td><td>9.13</td><td>9.22</td><td>9</td></tr><tr><td></td><td>200</td><td>7.7(0.166)</td><td>0.414(0.00109)</td><td>7.78(0.0105)</td><td>0.000984</td><td>0.00113</td><td>0.000961</td><td>0.251</td><td>1.74</td><td>0.438</td><td>9.6</td><td>9.61</td><td>9.6</td></tr><tr><td></td><td>400</td><td>30.2(0.0275)</td><td>3.03(0.00605)</td><td>30(0.0157)</td><td>0.000997</td><td>0.00105</td><td>0.00142</td><td>0.0921</td><td>1.68</td><td>0.646</td><td>10</td><td>10.2</td><td>10.2</td></tr></table>"
+   },
+   {
+    "block_id": 2,
+    "block_label": "figure_title",
+    "block_bbox": [
+     233,
+     1123,
+     988,
+     1150
+    ],
+    "block_content": "Table 3: Convex regression. Times are reported as averages over 3 replicates."
+   },
+   {
+    "block_id": 3,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1450,
+     626,
+     1470
+    ],
+    "block_content": "19"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "table: cell '010900162': 0% of its words are in the table region (< 90%)",
+   "table: cell '01710033': 0% of its words are in the table region (< 90%)",
+   "table: cell '0382002': 0% of its words are in the table region (< 90%)",
+   "table: cell '0311000301': 0% of its words are in the table region (< 90%)",
+   "table: cell '057800179': 0% of its words are in the table region (< 90%)",
+   "table: cell '099100138': 0% of its words are in the table region (< 90%)",
+   "table: cell '565012': 0% of its words are in the table region (< 90%)",
+   "table: cell '464000493': 0% of its words are in the table region (< 90%)",
+   "table: cell '8620184': 0% of its words are in the table region (< 90%)",
+   "table: cell '17100334': 0% of its words are in the table region (< 90%)",
+   "table: cell '69300341': 0% of its words are in the table region (< 90%)",
+   "table: cell '1600511': 0% of its words are in the table region (< 90%)",
+   "table: cell '1180189': 0% of its words are in the table region (< 90%)",
+   "table: cell '33300704': 0% of its words are in the table region (< 90%)",
+   "table: cell '6660844': 0% of its words are in the table region (< 90%)",
+   "table: cell '5140701': 0% of its words are in the table region (< 90%)",
+   "table: cell '230273': 0% of its words are in the table region (< 90%)",
+   "table: cell '200106': 0% of its words are in the table region (< 90%)",
+   "table: cell '503299': 0% of its words are in the table region (< 90%)",
+   "table: cell '917148': 0% of its words are in the table region (< 90%)",
+   "table: cell '1900281': 0% of its words are in the table region (< 90%)",
+   "table: cell '00722999times105': 75% of its words are in the table region (< 90%)",
+   "table: cell '19600743': 0% of its words are in the table region (< 90%)",
+   "table: cell '8540002': 0% of its words are in the table region (< 90%)",
+   "table: cell '0644000503': 0% of its words are in the table region (< 90%)",
+   "table: cell '87300191': 0% of its words are in the table region (< 90%)",
+   "table: cell '37700486': 0% of its words are in the table region (< 90%)",
+   "table: cell '39800888': 0% of its words are in the table region (< 90%)",
+   "table: cell '3890132': 0% of its words are in the table region (< 90%)",
+   "table: cell '268405': 0% of its words are in the table region (< 90%)",
+   "table: cell '3170183': 0% of its words are in the table region (< 90%)",
+   "table: cell '2760488': 0% of its words are in the table region (< 90%)",
+   "table: cell '3900132': 0% of its words are in the table region (< 90%)",
+   "table: cell '0079126times105': 75% of its words are in the table region (< 90%)",
+   "table: cell '39900193': 0% of its words are in the table region (< 90%)",
+   "table: cell '146000164': 0% of its words are in the table region (< 90%)",
+   "table: cell '0684000174': 0% of its words are in the table region (< 90%)",
+   "table: cell '1580329': 0% of its words are in the table region (< 90%)",
+   "table: cell '77166': 0% of its words are in the table region (< 90%)",
+   "table: cell '41400109': 0% of its words are in the table region (< 90%)",
+   "table: cell '7780105': 0% of its words are in the table region (< 90%)",
+   "table: cell '3020275': 0% of its words are in the table region (< 90%)",
+   "table: cell '30300605': 0% of its words are in the table region (< 90%)",
+   "table: cell '300157': 0% of its words are in the table region (< 90%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 3,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 1.0,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.113,
+   "table_cell_min_found": 0.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

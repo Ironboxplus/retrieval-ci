@@ -15,6 +15,14 @@ owner-wide search fails closed until a later full snapshot completes or an expli
 recovery succeeds. A vanished in-process receipt is therefore never visibility proof
 and must not be presented as a job clients can poll. app/services/pipeline's
 StageSpec/TaskStore engine remains the right tool for multi-stage resumable ingest.
+
+Each job is also mirrored onto a ``code_index`` Task row (app/services/pipeline/queue_tasks.py)
+so the Tasks page shows it. The row is observation only: it never changes queue,
+visibility or commit-fence semantics, and a failed row write never reaches the job.
+
+A COMPLETED job also tells the duplicate-code analysis scheduler (analysis.py). That is a
+best-effort, non-blocking notification: the scheduler decides on its own threads whether
+anything changed, and a failure there is logged and never reaches the job.
 """
 from __future__ import annotations
 
@@ -25,17 +33,23 @@ import queue as _queue
 import threading
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
+from app.services.code_kb.analysis import CodeAnalysisScheduler, get_code_analysis_scheduler
 from app.services.code_kb.schemas import CodeIndexRequest
 from app.services.code_kb.service import CodeKBService, get_code_kb_service
 from app.services.index_catalog.schemas import IndexReportRequest
 from app.services.index_catalog.service import IndexCatalogService, get_index_catalog_service
+from app.services.pipeline.queue_tasks import QueueTaskRunner, QueueTasks
+from app.services.pipeline.runner_registry import TaskNotCancellable, register_runner
+from app.services.pipeline.store import TaskStore
 
 logger = logging.getLogger("code_kb.jobs")
+
+TASK_TYPE = "code_index"
 
 MAX_JOBS_KEPT = 200  # finished-job history cap (per process, all owners)
 _GENERATION_LOCK_STRIPES = 256
@@ -71,6 +85,9 @@ def _request_fingerprint(request: CodeIndexRequest) -> str:
     _hash_field(digest, "<removed_paths>")
     for path in request.removed_paths:
         _hash_field(digest, path)
+    if request.removed_paths_complete:
+        # Only when set, so every fingerprint of a request that never used it is unchanged.
+        _hash_field(digest, "<removed_paths_complete>")
     for file in request.files:
         _hash_field(digest, "<file>")
         for value in (file.rel_path, file.language, file.content_hash):
@@ -162,6 +179,7 @@ class CodeIndexJob:
     # visibility scopes, not merely job input metadata: every member must be fenced.
     visibility_projects: set[str] = field(default_factory=set)
     fan_out_failed_projects: set[str] = field(default_factory=set)
+    task_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -193,9 +211,23 @@ class CodeIndexJobQueue:
     """FIFO queue + single worker thread over CodeKBService.index."""
 
     def __init__(self, *, service: CodeKBService | None = None,
-                 catalog_service: IndexCatalogService | None = None):
+                 catalog_service: IndexCatalogService | None = None,
+                 tasks: QueueTasks | None = None,
+                 analysis: CodeAnalysisScheduler | None = None,
+                 analysis_factory: Callable[
+                     [CodeKBService, IndexCatalogService], CodeAnalysisScheduler] | None = None):
         self.service = service or get_code_kb_service()
         self.catalog_service = catalog_service or get_index_catalog_service()
+        # Mirrors jobs onto Task rows; the process singleton passes one, direct
+        # constructions (tests) record nothing unless they ask.
+        self.tasks = tasks
+        # Told when a job completes; same rule as ``tasks`` for direct constructions. The
+        # factory receives this queue's own service: the analysis must share the writer's
+        # owner fence and per-scope write epochs, which is what keeps a scan from
+        # straddling a write.
+        self.analysis = analysis if analysis is not None else (
+            analysis_factory(self.service, self.catalog_service)
+            if analysis_factory is not None else None)
         self._jobs: dict[str, CodeIndexJob] = {}   # insertion-ordered (submit order = FIFO order)
         self._job_aliases: dict[str, str] = {}
         self._requests: dict[str, CodeIndexRequest] = {}
@@ -259,6 +291,13 @@ class CodeIndexJobQueue:
             self._requests[job.job_id] = request
             self._refresh_positions_locked()
             self._trim_history_locked()
+        if self.tasks is not None:
+            job.task_id = self.tasks.open(
+                TASK_TYPE,
+                {"job_id": job.job_id, "project": job.project, "host": job.host,
+                 "files_total": job.files_total, "chunks_total": job.chunks_total,
+                 "removed_total": job.removed_total},
+                job.chunks_total, owner_user_id)
         self._q.put(job.job_id)
         logger.info("code_kb job queued: %s owner=%s project=%s chunks=%d position=%d",
                     job.job_id, owner_user_id, job.project, job.chunks_total, job.queue_position)
@@ -302,8 +341,9 @@ class CodeIndexJobQueue:
                 self._refresh_positions_locked()
                 logger.info("code_kb job cancelled while queued: %s owner=%s project=%s",
                             resolved_id, owner_user_id, job.project)
-                return replace(job, job_id=job_id) if resolved_id != job_id else job
-            if job.status is JobStatus.RUNNING:
+                cancelled_task_id = job.task_id
+                settled = replace(job, job_id=job_id) if resolved_id != job_id else job
+            elif job.status is JobStatus.RUNNING:
                 # commit_claimed (not mutation_started) is the real fence: it flips in
                 # the SAME locked section the mutation fence uses to check
                 # cancel_requested, before the fence releases the lock for its SQLite
@@ -317,7 +357,11 @@ class CodeIndexJobQueue:
                 logger.info("code_kb job cancel requested: %s owner=%s project=%s",
                             resolved_id, owner_user_id, job.project)
                 return replace(job, job_id=job_id) if resolved_id != job_id else job
-            raise CodeIndexJobAlreadyEnded(job_id)
+            else:
+                raise CodeIndexJobAlreadyEnded(job_id)
+        # Outside the lock: the row write must not stall search-state readers.
+        self._finish_task(cancelled_task_id, "cancelled")
+        return settled
 
     def list_jobs(self, *, owner_user_id: str, limit: int = 20,
                   project: str | None = None, active_only: bool = False) -> list[CodeIndexJob]:
@@ -502,6 +546,7 @@ class CodeIndexJobQueue:
                 self._scope_generations[key] = self._scope_generations.get(key, 0) + 1
                 self._unsafe_scopes.pop(key, None)
                 cancelled = 0
+                failed_task_ids: list[int | None] = []
                 for job_id, job in self._jobs.items():
                     if (job.owner_user_id == owner_user_id and job.project == project
                             and job.status is JobStatus.QUEUED):
@@ -509,9 +554,12 @@ class CodeIndexJobQueue:
                         job.error = "cancelled by project deletion"
                         job.finished_at = time.time()
                         job.status = JobStatus.FAILED
+                        failed_task_ids.append(job.task_id)
                         cancelled += 1
                 self._refresh_positions_locked()
-                return cancelled
+        for task_id in failed_task_ids:
+            self._finish_task(task_id, "failed", error="cancelled by project deletion")
+        return cancelled
 
     def shutdown(self, timeout: float = 10.0) -> None:
         self._q.put(None)
@@ -532,6 +580,8 @@ class CodeIndexJobQueue:
                 job.status = JobStatus.RUNNING
                 job.started_at = time.time()
                 self._refresh_positions_locked()
+            if self.tasks is not None:
+                self.tasks.started(job.task_id)
 
             def _progress(done: int, total: int) -> None:
                 # The same callback is checked immediately before Qdrant mutation.
@@ -549,6 +599,8 @@ class CodeIndexJobQueue:
                         raise CodeIndexCancelled(job.job_id)
                     job.chunks_done = done
                     job.progress = done / total if total else 1.0
+                if self.tasks is not None:
+                    self.tasks.progress(job.task_id, done, total)
 
             def _before_mutation() -> None:
                 self._before_scope_mutation(job, job.project)
@@ -592,6 +644,11 @@ class CodeIndexJobQueue:
                         self._assert_generation_locked(job)
                     yield
 
+            if request.removed_paths_complete and self._scope_unsettled(job):
+                # A previous job may have died after writing vectors its catalog report
+                # never recorded; only the Qdrant path enumeration can find those, so
+                # fall back to reconciling the manifest against Qdrant (the legacy path).
+                request = request.model_copy(update={"removed_paths_complete": False})
             try:
                 resp = self.service.index(
                     request, owner_user_id=job.owner_user_id, progress_cb=_progress,
@@ -610,8 +667,12 @@ class CodeIndexJobQueue:
                     # the terminal timestamp and the already-published catalog report.
                     job.finished_at = time.time()
                     job.status = JobStatus.COMPLETED
+                self._finish_task(job.task_id, "completed", result={
+                    "indexed": job.indexed, "removed_total": job.removed_total,
+                    "duplicates_updated": job.duplicates_updated})
                 logger.info("code_kb job done: %s indexed=%d in %.1fs",
                             job_id, job.indexed, job.finished_at - (job.started_at or job.finished_at))
+                self._notify_analysis(job)
             except CodeIndexCancelled:
                 # Only raised while mutation_started is still False (the fence's own
                 # guard), so nothing was ever written — no recovery marker, no unsafe
@@ -619,6 +680,7 @@ class CodeIndexJobQueue:
                 with self._lock:
                     job.finished_at = time.time()
                     job.status = JobStatus.CANCELLED
+                self._finish_task(job.task_id, "cancelled")
                 logger.info("code_kb job cancelled: %s owner=%s project=%s",
                             job_id, job.owner_user_id, job.project)
             except Exception as exc:  # noqa: BLE001 — job must record, not kill the worker
@@ -632,8 +694,27 @@ class CodeIndexJobQueue:
                     job.status = JobStatus.FAILED
                 for project in visibility_projects:
                     self._mark_scope_recovery_required(job, project)
+                self._finish_task(job.task_id, "failed", error=str(exc))
                 logger.exception("code_kb job failed: %s owner=%s project=%s",
                                  job_id, job.owner_user_id, job.project)
+
+    def _scope_unsettled(self, job: CodeIndexJob) -> bool:
+        """True unless the scope's last write is known to have completed cleanly. Anything
+        that cannot be proven clean (unsafe in-process scope, non-completed durable
+        marker, unreadable marker) counts as unsettled."""
+        with self._lock:
+            if (job.owner_user_id, job.project) in self._unsafe_scopes:
+                return True
+        reader = getattr(self.catalog_service, "code_scope_visibility", None)
+        if reader is None:
+            return False
+        try:
+            marker = reader(owner_user_id=job.owner_user_id, projects=[job.project])
+        except Exception:  # noqa: BLE001 - cannot prove clean, so do not trust the catalog
+            logger.warning("code_kb scope marker unreadable; reconciling against Qdrant",
+                           exc_info=True)
+            return True
+        return marker is not None and marker.get("state") != "completed"
 
     def _before_scope_mutation(self, job: CodeIndexJob, project: str) -> None:
         """Persist a fail-closed marker before this scope's first vector mutation.
@@ -745,6 +826,23 @@ class CodeIndexJobQueue:
 
     # ------------------------------- internals -------------------------------- #
 
+    def _finish_task(self, task_id: int | None, status: str, *,
+                     result: dict | None = None, error: str | None = None) -> None:
+        if self.tasks is not None:
+            self.tasks.finished(task_id, status, result=result, error=error)
+
+    def _notify_analysis(self, job: CodeIndexJob) -> None:
+        """Best effort: whether anything changed is the scheduler's question, answered on
+        its own threads from the catalog watermark. The job is already COMPLETED, so no
+        failure here may turn it into FAILED or hold up the next job."""
+        if self.analysis is None:
+            return
+        try:
+            self.analysis.notify(job.owner_user_id, job.project)
+        except Exception:  # noqa: BLE001
+            logger.warning("code_kb analysis notification failed owner=%s project=%s",
+                           job.owner_user_id, job.project, exc_info=True)
+
     def _assert_generation_locked(self, job: CodeIndexJob) -> None:
         if job.mutations_committed:
             return
@@ -796,7 +894,11 @@ def get_code_index_queue() -> CodeIndexJobQueue:
     if _QUEUE is None:
         with _QUEUE_INIT_LOCK:
             if _QUEUE is None:
-                _QUEUE = CodeIndexJobQueue()
+                _QUEUE = CodeIndexJobQueue(
+                    tasks=QueueTasks(),
+                    analysis_factory=lambda service, catalog_service: (
+                        get_code_analysis_scheduler(
+                            service=service, catalog_service=catalog_service)))
     return _QUEUE
 
 
@@ -807,3 +909,33 @@ def get_existing_code_index_queue() -> CodeIndexJobQueue | None:
     to prove that there is no active job.
     """
     return _QUEUE
+
+
+def _cancel_task_job(job_id: str, owner_user_id: str | None) -> bool:
+    queue_ = _QUEUE  # never construct the queue just to cancel
+    if queue_ is None:
+        raise KeyError(job_id)
+    try:
+        queue_.cancel(job_id, owner_user_id=owner_user_id or "")
+    except CodeIndexJobCommitting as exc:
+        raise TaskNotCancellable("代码索引已开始写入向量库，无法取消") from exc
+    except CodeIndexJobAlreadyEnded:
+        return False
+    return True
+
+
+def build_task_runner(store: TaskStore | None = None) -> QueueTaskRunner:
+    return QueueTaskRunner(TASK_TYPE, _cancel_task_job, store=store)
+
+
+_TASK_RUNNER: QueueTaskRunner | None = None
+
+
+def get_task_runner() -> QueueTaskRunner:
+    global _TASK_RUNNER
+    if _TASK_RUNNER is None:
+        _TASK_RUNNER = build_task_runner()
+    return _TASK_RUNNER
+
+
+register_runner(TASK_TYPE, get_task_runner)

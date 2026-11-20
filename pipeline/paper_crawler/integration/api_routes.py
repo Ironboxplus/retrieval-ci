@@ -16,7 +16,6 @@ import re
 import sys
 import tempfile
 import threading
-import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +26,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+from core.cache import DISTRIBUTION_TTL_SECONDS, stats_cache
+from core.indexing.embedding_profile import current_embed_fp
 from core.storage.papers_payload import project_papers_payload
 
 
@@ -111,6 +112,7 @@ def _build_paper_point_payload(chunk_row: Dict[str, Any], paper_meta: Dict[str, 
         "year": paper_meta.get("year"),
         "venue_tier": paper_meta.get("venue_tier"),
         "content": chunk_row["content"],
+        "embed_fp": current_embed_fp(),
     }
     return project_papers_payload(raw)
 
@@ -265,13 +267,6 @@ class PaperBatchTooLarge(ValueError):
 _PAPER_BATCH_MAX_SOURCE_BYTES = 1024 * 1024 * 1024
 _PAPER_BATCH_BUILD_SLOTS = threading.BoundedSemaphore(value=2)
 
-# Index coverage changes only when an ingest lands, so a short TTL is plenty and
-# keeps a cold 2.67s scan off the search page's critical path.
-_COVERAGE_TTL_SECONDS = 300.0
-_coverage_cache: tuple[float, Dict[str, Any]] | None = None
-_coverage_lock = threading.Lock()
-
-
 def _compute_index_coverage() -> Dict[str, Any]:
     """One GROUP BY (venue, year); venue totals and year spans derived in memory.
 
@@ -331,19 +326,40 @@ def _compute_index_coverage() -> Dict[str, Any]:
 
 
 def _index_coverage_cached() -> Dict[str, Any]:
-    """TTL-cached wrapper. The lock keeps a cold start from running N scans."""
-    global _coverage_cache
-    now = time.monotonic()
-    cached = _coverage_cache
-    if cached is not None and now - cached[0] < _COVERAGE_TTL_SECONDS:
-        return cached[1]
-    with _coverage_lock:
-        cached = _coverage_cache
-        if cached is not None and time.monotonic() - cached[0] < _COVERAGE_TTL_SECONDS:
-            return cached[1]
-        payload = _compute_index_coverage()
-        _coverage_cache = (time.monotonic(), payload)
-        return payload
+    """Index coverage changes only when an ingest lands, so it is served from the shared
+    stale-while-revalidate cache; a cold 2.67s scan stays off the search page's path."""
+    return stats_cache.get(
+        "papers.index_coverage", _compute_index_coverage, ttl=DISTRIBUTION_TTL_SECONDS
+    )
+
+
+def _compute_paper_tags() -> Dict[str, Any]:
+    """Distinct filter values and per-venue/year counts (blocking SQL, worker thread only)."""
+    from core.db.database import get_db_session
+    from core.db.models import Paper as DBPaper
+    from sqlalchemy import func, distinct
+
+    with get_db_session() as db:
+        venues = [r[0] for r in db.query(distinct(DBPaper.venue)).filter(DBPaper.venue != None).all()]
+        years = sorted([r[0] for r in db.query(distinct(DBPaper.year)).filter(DBPaper.year != None).all()])
+        tiers = [r[0] for r in db.query(distinct(DBPaper.venue_tier)).filter(DBPaper.venue_tier != None).all()]
+        tracks = [r[0] for r in db.query(distinct(DBPaper.track_type)).filter(DBPaper.track_type != None).all()]
+        impacts = [r[0] for r in db.query(distinct(DBPaper.impact_level)).filter(DBPaper.impact_level != None).all()]
+        total = db.query(func.count(DBPaper.paper_id)).scalar() or 0
+
+        venue_counts = {v: c for v, c in db.query(DBPaper.venue, func.count(DBPaper.paper_id)).group_by(DBPaper.venue).all()}
+        year_counts = {y: c for y, c in db.query(DBPaper.year, func.count(DBPaper.paper_id)).group_by(DBPaper.year).all()}
+
+    return {
+        "total_papers": total,
+        "venues": sorted(venues),
+        "years": years,
+        "venue_tiers": sorted(tiers),
+        "track_types": sorted(tracks),
+        "impact_levels": sorted(impacts),
+        "venue_counts": venue_counts,
+        "year_counts": dict(sorted(year_counts.items())),
+    }
 
 
 def _cleanup_paper_batch_archive(
@@ -724,36 +740,16 @@ def create_paper_router(
             raise HTTPException(status_code=400, detail=f"Batch indexing failed: {str(e)}") from e
 
     @router.get("/tags")
-    async def get_tags():
-        """获取所有可用标签（会议/年份/tier/track/impact）用于筛选"""
-        from core.db.database import get_db_session
-        from core.db.models import Paper as DBPaper
-        from sqlalchemy import func, distinct
+    def get_tags():
+        """获取所有可用标签（会议/年份/tier/track/impact）用于筛选
 
-        with get_db_session() as db:
-            venues = [r[0] for r in db.query(distinct(DBPaper.venue)).filter(DBPaper.venue != None).all()]
-            years = sorted([r[0] for r in db.query(distinct(DBPaper.year)).filter(DBPaper.year != None).all()])
-            tiers = [r[0] for r in db.query(distinct(DBPaper.venue_tier)).filter(DBPaper.venue_tier != None).all()]
-            tracks = [r[0] for r in db.query(distinct(DBPaper.track_type)).filter(DBPaper.track_type != None).all()]
-            impacts = [r[0] for r in db.query(distinct(DBPaper.impact_level)).filter(DBPaper.impact_level != None).all()]
-            total = db.query(func.count(DBPaper.paper_id)).scalar() or 0
-
-            venue_counts = {v: c for v, c in db.query(DBPaper.venue, func.count(DBPaper.paper_id)).group_by(DBPaper.venue).all()}
-            year_counts = {y: c for y, c in db.query(DBPaper.year, func.count(DBPaper.paper_id)).group_by(DBPaper.year).all()}
-
-        return {
-            "total_papers": total,
-            "venues": sorted(venues),
-            "years": years,
-            "venue_tiers": sorted(tiers),
-            "track_types": sorted(tracks),
-            "impact_levels": sorted(impacts),
-            "venue_counts": venue_counts,
-            "year_counts": dict(sorted(year_counts.items())),
-        }
+        普通 `def` 路由（在线程池执行，不占事件循环）；GROUP BY 要扫 24 万行论文表，
+        走共享的 stale-while-revalidate 缓存（10 分钟，过期先返回旧值并后台刷新）。
+        """
+        return stats_cache.get("papers.tags", _compute_paper_tags, ttl=DISTRIBUTION_TTL_SECONDS)
 
     @router.get("/browse")
-    async def browse_papers(
+    def browse_papers(
         venue: Optional[List[str]] = Query(None, description="Filter by venue(s) — repeat (?venue=A&venue=B) or comma-separated (?venue=A,B)"),
         year: Optional[List[str]] = Query(None, description="Filter by year(s) — repeat or comma-separated; values must be int-castable"),
         venue_tier: Optional[str] = Query(None, description="Filter by tier (e.g. CCF-A)"),
@@ -762,6 +758,7 @@ def create_paper_router(
         q: Optional[str] = Query(None, description="Keyword — matched against title + abstract (case-insensitive substring)"),
         page: int = Query(1, ge=1, description="Page number"),
         page_size: int = Query(20, ge=1, le=1000, description="Results per page"),
+        include_withdrawn: bool = Query(False, description="Include withdrawn arXiv papers (default: hidden)"),
     ):
         """按标签组合 + 关键词浏览论文（SQL 全集合筛选，非向量检索）"""
         from core.db.database import get_db_session
@@ -798,6 +795,8 @@ def create_paper_router(
             if q and q.strip():
                 kw = f"%{q.strip()}%"
                 qy = qy.filter(or_(DBPaper.title.ilike(kw), DBPaper.abstract.ilike(kw)))
+            if not include_withdrawn:
+                qy = qy.filter(DBPaper.withdrawn.is_(False))
 
             total = qy.count()
             papers = qy.order_by(DBPaper.year.desc(), DBPaper.venue, DBPaper.title)\
@@ -822,6 +821,8 @@ def create_paper_router(
                     "citation_count": p.citation_count or 0,
                     "pdf_path": p.pdf_path,
                     "txt_path": p.txt_path,
+                    "withdrawn": bool(p.withdrawn),
+                    "source_version": p.source_version,
                 })
 
         return {
@@ -841,8 +842,8 @@ def create_paper_router(
         18 个 venue / 2021-2026），venue 级的 count 与 min/max year 在内存里派生，
         不再多打一次 SQL。
 
-        结果缓存 `_COVERAGE_TTL_SECONDS`：这份数据只在 ingest 之后变，而首次冷查询
-        要 2.67s（页缓存未热），不该让每次打开检索页都付这个钱。
+        结果走共享 stale-while-revalidate 缓存（`DISTRIBUTION_TTL_SECONDS`）：这份数据只在
+        ingest 之后变，而首次冷查询要 2.67s（页缓存未热），不该让每次打开检索页都付这个钱。
         """
         import asyncio
         return await asyncio.to_thread(_index_coverage_cached)
@@ -861,7 +862,7 @@ def create_paper_router(
         return PaperStatsResponse(**stats)
 
     @router.get("/", response_model=List[str])
-    async def list_indexed_papers():
+    def list_indexed_papers():
         """列出所有已索引的论文 ID"""
         idx = get_indexer()
         return idx.get_indexed_paper_ids()
@@ -945,7 +946,7 @@ def create_paper_router(
         )
 
     @router.get("/{paper_id}/pdf")
-    async def get_paper_pdf(paper_id: str):
+    def get_paper_pdf(paper_id: str):
         """Serve paper PDF for inline preview (paper_id is the PK string)"""
         artifact = _resolve_single_paper_artifact(paper_id, "pdf")
         return FileResponse(
@@ -969,7 +970,7 @@ def create_paper_router(
             404: {"description": "Paper or Markdown artifact not found."},
         },
     )
-    async def get_paper_markdown_file(paper_id: str):
+    def get_paper_markdown_file(paper_id: str):
         """Stream the original extracted Markdown file with HTTP Range support."""
         artifact = _resolve_single_paper_artifact(paper_id, "markdown")
         return FileResponse(
@@ -979,7 +980,7 @@ def create_paper_router(
         )
 
     @router.get("/{paper_id}/bibtex")
-    async def get_paper_bibtex(paper_id: str):
+    def get_paper_bibtex(paper_id: str):
         """Generate BibTeX citation for a paper."""
         from core.db.database import get_db_session
         from core.db.models import Paper as DBPaper
@@ -1037,12 +1038,11 @@ def create_paper_router(
         }
 
     @router.get("/{paper_id}/index-status")
-    async def get_paper_index_status(paper_id: str):
+    def get_paper_index_status(paper_id: str):
         """返回论文索引状态：SQL chunks 数 + Qdrant 向量数 + 是否已索引"""
         from core.db.database import get_db_session
         from core.db.models import Paper as DBPaper, Chunk as DBChunk
-        from core.storage.qdrant_store import QdrantStore
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from core.storage.corpus_store import paper_store, role_for_document
 
         with get_db_session() as db:
             paper = db.query(DBPaper).filter(DBPaper.paper_id == paper_id).first()
@@ -1055,17 +1055,13 @@ def create_paper_router(
 
         qdrant_points_count = 0
         try:
-            qs = QdrantStore(collection_name="papers")
             # W24: doc_id payload is split between str (Stage A-E ~6.68M) and
             # int (Stage F ~2.49M). Use paper_id (always str, canonical) so the
-            # filter is invariant across batches.
-            qdrant_points_count = qs.client.count(
-                qs.collection_name,
-                count_filter=Filter(
-                    must=[FieldCondition(key="paper_id", match=MatchValue(value=paper.paper_id))]
-                ),
-                exact=True,
-            ).count
+            # filter is invariant across batches. Counted in the collection the
+            # paper's points belong to (papers or arxiv under the split layout).
+            role = role_for_document(source_type="paper", venue_tier=paper.venue_tier)
+            qdrant_points_count = paper_store().count_points(
+                "paper_id", paper.paper_id, roles=[role])
         except Exception as e:  # noqa: BLE001
             print(f"[index-status] Qdrant count failed for paper_id={paper.paper_id}: {e}", flush=True)
 
@@ -1078,7 +1074,7 @@ def create_paper_router(
         }
 
     @router.post("/{paper_id}/index")
-    async def index_paper_by_id(paper_id: str):
+    def index_paper_by_id(paper_id: str):
         """按论文 ID 触发向量索引（仅对已切 chunks 但缺 Qdrant 向量的情况）。
 
         Safe mode: 不动 SQLite papers/documents/chunks，只读 chunks 表 + 写 Qdrant。
@@ -1088,14 +1084,14 @@ def create_paper_router(
         """
         from core.db.database import get_db_session
         from core.db.models import Paper as DBPaper, Chunk as DBChunk
-        from core.storage.qdrant_store import QdrantStore
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        from core.storage.corpus_store import paper_store, role_for_document
 
         with get_db_session() as db:
             paper = db.query(DBPaper).filter(DBPaper.paper_id == paper_id).first()
             if not paper:
                 raise HTTPException(status_code=404, detail="Paper not found")
             doc_id = paper.doc_id
+            role = role_for_document(source_type="paper", venue_tier=paper.venue_tier)
             sql_chunks_count = (
                 db.query(DBChunk).filter(DBChunk.doc_id == doc_id).count()
             )
@@ -1106,14 +1102,8 @@ def create_paper_router(
                 detail="Paper has no SQL chunks; ingest markdown first via /api/papers/index (batch)",
             )
 
-        qs = QdrantStore(collection_name="papers")
-        existing = qs.client.count(
-            qs.collection_name,
-            count_filter=Filter(
-                must=[FieldCondition(key="doc_id", match=MatchValue(value=str(doc_id)))]
-            ),
-            exact=True,
-        ).count
+        corpus = paper_store()
+        existing = corpus.count_points("doc_id", str(doc_id), roles=[role])
         if existing > 0:
             return {
                 "paper_id": paper_id,
@@ -1188,16 +1178,13 @@ def create_paper_router(
             ))
 
         # Batched upsert with wait=True — every batch ACKed by Qdrant before next.
-        # This is what D3 got wrong (wait=False → 56% silent drop).
+        # This is what D3 got wrong (wait=False → 56% silent drop). The corpus
+        # sends each point to the collection it belongs to under the layout.
         BATCH = 200
         upserted = 0
         try:
             for s in range(0, len(points), BATCH):
-                qs.client.upsert(
-                    qs.collection_name,
-                    points=points[s:s + BATCH],
-                    wait=True,
-                )
+                corpus.upsert_points(points[s:s + BATCH], wait=True)
                 upserted += min(BATCH, len(points) - s)
         except Exception as e:  # noqa: BLE001
             raise HTTPException(
@@ -1217,7 +1204,7 @@ def create_paper_router(
         }
 
     @router.get("/{paper_id}")
-    async def get_paper(paper_id: str):
+    def get_paper(paper_id: str):
         """获取论文详情（paper_id 是 PK string，直接精确查找）"""
         from core.db.database import get_db_session
         from core.db.models import Paper as DBPaper, Document as DBDocument, Chunk as DBChunk
@@ -1255,6 +1242,9 @@ def create_paper_router(
                     "venue_source": paper.venue_source,
                     "pdf_path": paper.pdf_path,
                     "txt_path": paper.txt_path,
+                    "withdrawn": bool(paper.withdrawn),
+                    "withdrawn_at": paper.withdrawn_at,
+                    "source_version": paper.source_version,
                 },
                 "chunks": [
                     {
@@ -1268,7 +1258,7 @@ def create_paper_router(
             }
 
     @router.delete("/{paper_id}")
-    async def delete_paper(paper_id: str):
+    def delete_paper(paper_id: str):
         """删除论文索引"""
         idx = get_indexer()
         success = idx.delete_paper(paper_id)

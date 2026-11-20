@@ -1,0 +1,26 @@
+# gitleaks configuration used by scripts/maintenance/ci_snapshot.py.
+# Every allowlist names its rule AND its pattern; none allowlists a whole path, so a real
+# secret added later to the same files is still reported.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public video IDs in the recorded e2e report URLs (not credentials)"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''viewkey=ph[0-9a-f]{13}''']
+
+[[allowlists]]
+description = "40-hex git revision SHAs quoted in journal.md (flagged by the sourcegraph rule)"
+targetRules = ["sourcegraph-access-token"]
+condition = "AND"
+paths = ['''(^|/)journal\.md$''']
+regexes = ['''^[0-9a-f]{40}$''']
+
+[[allowlists]]
+description = "Synthetic PyPI-shaped string that tests/test_mcp_conversations.py feeds to the redactor"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests/test_mcp_conversations\.py$''']
+regexes = ['''^pypi\-AgEIcHlwaS5vcmcCJGJhMmQ4ZjQ0LTAwMDAtNDAwMC04MDAw$''']
