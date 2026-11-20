@@ -125,7 +125,7 @@ def test_default_embedder_marks_journal_writes_background_and_search_interactive
     assert embedder.priorities == ["background", "interactive"]
 
 
-def test_default_journal_background_embedding_yields_between_bounded_batches(monkeypatch):
+def test_default_journal_background_embedding_runs_in_bounded_batches(monkeypatch):
     import numpy as np
     from core.indexing.embedders import EmbeddingResult
     from app.services.journal.service import JOURNAL_EMBED_BATCH
@@ -153,11 +153,11 @@ def test_default_journal_background_embedding_yields_between_bounded_batches(mon
         priority="background",
     )
 
-    assert embedder.calls == [
-        ("background", JOURNAL_EMBED_BATCH),
-        ("background", JOURNAL_EMBED_BATCH),
-        ("background", 7),
-    ]
+    # Journal's own ingestion batches (progress and cancel points) are the only split now: each
+    # is one background call of the shared embedder, never cut into smaller model pieces.
+    assert embedder.calls == [("background", JOURNAL_EMBED_BATCH), ("background", JOURNAL_EMBED_BATCH),
+                              ("background", 7)]
+    assert sum(size for _, size in embedder.calls) == total
     assert len(dense) == total
     assert sparse is not None and len(sparse) == total
 

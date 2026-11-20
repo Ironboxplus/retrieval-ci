@@ -146,9 +146,7 @@ class RealJournalBulkHarness:
             # Use the authentic local BGE-M3 on CPU: this runner is not .88 and
             # AGENTS.md prohibits consuming its GPU0.
             "EMBEDDING__DEVICE": "cpu",
-            "EMBEDDING__USE_FP16": "false",
             "EMBEDDING__LOCAL_FILES_ONLY": "true",
-            "EMBEDDING__BATCH_SIZE": "16",
             "DATA_DIR": str(root / "data"),
             "QDRANT_URL": self.qdrant_url,
             "QDRANT_GRPC_PORT": str(self.grpc_port),

@@ -1,12 +1,19 @@
-"""Background scheduler for persisted public-code source update policies."""
+"""Persisted public-code source update policies: one check-and-queue cycle, plus
+the `public_code_updates` schedule kind that runs it every 30 s.
+
+Timing belongs to app.services.scheduler; this module only knows what a cycle does.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
 import logging
-import threading
 from typing import Any, Protocol
+
+from pydantic import BaseModel
+
+from app.services.scheduler.kinds import FireResult, JobKind, ScheduleSeed, register_kind
 
 
 logger = logging.getLogger(__name__)
@@ -48,33 +55,11 @@ class PublicCodeUpdateScheduler:
         control_service: ScheduledUpdateControl,
         job_service: ScheduledIndexJobs,
         maintenance_service: ScheduledMaintenance | None = None,
-        poll_interval_seconds: float = 30.0,
     ):
-        if poll_interval_seconds <= 0:
-            raise ValueError("poll_interval_seconds must be positive")
         self._repository = repository
         self._control_service = control_service
         self._job_service = job_service
         self._maintenance_service = maintenance_service
-        self._poll_interval_seconds = poll_interval_seconds
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run,
-            name="public-code-update-scheduler",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def stop(self, *, timeout_seconds: float = 5.0) -> None:
-        self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=timeout_seconds)
 
     def run_once(self, *, now: datetime | None = None) -> PublicCodeUpdateCycle:
         if self._maintenance_service is not None:
@@ -129,15 +114,43 @@ class PublicCodeUpdateScheduler:
             errors=errors,
         )
 
-    def _run(self) -> None:
-        while not self._stop_event.is_set():
-            cycle = self.run_once()
-            if cycle.checked_source_ids:
-                logger.info(
-                    "public-code scheduler checked=%d queued=%d skipped_active=%d errors=%d",
-                    len(cycle.checked_source_ids),
-                    len(cycle.queued_source_ids),
-                    len(cycle.skipped_active_source_ids),
-                    len(cycle.errors),
-                )
-            self._stop_event.wait(self._poll_interval_seconds)
+
+class PublicCodeUpdateParams(BaseModel):
+    """No parameters: which sources are due is stored per source (update policy)."""
+
+
+def fire_public_code_updates(params: PublicCodeUpdateParams, origin: dict) -> FireResult:
+    from app.services.public_code import get_public_code_update_scheduler
+
+    cycle = get_public_code_update_scheduler().run_once()
+    if not cycle.checked_source_ids:
+        return FireResult("noop")
+    counts = (
+        f"checked={len(cycle.checked_source_ids)} queued={len(cycle.queued_source_ids)} "
+        f"skipped_active={len(cycle.skipped_active_source_ids)} errors={len(cycle.errors)}"
+    )
+    logger.info("public-code scheduler %s", counts)
+    if cycle.errors:
+        detail = "; ".join(f"{source}: {error}" for source, error in cycle.errors.items())
+        raise RuntimeError(f"{counts} [{detail}]"[:1000])
+    if cycle.queued_source_ids:
+        return FireResult("enqueued", reason=counts)
+    return FireResult("noop", reason=counts)
+
+
+register_kind(JobKind(
+    name="public_code_updates",
+    title="Public code source update checks",
+    params_model=PublicCodeUpdateParams,
+    fire=fire_public_code_updates,
+    # Polls every 30 s; a poll with nothing due is not worth a row.
+    record_idle_ticks=False,
+    default_misfire_grace_s=60,
+    defaults=(ScheduleSeed(
+        key="public_code_updates",
+        title="Public code source update checks",
+        trigger={"type": "interval", "seconds": 30, "timezone": "UTC"},
+        # Polling: a missed poll is simply the next one, never replayed.
+        catchup="skip",
+    ),),
+))

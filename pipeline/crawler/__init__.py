@@ -23,7 +23,6 @@ from .retry_handler import (
     RateLimitError,
     CaptchaError,
     BlockedError,
-    with_retry,
 )
 
 # The standalone medical downloader reuses only CaptchaDetector.  Importing a
@@ -72,7 +71,6 @@ __all__ = [
     "RateLimitError",
     "CaptchaError",
     "BlockedError",
-    "with_retry",
     # 增强版爬虫
     "EnhancedCrawler",
     "EnhancedCrawlResult",

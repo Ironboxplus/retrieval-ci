@@ -1,0 +1,11 @@
+[Unit]
+Description=Optional access to the pre-migration Retrieval NAS
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=//10.100.100.9/lsb
+Where=/mnt/retrieval_nas
+Type=cifs
+Options=credentials=/etc/smbcredentials224,vers=3.1.1,iocharset=utf8,gid=arc,dir_mode=02775,file_mode=0664,soft,nounix,serverino,rsize=4194304,wsize=4194304,actimeo=1
+TimeoutSec=30
