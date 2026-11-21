@@ -1,0 +1,204 @@
+{
+ "paper": "jmlr-2022-21-1519",
+ "page": 20,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     472,
+     78,
+     744,
+     102
+    ],
+    "block_content": "MAITY, SUN, AND BANERJEE"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     185,
+     1042,
+     238
+    ],
+    "block_content": "For $\\sigma \\in \\{-1,1\\}$ let $\\eta_\\sigma$ and $f_\\sigma$ be the regression function and Bayes classifier for $Q_\\sigma$, respectively. Then"
+   },
+   {
+    "block_id": 2,
+    "block_label": "display_formula",
+    "block_bbox": [
+     331,
+     254,
+     886,
+     419
+    ],
+    "block_content": " $$ \\begin{align*}\\bar{\\rho}(\\Pi_{1},\\Pi_{-1})&=\\mathcal{E}_{Q_{1}}(f_{-1})\\\\&=2\\mathbb{E}_{Q_{1,X}}\\Big[\\big|\\eta_{Q}^{\\sigma}(X)-1/2\\big|\\mathbb{1}\\{f_{1}(X)\\neq f_{-1}(X)\\}\\Big]\\\\&\\geq4c_{Q} n_{Q}^{-1/2}r_{1}\\\\&\\geq c^{\\prime}n_{Q}^{-\\frac{1+\\alpha}{2}}=2s.\\end{align*} $$ "
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     209,
+     435,
+     837,
+     461
+    ],
+    "block_content": "We refer to lemma C.4 in supplement to get the following bound"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     331,
+     476,
+     886,
+     778
+    ],
+    "block_content": " $$ \\begin{align*}KL(\\Pi_{1}||\\Pi_{-1})&\\leq n_{Q}KL(U_{Q}^{(1)}||U_{Q}^{(-1)})\\\\&\\leq n_{Q}(1/2+c_{Q}n_{Q}^{-1/2})\\log\\left(\\frac{1/2+c_{Q}n_{Q}^{-1/2}}{1/2-c_{Q}n_{Q}^{-1/2}}\\right)\\\\&\\quad+(1/2-c_{Q}n_{Q}^{-1/2})\\log\\left(\\frac{1/2-c_{Q}n_{Q}^{-1/2}}{1/2+c_{Q}n_{Q}^{-1/2}}\\right)\\\\&\\leq n_{Q}\\frac{2}{4}3c_{Q}^{2}n_{Q}^{-1}\\\\&\\leq c_{Q}^{2}\\end{align*} $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     791,
+     434,
+     818
+    ],
+    "block_content": "where  $ U_{Q}^{\\sigma} \\sim \\mathrm{Bernoulli}(\\pi_{Q}^{\\sigma}) $."
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     209,
+     819,
+     508,
+     843
+    ],
+    "block_content": "Using theorem 19 we conclude"
+   },
+   {
+    "block_id": 7,
+    "block_label": "display_formula",
+    "block_bbox": [
+     477,
+     860,
+     747,
+     916
+    ],
+    "block_content": " $$ \\operatorname*{s u p}_{(P,Q)\\in\\Pi}\\mathbb{E}\\big[\\mathcal{E}_{Q}(\\hat{f})\\big]\\geq c n_{Q}^{-\\frac{1+\\alpha}{2}}. $$ "
+   },
+   {
+    "block_id": 8,
+    "block_label": "text",
+    "block_bbox": [
+     209,
+     935,
+     624,
+     960
+    ],
+    "block_content": "Finally, we combine the two bounds to get"
+   },
+   {
+    "block_id": 9,
+    "block_label": "display_formula",
+    "block_bbox": [
+     366,
+     975,
+     853,
+     1113
+    ],
+    "block_content": " $$ \\begin{align*}\\sup_{(P,Q)\\in\\Pi}\\mathbb{E}\\big[\\mathcal{E}_{Q}(\\widehat{f})\\big]&\\geq c n_{Q}^{-\\frac{1+\\alpha}{2}}\\vee c\\big(\\epsilon_{P} n_{P}\\big)^{-\\frac{\\beta(1+\\alpha)}{2\\beta+d}}\\\\&\\geq c^{\\prime}\\left(\\big(\\epsilon_{P} n_{P}\\big)^{-\\frac{\\beta}{2\\beta+d}}+n_{Q}^{-1/2}\\right)^{1+\\alpha}.\\end{align*} $$ "
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1132,
+     1047,
+     1184
+    ],
+    "block_content": "Lemma 20 For any  $ \\sigma \\in \\{-1,1\\}^{\\mathcal{Z}_1} $  $ Q_\\sigma $ as defined in 6.4 and 6.9 satisfies  $ \\alpha $-margin condition with constant  $ C_\\alpha $."
+   },
+   {
+    "block_id": 11,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     1207,
+     660,
+     1232
+    ],
+    "block_content": "Proof We prove the lemma for both 6.4 and 6.9."
+   },
+   {
+    "block_id": 12,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1247,
+     1047,
+     1301
+    ],
+    "block_content": "Margin condition for non-parametric part We recall the marginal and regression function as in 6.6 and 6.7, respectively. For such a regression function"
+   },
+   {
+    "block_id": 13,
+    "block_label": "display_formula",
+    "block_bbox": [
+     327,
+     1321,
+     890,
+     1415
+    ],
+    "block_content": " $$ \\left|\\eta_{Q}^{\\sigma}(x)-1/2\\right|=\\begin{cases}\\sqrt{\\epsilon_{P}}\\eta_{z}(x)/2&\\quad x\\in C(z),\\ z\\in\\mathcal{Z}_{1},\\\\\\sqrt{\\epsilon_{P}}\\eta_{f(z)}(x)/2&\\quad x\\in C(f(z)),\\ z\\in\\mathcal{Z}_{1},\\\\0&\\quad x\\in C(z),\\ z\\in\\mathcal{Z}_{0}.\\end{cases} $$ "
+   },
+   {
+    "block_id": 14,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1451,
+     625,
+     1469
+    ],
+    "block_content": "20"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['3']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 14,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.944,
+   "numbers_unknown": 1,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.996,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 2,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

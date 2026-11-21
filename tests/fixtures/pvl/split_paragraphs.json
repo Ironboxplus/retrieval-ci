@@ -1,0 +1,325 @@
+{
+ "column_break_in_a_page": {
+  "paper": "vldb-2022-p3535-gaffney",
+  "page": 11,
+  "blocks": [
+   {
+    "label": "text",
+    "content": "consistent, isolated, and durable. Furthermore, manipulating blob data in SQLite can be faster and more space-efficient than using the filesystem [16]."
+   },
+   {
+    "label": "text",
+    "content": "These observations motivated us to develop the BLOB benchmark, which simulates an application that uses a database engine to manage raw blob data. The benchmark is straightforward. A table is created in the database with a single row and a single column of blob data with a given size. Then, a connection to the database repeatedly either reads or writes the entire blob, based on specified probabilities. After a warmup period of 10 seconds, we measure the number of operations completed in 60 seconds. We report the throughput in transactions per second (TPS)."
+   },
+   {
+    "label": "text",
+    "content": "In addition to SQLite (with journal modes WAL AND DELETE) and DuckDB, we used the BLOB benchmark to evaluate filesystem calls. For blob reads, we used fread, For blob writes, we used fdatasync. While these functions provide lesser transactional guarantees than a database engine, they are an informative baseline for the benchmark."
+   },
+   {
+    "label": "text",
+    "content": "Results are shown in Figure 7. For 100 KB blobs, SQLite-WAL produces the highest throughput of the transactional methods. On the cloud server, SQLite-WAL even has a slight edge over the filesystem for small blobs. This is likely due to SQLite's ability to serve read requests from its cache, whereas the filesystem serves read requests with calls to fread. SQLite-DELETE is slightly less than half as fast as SQLite-WAL. Because SQLite-DELETE writes its changes to the rollback journal and then to the database file, it incurs about twice as many writes as SQLite-WAL, which appends its changes only to the WAL (assuming no checkpoint is triggered by the transaction). For 10 MB blobs, DuckDB produces the highest throughput of the transactional methods. SQLite-WAL and SQLite-DELETE have mostly similar performance for blobs of this size. The default limit of the WAL is 1000 pages, which equates to about 4 MB. Because the blob size is 10 MB, a single write causes the size of the WAL to exceed this limit, which triggers an immediate checkpoint. As a result, SQLite-WAL incurs two writes for each 10 MB blob update. We observed increased throughput for greater WAL size limits, but we omit these results for brevity. All methods, regardless of hardware configuration and blob size, are strongly impacted by the percentage of read requests in the workload. In Figure 7b, certain DuckDB measurements are omitted because DuckDB encountered an error and could not complete the benchmark."
+   },
+   {
+    "label": "paragraph_title",
+    "content": "4.4 Resource footprint"
+   },
+   {
+    "label": "text",
+    "content": "An important consideration for an embeddable database engine is the footprint of its resource usage. In particular, SQLite strives to maintain a small compiled library size. SQLite has a simple type system with just a handful of data types  \\( [24] \\) . It avoids the use of template metaprogramming to generate code. SQLite also provides many compile-time options that can be disabled to exclude certain features from the library. Furthermore, SQLite strives to be efficient in how it stores data. For example, integers are stored in 0, 1, 2, 3, 4, 6, or 8 bytes, depending on the magnitude of the value. Floating point values with no fractional component may be stored as integers to occupy less space."
+   },
+   {
+    "label": "text",
+    "content": "We compiled SQLite and DuckDB on the cloud server, recording the compilation time, the maximum memory usage, and the size of"
+   },
+   {
+    "label": "text",
+    "content": "the resulting library. We used GCC version 9.3.0 with either -0s or -03. Results are shown in Table 3. SQLite requires little time and memory to compile. The resulting library is 900 KB when optimizing for size, and 1.5 MB when optimizing for speed. For applications that require only basic SQLite functionality, it is possible to further reduce the size of the SQLite library by disabling certain compile-time options, but we did not experiment with alternative option configurations. In contrast, compiling DuckDB requires 5-10 minutes and about 7.6 GB of memory, resulting in a library that is 32-37 MB in size. We note that pre-compiled libraries for both SQLite and DuckDB are available for download, so in some cases it may be unnecessary to build either library from source. However, applications that wish to embed DuckDB in their source code may find it problematic to compile in resource-constrained environments."
+   },
+   {
+    "label": "text",
+    "content": "While the SQLite library is substantially smaller and faster to compile, DuckDB may require less space to store the same data. DuckDB associates type information with entire columns, rather than individual records as in SQLite, which eliminates the need for record headers. Furthermore, DuckDB's columnar storage format allows efficient representation and compression of data. For example, a Boolean value can be stored as a single bit in DuckDB. In contrast, SQLite represents a Boolean value with a 1-byte integer. In Table 4, we compare the space required by SQLite and DuckDB to store some of the datasets used in this paper. The TATP dataset contains 1 million subscriber records. The SSB dataset is scale factor 5. In addition, we report the time required to load an SSB dataset, which is organized as a collection of CSV files, into the database. Compared to DuckDB, SQLite requires 90% and 60% more space to store TATP and SSB, respectively."
+   },
+   {
+    "label": "text",
+    "content": "Interestingly, SQLite is almost 20% faster at loading the SSB dataset from CSV. However, we were surprised by the time required to load CSV data into either system. DuckDB only takes about 7 seconds to run all of SSB, but requires 100 seconds to load the data. SQLite takes 51 seconds to run all of SSB, but requires 82 seconds to load the data. Given the popularity of the CSV format in the data science field, these results motivate further exploration into how CSV loading can be accelerated."
+   },
+   {
+    "label": "figure_title",
+    "content": "Table 3: Library footprints."
+   },
+   {
+    "label": "table",
+    "content": "<table><tr><td>System</td><td>Library size</td><td>Compile time</td><td>Compile memory</td></tr><tr><td>SQLite (-0s)</td><td>900 KB</td><td>15 s</td><td>340 MB</td></tr><tr><td>SQLite (-03)</td><td>1.5 MB</td><td>30 s</td><td>380 MB</td></tr><tr><td>DuckDB (-0s)</td><td>32 MB</td><td>5 m</td><td>7.7 GB</td></tr><tr><td>DuckDB (-03)</td><td>37 MB</td><td>10 m</td><td>7.6 GB</td></tr></table>"
+   },
+   {
+    "label": "figure_title",
+    "content": "Table 4: Database footprints."
+   },
+   {
+    "label": "table",
+    "content": "<table><tr><td>System</td><td>TATP size</td><td>SSB size</td><td>SSB load time</td></tr><tr><td>SQLite</td><td>520 MB</td><td>2.8 GB</td><td>82 s</td></tr><tr><td>DuckDB</td><td>270 MB</td><td>1.8 GB</td><td>100 s</td></tr></table>"
+   },
+   {
+    "label": "number",
+    "content": "3545"
+   }
+  ]
+ },
+ "byline_lines_are_not_one_paragraph": {
+  "paper": "vldb-2022-p2761-luo",
+  "page": 1,
+  "blocks": [
+   {
+    "label": "header",
+    "content": "Artifacts Available\nacm\nV1.1"
+   },
+   {
+    "label": "paragraph_title",
+    "content": "On Shapley Value in Data Assemblage Under Independent Utility"
+   },
+   {
+    "label": "text",
+    "content": "Xuan Luo"
+   },
+   {
+    "label": "text",
+    "content": "Simon Fraser University"
+   },
+   {
+    "label": "text",
+    "content": "Burnaby, BC, Canada"
+   },
+   {
+    "label": "text",
+    "content": "xuan_luo@sfu.ca"
+   },
+   {
+    "label": "text",
+    "content": "Zicun Cong"
+   },
+   {
+    "label": "text",
+    "content": "Simon Fraser University"
+   },
+   {
+    "label": "text",
+    "content": "Burnaby, BC, Canada"
+   },
+   {
+    "label": "text",
+    "content": "zicun_cong@sfu.ca"
+   },
+   {
+    "label": "paragraph_title",
+    "content": "ABSTRACT"
+   },
+   {
+    "label": "text",
+    "content": "In many applications, an organization may want to acquire data from many data owners. Data marketplaces allow data owners to produce data assemblage needed by data buyers through coalition. To encourage coalitions to produce data, it is critical to allocate revenue to data owners in a fair manner according to their contributions. Although in literature Shapley fairness and alternatives have been well explored to facilitate revenue allocation in data assemblage, computing exact Shapley value for many data owners and large assembled data sets through coalition remains challenging due to the combinatoric nature of Shapley value. In this paper, we explore the decomposability of utility in data assemblage by formulating the independent utility assumption. We argue that independent utility enjoys many applications. Moreover, we identify interesting properties of independent utility and develop fast computation techniques for exact Shapley value under independent utility. Our experimental results on a series of benchmark data sets show that our new approach not only guarantees the exactness of Shapley value, but also achieves faster computation by orders of magnitudes."
+   },
+   {
+    "label": "paragraph_title",
+    "content": "PVLDB Reference Format:"
+   },
+   {
+    "label": "text",
+    "content": "Xuan Luo, Jian Pei, Zicun Cong, and Cheng Xu. On Shapley Value in Data Assemblage Under Independent Utility. PVLDB, 15(11): 2761 - 2773, 2022. doi:10.14778/3551793.3551829"
+   },
+   {
+    "label": "paragraph_title",
+    "content": "PVLDB Artifact Availability:"
+   },
+   {
+    "label": "text",
+    "content": "The source code, data, and/or other artifacts have been made available at https://github.com/IDEAL-Lab/shapley-value-independent-utility."
+   },
+   {
+    "label": "paragraph_title",
+    "content": "1 INTRODUCTION"
+   },
+   {
+    "label": "text",
+    "content": "The thriving success of data science and machine learning applications heavily relies on the availability of huge amounts of data. In many applications, an organization may want to empower its business using data but may not have all the necessary data  \\( [1, 19] \\) . At the same time, while organizations can use their own data to strengthen their businesses individually, their data, if being used properly, can help many others, achieve much more social good"
+   },
+   {
+    "label": "text",
+    "content": "This work is licensed under the Creative Commons BY-NC-ND 4.0 International License. Visit https://creativecommons.org/licenses/by-nc-nd/4.0/ to view a copy of this license. For any use beyond those covered by this license, obtain permission by emailing info@vldb.org. Copyright is held by the owner/author(s). Publication rights licensed to the VLDB Endowment.\nProceedings of the VLDB Endowment, Vol. 15, No. 11 ISSN 2150-8097.\ndoi:10.14778/3551793.3551829"
+   },
+   {
+    "label": "text",
+    "content": "Jian Pei  \nDuke University \\( ^{1} \\)  and Simon Fraser University \\( ^{2} \\)"
+   },
+   {
+    "label": "text",
+    "content": "\\( ^{1} \\) Durham, NC, USA and  \\( ^{2} \\) Burnaby, BC, Canada"
+   },
+   {
+    "label": "text",
+    "content": "j.pei@duke.edu"
+   },
+   {
+    "label": "text",
+    "content": "Cheng Xu"
+   },
+   {
+    "label": "text",
+    "content": "Simon Fraser University"
+   },
+   {
+    "label": "text",
+    "content": "Burnaby, BC, Canada"
+   },
+   {
+    "label": "text",
+    "content": "cheng_xu_3@sfu.ca"
+   },
+   {
+    "label": "text",
+    "content": "and bring in dramatic extra value beyond their traditional business. To facilitate demands and supplies of data meeting each other, various facilities and mechanisms are constructed. For example, in data marketplaces, organizations and people can buy and sell data  \\[12, 31, 34\\] . The size of data marketplaces over the world has grown dramatically since the last decade, from 7.6 billion US dollars in 2011 to 64 billion US dollars in 2021 and 103 billion US dollars projected in 2027 \\( ^{1} \\) ."
+   },
+   {
+    "label": "text",
+    "content": "The data demand from a buyer may be complicated and thus cannot be met solely by one data owner. Such data may have to come from many different data owners. To meet the complicated demand, data from multiple owners has to be integrated and assembled. To encourage data owners to produce valuable data for many applications through coalition, it is critical to allocate revenue to data owners in a fair manner according to their contributions. However, fair revenue allocation in data assemblage is far from trivial. The celebrated Shapley fairness  \\( [33] \\)  is the most fundamental and popular fairness principle used in marketplaces. In a coalition, the Shapley value of a participant is essentially the expectation of marginal contribution made by the participant in all possible coalitions with various subsets of other participants. Shapley value enjoys a series of desirable properties, including efficiency in revenue allocation, symmetry, additivity, and dummy player."
+   },
+   {
+    "label": "text",
+    "content": "Due to the combinatoric nature of Shapley value, computing the exact Shapley value is often very costly and in general is exponential with respect to the number of participants in coalition [13, 15]. Therefore, approximation approaches are developed. In those approximation approaches, the estimation error can be bounded by, for example \\( O(\\sqrt{\\frac{r}{m}}) \\) [21], where \\( r \\) is the range of marginal contributions and \\( m \\) is the sample size. While mathematically the estimation error bound may look satisfying, in practice the approximation quality of Shapley value may be much less impressive. Consider the scenarios of data acquisition through crowdsourcing, where there may easily be tens of thousands of data owners contributing their data. Due to the diversity of data contributors, the contributions from different data owners may also vary dramatically and often demonstrate a long tail distribution. Therefore, the range of marginal contributions is significant, say easily much greater than \\( 1\\% \\) of the total revenue of the coalition. Even if the estimation error can be bounded to a small percentage, say \\( 0.1\\% \\), of the whole revenue to be allocated, the absolute error of the estimated Shapley values"
+   },
+   {
+    "label": "footnote",
+    "content": "\\( ^{1} \\) https://www.statista.com/statistics/254266/global-big-data-market-forecast/, accessed on July 1, 2022."
+   },
+   {
+    "label": "number",
+    "content": "2761"
+   }
+  ]
+ },
+ "column_break_next_to_formulas": {
+  "paper": "vldb-2022-p984-sudhir",
+  "page": 8,
+  "blocks": [
+   {
+    "label": "text",
+    "content": "We continue iterating until the only remaining configuration has a single replica that is responsible for queries of all types."
+   },
+   {
+    "label": "text",
+    "content": "We do not discard all dominated configurations as they can eventually lead to better solutions. Consider the following configurations for a workload with four types. \\( RC_{1} = \\{\\{t_{1}, t_{2}\\}, \\{t_{3}\\}, \\{t_{4}\\}\\} \\), \\( RC_{2} = \\{\\{t_{1}\\}, \\{t_{2}, t_{3}\\}, \\{t_{4}\\}\\} \\), and \\( RC_{3} = \\{\\{t_{2}, t_{3}\\}, \\{t_{1}, t_{4}\\}\\} \\). Types \\( t_{3} \\) and \\( t_{4} \\) are more popular in the workload. \\( RC_{1} \\) will likely have lower cost than \\( RC_{2} \\) as the popular query types get their own replicas. So \\( RC_{1} \\) can dominate \\( RC_{2} \\). \\( RC_{3} \\) can be the optimal configuration under some storage budget but will not be considered if we discard \\( RC_{2} \\)."
+   },
+   {
+    "label": "text",
+    "content": "Cost Evaluation: Each replica is optimized for a disjoint subset of the workload. The cost of a replica is the cost of executing these queries on the grid layout optimized for them. The cost of a configuration is the sum of costs of each replica. Computing this involves optimizing the layout of each replica. We use a gradient descent style iterative algorithm from  \\( [15] \\)  to optimize the Augmented Grid layout parameters. Only the relevant columns of data and its share of the workload are used for optimizing the layout of a replica. The cost of executing a query is estimated using a cost model"
+   },
+   {
+    "label": "display_formula",
+    "content": "\\[\nc o s t = w _ {0} (\\# c e l l r a n g e s) + w _ {1} (\\# s c a n n e d p t s) (\\# s c a n n e d d i m s)\n\\]"
+   },
+   {
+    "label": "text",
+    "content": "A cell range is a set of adjacent cells in physical storage. #cell ranges is the number of such ranges that are scanned. #scanned pts is the number of tuples that are scanned and #scanned dims is the number of columns that are accessed by the query.  \\( w_{0} \\)  and  \\( w_{1} \\)  are weights that are learned. The first term in the cost model accounts for random accesses and the second term for sequential accesses. The features of this cost model can be efficiently estimated from the grid parameters and the number of tuples per grid cell. The latter is estimated from a sample of the data."
+   },
+   {
+    "label": "text",
+    "content": "To avoid too many re-optimizations of the grid layout while merging replicas, we use a heuristic to approximate the cost of the merged replica. Let  \\( c_{i,j} \\)  be the cost of executing the queries of replica i on the layout of replica j. The cost of the replication configuration is  \\( \\Sigma_{i\\in replicas}c_{i,i} \\) . The cost of merging replicas in R into a new replica, m, is approximated as"
+   },
+   {
+    "label": "display_formula",
+    "content": "\\[\nc _ {i, m} = \\frac {\\sum_ {j \\in R} c _ {j , j} * c _ {i , j}}{\\sum_ {j \\in R} c _ {j , j}} \\quad \\forall i \\neq m \\land i \\notin R \\tag {1}\n\\]"
+   },
+   {
+    "label": "display_formula",
+    "content": "\\[\nc _ {m, i} = \\Sigma_ {j \\in R} c _ {j, i} \\quad \\forall i \\neq m \\land i \\notin R \\tag {2}\n\\]"
+   },
+   {
+    "label": "display_formula",
+    "content": "\\[\nc _ {m, m} = \\frac {\\Sigma_ {i , j \\in R} c _ {j , j} * c _ {i , j}}{\\Sigma_ {j \\in R} c _ {j , j}} \\tag {3}\n\\]"
+   },
+   {
+    "label": "text",
+    "content": "Eq. 1 estimates the cost of evaluating the workload of replica i on the merged replica m as a weighted average of the cost of executing queries of i on the layout of each replica in R. The intuition is that when we merge two workloads containing queries of different types the layout is optimized to be good on average. The layout will be biased in favor of the expensive set of queries. We use  \\( c_{j,j} \\)  as the weight to mimic that. Eq. 2 is the cost of evaluating the workload of m on the layout of i. As the workload of m is the union of the workloads of all replicas in R, the cost is the sum of cost of individual workloads. Eq. 3 is a combination of Eq. 1 and Eq. 2."
+   },
+   {
+    "label": "text",
+    "content": "We found that the above approximation worked well in our experiments. We tried other heuristics such as estimating the merged layout (instead of the cost) by taking a weighted average of the layout parameters (number of partitions along each dimension),"
+   },
+   {
+    "label": "text",
+    "content": "merging the queries with the most similar access patterns, etc., but found they did not work as well for the datasets that we tested."
+   },
+   {
+    "label": "text",
+    "content": "For the starting configuration with a replica for each query type, we train Augmented Grid for each replica and compute  \\( c_{i,j} \\)  for all i, j. For other configurations explored, we approximate the cost as described above. The cost estimate gets stale as more nodes are merged into the same replica. The costs are recomputed by optimizing the layout when the number of merges exceeds a threshold."
+   },
+   {
+    "label": "paragraph_title",
+    "content": "5.5 Space Allocation"
+   },
+   {
+    "label": "text",
+    "content": "We now discuss how to allocate the space budget available for replication among the candidate regions and determine the final layout. Our objective is to find the operating point on each candidate region's cost-space Pareto frontier that minimizes the total cost of execution with the total size under the available budget."
+   },
+   {
+    "label": "text",
+    "content": "The total cost of execution is the sum of costs and the total size of the layout is the sum of sizes of each candidate region. Each Pareto frontier is piece-wise linear and convex. So we can start at the left-most point on the Pareto curve in each candidate region and descend down the steepest edge of the curve until the replication budget is exhausted to find the optimal space allocation."
+   },
+   {
+    "label": "text",
+    "content": "We index the points on the Pareto optimal frontier from left to right for all candidate regions.  \\( (s_{0}, c_{0}) \\)  is the leftmost point corresponding to the replication configuration with one replica for all query types. On each candidate region's Pareto frontier, we may move along the curve by taking a full step from  \\( (s_{i}, c_{i}) \\)  to  \\( (s_{i+1}, c_{i+1}) \\) . This consumes  \\( (s_{i+1} - s_{i}) \\)  space from the available budget. The benefit per unit of space this step is  \\( (c_{i} - c_{i+1}) / (s_{i+1} - s_{i}) \\) . If there is not enough space to take a full step, then we may take a partial step from  \\( (s_{i}, c_{i}) \\)  to  \\( (f * s_{i} + (1 - f) * s_{i+1}, f * c_{i} + (1 - f) * c_{i+1}) \\)  where 0 < f < 1, exhausting the budget. The benefit per unit of space is the same as a full step."
+   },
+   {
+    "label": "text",
+    "content": "Our iterative algorithm works as follows: We initialize the operating point to \\((s_0, c_0)\\) for each candidate region."
+   },
+   {
+    "label": "text",
+    "content": "(1) Pick the candidate region with the highest benefit per unit of space for the next step."
+   },
+   {
+    "label": "text",
+    "content": "(2) Take a full step on the candidate region's Pareto curve if there is sufficient remaining budget. Otherwise, take a partial step."
+   },
+   {
+    "label": "text",
+    "content": "(3) Iterate until space is exhausted or every candidate region is fully replicated."
+   },
+   {
+    "label": "text",
+    "content": ""
+   },
+   {
+    "label": "text",
+    "content": "After finding the optimal space allocation, if the operating point on the Pareto curve is on a vertex, then the candidate region is replicated using the configuration of that vertex. It's possible that the operating point is on an edge, in which case the candidate region is split into two and replicated under the configurations of the end points of the edge. A fraction of the data is replicated using the configuration of one end point and remaining fraction using the configuration of the other end point to fully utilize the available space budget. The Grid Tree node corresponding to the candidate region is split into two. As the candidates regions are nearly uniform as defined in section §5.3, we can choose an arbitrary dimension to split the node. For example, with enough storage budget to replicate an eighth of the table, we will split the Grid Tree node corresponding to the upper right quarter into two and replicate one of the child nodes as in Fig. 6."
+   },
+   {
+    "label": "text",
+    "content": "At this point, we have the final Grid Tree and the replication configuration for each leaf node. If the layout for any replica in the"
+   },
+   {
+    "label": "number",
+    "content": "991"
+   }
+  ]
+ },
+ "page_break_in_the_written_markdown": {
+  "paper": "vldb-2022-p72-li",
+  "blocks": [
+   {
+    "label": "text",
+    "content": "FACE can also support join queries in two ways: Single-Model and Multi-models."
+   },
+   {
+    "label": "text",
+    "content": "Single-Model follows existing solution [11, 44] that leverages one estimator to learn the distribution of each table and joins of"
+   },
+   {
+    "label": "text",
+    "content": "multiple tables in the schema. We first generate a full-join table using full outer join, and then add some columns to the full table. Note that it is expensive to generate all join tuples, we sample some joined tuples [47]. Next, we train a single model for the full-join table using our method and then uses the estimation method to support both a single table and multiple tables (with join queries). Note that the full-join table may contain duplicated tuples for a query and NULL values. To address this issue, we add additional columns and feed the table with additional columns into our model. After training, given a query, we use the trained model to estimate the cardinality. The difference is that we will further leverage the values in additional columns to correct the probability densities considering the join types, redundant tuples, and NULL values."
+   },
+   {
+    "label": "text",
+    "content": "For the Single-model, the full-join table may be very sparse and the trained model may not be effective for different queries. To address this, we can train multiple models, i.e., training a model for each possible join query, and then given a query, we use the corresponding model to estimate the cardinality. However, it is rather expensive to enumerate all possible joins and build a model for each join. To alleviate this issue, we can generate all possible join templates based on historical queries (a join template is a join query by removing all predicates and only keeping the join structure), train a model for each template, and then the number of models to be trained can be reduced. To summarize, the advantage is that it provides more fine-grained estimation than the Single-Model. However, it needs additional join template information, and may consume larger memory when the number of models is large."
+   }
+  ]
+ }
+}

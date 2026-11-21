@@ -71,6 +71,20 @@ def init_db():
     cleanup_orphan_runtime_rows()
 
 
+# Indexes of read paths (search-time path selection, scope spellings, the inventory summary)
+# that create_all() cannot add to an existing table; installed by _apply_idempotent_migrations.
+_CATALOG_READ_INDEXES = frozenset({
+    "ix_index_catalog_code_scope_path",
+    "ix_index_catalog_code_path_lookup",
+    "ix_index_catalog_code_scope_lower_path",
+    "ix_index_catalog_code_odd_path",
+    "ix_index_catalog_code_odd_path_any_scope",
+    "ix_index_catalog_live_project_fold",
+    "ix_index_catalog_live_odd_project",
+    "ix_index_catalog_live_summary",
+})
+
+
 def _apply_idempotent_migrations() -> None:
     """Schema patches that create_all() can't apply to pre-existing tables.
 
@@ -91,6 +105,12 @@ def _apply_idempotent_migrations() -> None:
         ("public_code_sources", "created_by_user_id", "VARCHAR(255)"),
         ("public_code_revisions", "cleanup_pending", "BOOLEAN NOT NULL DEFAULT 0"),
         ("tasks", "owner_user_id", "VARCHAR(255)"),
+        ("papers", "source_version", "VARCHAR(32)"),
+        ("papers", "withdrawn", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("papers", "withdrawn_at", "VARCHAR(40)"),
+        ("papers", "full_text_source", "VARCHAR(16)"),
+        # NULL default, no backfill: an existing file is "not known to have changed".
+        ("index_catalog", "content_changed_at", "DATETIME"),
     ]
     with engine.begin() as conn:
         for table, column, ddl in migrations:
@@ -108,9 +128,47 @@ def _apply_idempotent_migrations() -> None:
             "CREATE INDEX IF NOT EXISTS ix_tasks_owner_user_id "
             "ON tasks(owner_user_id)"
         ))
+        # index_catalog read paths that must not scan every file row of an owner/scope
+        # (core/db/models.py::IndexCatalog); create_all() never adds indexes to an
+        # existing table, so a deployed DB gets them here, before the code that uses them.
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_index_catalog_owner_projects "
+            "ON index_catalog(owner_user_id, host, project, root_dir, kind, deleted_at)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_index_catalog_scope_lower_path "
+            "ON index_catalog(owner_user_id, host, project, lower(rel_path))"
+        ))
+        # Search-time path ranges (IndexCatalogRepository.matching_code_paths) and scope
+        # spellings (IndexCatalogRepository.project_spellings). Built from the model's own
+        # Index objects so a partial index's WHERE is spelled once and queries can repeat
+        # it verbatim; installed before the code that depends on them.
+        from sqlalchemy.schema import CreateIndex
+        from core.db.models import IndexCatalog
+        for index in IndexCatalog.__table__.indexes:
+            if index.name in _CATALOG_READ_INDEXES:
+                conn.execute(CreateIndex(index, if_not_exists=True))
+        # Duplicate-code analysis state (app/services/code_kb/analysis.py). create_all()
+        # already creates missing tables at startup; doing it here too means this entry
+        # point alone brings any database up to date, before the code that reads them.
+        from core.db.models import CodeDuplicatePair, CodeScopeAnalysis
+        for model in (CodeScopeAnalysis, CodeDuplicatePair):
+            model.__table__.create(conn, checkfirst=True)
         tables = {row[0] for row in conn.execute(
             text("SELECT name FROM sqlite_master WHERE type='table'")
         ).fetchall()}
+        if "index_scope_policies" in tables:
+            # Automatic indexing runs at most once per 5 minutes per scope (2026-11-15);
+            # policies stored with the old default of 10 are raised to that floor.
+            conn.execute(text(
+                "UPDATE index_scope_policies SET min_check_interval_s = 300 "
+                "WHERE min_check_interval_s < 300"
+            ))
+        if "journal_entries" in tables:
+            from core.db.models import JournalEntry
+            for index in JournalEntry.__table__.indexes:
+                if index.name == "ix_journal_entries_project_kind":
+                    conn.execute(CreateIndex(index, if_not_exists=True))
         if "journal_projects" in tables:
             conn.execute(text("DROP INDEX IF EXISTS ix_journal_projects_slug"))
             conn.execute(text(

@@ -1,0 +1,20 @@
+# vLLM server of bge-reranker-v2-m3 for core/retrieval/reranker.py (VllmReranker, POST /rerank).
+# Keys are `vllm serve` options, hyphenated; vLLM 0.33.0 (the same venv as vllm_bge_m3.yaml). One set of keys
+# for every host; only the model directory, the port and gpu-memory-utilization are the host's (command line).
+# Measured on the RTX 3090 (RESEARCH-2026-11-14-vllm-serving.md Q2, §4.3, §7.3): fp16 107 pairs/s vs FlagReranker
+# 76; raw logit vs FlagReranker mean diff 0.0027, top-1 equal on 116/116 queries.
+# cuBLAS fp16 accumulation is NOT applied here: it was measured for BGE-M3 embeddings only, not for reranker scores.
+served-model-name: bge-reranker-v2-m3
+host: 127.0.0.1
+runner: pooling
+dtype: float16
+# the model's own limit; the client cuts each pair to settings.reranker.max_length with the top-level
+# truncate_prompt_tokens (inside the body it is silently ignored), which must stay <= this
+max-model-len: 8192
+max-num-batched-tokens: 16384
+# interactive rerank requests carry a lower priority value than any background work (a top-level request field)
+scheduling-policy: priority
+api-server-count: 1
+# a pooling model has no KV cache: this is not a cap, the footprint is weights + CUDA graphs + one step
+# (1.7 GiB idle, ~1.9 GiB at 16384 tokens per step)
+gpu-memory-utilization: 0.2

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from collections import Counter
@@ -31,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from pipeline.paper_crawler.ccf_a_main_corpus import sanitize_file_component  # type: ignore
+from pipeline.paper_crawler.runtime_files import write_text_atomic
 
 CORPUS_ROOT = ROOT / "data" / "papers" / "ccf_a_main_conference_corpus"
 MANIFEST_PATH = CORPUS_ROOT / "manifests" / "paper_manifest.json"
@@ -132,11 +134,9 @@ def main() -> int:
             print(f"    {k[0]:<10}{k[1]:>6}{pdf_filled.get(k,0):>10}{md_filled.get(k,0):>10}")
 
     if args.execute and (pdf_total_new or md_total_new):
-        tmp = mp.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         bak = mp.with_suffix(f".json.bak.{int(time.time())}")
-        mp.rename(bak)
-        tmp.rename(mp)
+        shutil.copy2(mp, bak)
+        write_text_atomic(mp, json.dumps(data, ensure_ascii=False, indent=2))
         print(f"\n[execute] wrote {mp}  (backup: {bak.name})")
     elif args.execute:
         print("\n[execute] no changes — manifest already in sync")

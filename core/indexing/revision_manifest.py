@@ -9,11 +9,8 @@ remain domain concerns outside ``core``.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from pathlib import PurePosixPath
-import re
 
-
-_WINDOWS_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
+from core.paths import safe_relative_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,16 +105,4 @@ def diff_revision_manifests(
 def _normalize_relative_path(path: str) -> str:
     """Normalize a portable relative file path and reject scope escapes."""
 
-    normalized_input = path.replace("\\", "/")
-    if not normalized_input or normalized_input.startswith("/") or _WINDOWS_DRIVE_PREFIX.match(normalized_input):
-        raise ValueError("manifest paths must be non-empty relative paths")
-
-    path_parts = normalized_input.split("/")
-    if any(part in {"", ".", ".."} for part in path_parts):
-        raise ValueError("manifest paths must be normalized relative paths")
-
-    normalized_path = str(PurePosixPath(normalized_input))
-    if normalized_path == "." or PurePosixPath(normalized_path).is_absolute():
-        raise ValueError("manifest paths must be non-empty relative paths")
-
-    return normalized_path
+    return safe_relative_path(path, what="manifest relative path")

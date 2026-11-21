@@ -20,6 +20,11 @@ from urllib.parse import urlparse
 import pytest
 
 
+# The backend's start-up waits for the embedding service for up to three minutes
+# (settings.embedding.service_wait_s); a test that enters main.app's lifespan must not, whatever runs on 18200.
+os.environ.setdefault("EMBEDDING__SERVICE_WAIT_S", "0")
+
+
 def pytest_configure(config) -> None:
     """Avoid pytest's broken global `pytest-current` reparse point on this Windows host.
 
@@ -116,3 +121,13 @@ def pytest_collection_modifyitems(config, items):
             reachable[base] = _server_up(base)
         if not reachable[base]:
             item.add_marker(pytest.mark.skip(reason=f"live server {base} unreachable"))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_stats_cache():
+    """The statistics endpoints cache for minutes; no test may see another test's database."""
+    from core.cache import stats_cache
+
+    stats_cache.clear()
+    yield
+    stats_cache.clear()

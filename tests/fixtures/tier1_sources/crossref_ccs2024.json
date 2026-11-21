@@ -1,0 +1,444 @@
+{
+ "status": "ok",
+ "message-type": "work-list",
+ "message-version": "1.0.0",
+ "message": {
+  "facets": {},
+  "total-results": 5,
+  "items": [
+   {
+    "DOI": "10.1145/3658644.3691414",
+    "title": [
+     "Poster: Solving the Free-rider Problem in Bittensor"
+    ],
+    "page": "5045-5047",
+    "type": "proceedings-article",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0009-0003-7305-4448",
+      "authenticated-orcid": false,
+      "suffix": "Miss",
+      "given": "Sin Tai",
+      "family": "Liu",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Opentensor Foundation, Toronto, Canada"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-5768-9249",
+      "authenticated-orcid": false,
+      "suffix": "Mr",
+      "given": "Jiayuan",
+      "family": "Yu",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Information Systems Engineering, Concordia University, Montreal, Canada"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0009-0008-6107-8318",
+      "authenticated-orcid": false,
+      "suffix": "Mr",
+      "given": "Jacob",
+      "family": "Steeves",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Opentensor Foundation, Toronto, Canada"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security"
+    ]
+   },
+   {
+    "DOI": "10.1145/3658644.3691412",
+    "title": [
+     "Poster: Repairing Bugs with the Introduction of New Variables: A Multi-Agent Large Language Model"
+    ],
+    "page": "4961-4963",
+    "type": "proceedings-article",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0009-0005-7702-0733",
+      "authenticated-orcid": false,
+      "given": "Elisa",
+      "family": "Zhang",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Dougherty Valley High School, San Ramon, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0009-0005-1284-0300",
+      "authenticated-orcid": false,
+      "given": "Shiyu",
+      "family": "Sun",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "George Mason University, Fairfax, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-3844-2467",
+      "authenticated-orcid": false,
+      "given": "Yunlong",
+      "family": "Xing",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "George Mason University, Fairfax, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0003-4152-2107",
+      "authenticated-orcid": false,
+      "given": "Kun",
+      "family": "Sun",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "George Mason University, Fairfax, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security"
+    ]
+   },
+   {
+    "DOI": "10.1145/3658644.3670337",
+    "title": [
+     "AITIA: Efficient Secure Computation of Bivariate Causal Discovery"
+    ],
+    "page": "4420-4434",
+    "type": "proceedings-article",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0000-0002-9637-7624",
+      "authenticated-orcid": false,
+      "given": "Truong Son",
+      "family": "Nguyen",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Arizona State University, Tempe, AZ, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0009-0009-0658-7774",
+      "authenticated-orcid": false,
+      "given": "Lun",
+      "family": "Wang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "UC Berkeley, Berkeley, CA, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-9982-6536",
+      "authenticated-orcid": false,
+      "given": "Evgenios M.",
+      "family": "Kornaropoulos",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "George Mason University, Fairfax, VA, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-6013-9512",
+      "authenticated-orcid": false,
+      "given": "Ni",
+      "family": "Trieu",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Arizona State University, Tempe, AZ, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security"
+    ]
+   },
+   {
+    "DOI": "10.1145/3658644.3690254",
+    "title": [
+     "<scp>BaseMirror:</scp>\n            Automatic Reverse Engineering of Baseband Commands from Android's Radio Interface Layer"
+    ],
+    "page": "2311-2325",
+    "type": "proceedings-article",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0000-0002-1083-2842",
+      "authenticated-orcid": false,
+      "given": "Wenqiang",
+      "family": "Li",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "The Ohio State University, Columbus, Ohio, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-2753-0250",
+      "authenticated-orcid": false,
+      "given": "Haohuang",
+      "family": "Wen",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "The Ohio State University, Columbus, Ohio, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-6527-5994",
+      "authenticated-orcid": false,
+      "given": "Zhiqiang",
+      "family": "Lin",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "The Ohio State University, Columbus, Ohio, USA"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security"
+    ]
+   },
+   {
+    "DOI": "10.1145/3658644.3690261",
+    "title": [
+     "Direct Range Proofs for Paillier Cryptosystem and Their Applications"
+    ],
+    "page": "899-913",
+    "type": "proceedings-article",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0009-0000-8370-5396",
+      "authenticated-orcid": false,
+      "given": "Zhikang",
+      "family": "Xie",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "The University of Hong Kong, Hong Kong, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-5854-9085",
+      "authenticated-orcid": false,
+      "given": "Mengling",
+      "family": "Liu",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "The Hong Kong Polytechnic University, Hong Kong, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-0173-7894",
+      "authenticated-orcid": false,
+      "given": "Haiyang",
+      "family": "Xue",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Singapore Management University, Singapore, Singapore"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0003-2068-9530",
+      "authenticated-orcid": false,
+      "given": "Man Ho",
+      "family": "Au",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "The Hong Kong Polytechnic University, Hong Kong, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0003-3491-8146",
+      "authenticated-orcid": false,
+      "given": "Robert H.",
+      "family": "Deng",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Singapore Management University, Singapore, Singapore"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-3975-8500",
+      "authenticated-orcid": false,
+      "given": "Siu-Ming",
+      "family": "Yiu",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "The University of Hong Kong, Hong Kong, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "container-title": [
+     "Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security"
+    ]
+   }
+  ],
+  "items-per-page": 60,
+  "query": {
+   "start-index": 0,
+   "search-terms": null
+  }
+ }
+}

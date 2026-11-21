@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.services.code_kb.service import CodeKBService
 from app.services.code_kb.schemas import CodeIndexRequest, CodeSearchRequest, CodeSearchResponse
+from app.services.scope_paths import scopes_share_files
 
 _VOCAB = ["qdrant", "upsert", "wait", "react", "button", "render", "vector"]
 
@@ -352,6 +353,9 @@ class FakeStore:
         """In-memory stores keep no vectors worth reusing; real Qdrant is tested separately."""
         return [None] * len(items)
 
+    def reusable_vectors_by_content(self, **_scope):
+        return {}
+
     def __init__(self):
         self.points = []
 
@@ -383,6 +387,12 @@ class FakeStore:
                 if p["owner_user_id"] == owner_user_id
                 and self._project_matches(p["project"], project)}
 
+    def list_point_ids_and_paths(self, *, owner_user_id, project):
+        return (
+            self.list_point_ids_for_paths(owner_user_id=owner_user_id, project=project),
+            self.list_paths(owner_user_id=owner_user_id, project=project),
+        )
+
     def list_point_ids_for_paths(self, *, owner_user_id, project, paths=None):
         return {
             id(point) for point in self.points
@@ -404,12 +414,20 @@ class FakeStore:
         self.points = [point for point in self.points if id(point) not in point_ids]
         return before - len(self.points)
 
-    def list_owner_files(self, *, owner_user_id):
+    def list_owner_files(self, *, owner_user_id, related_to=None, exclude_project=None):
         return {(p["project"], p["path"]) for p in self.points
-                if p["owner_user_id"] == owner_user_id}
+                if p["owner_user_id"] == owner_user_id
+                and p["project"] != exclude_project
+                and (related_to is None or scopes_share_files(p["project"], related_to))}
 
     def list_owner_paths(self, *, owner_user_id):
         return {p["path"] for p in self.points if p["owner_user_id"] == owner_user_id}
+
+    def matching_paths(self, *, owner_user_id, project, pattern, case_sensitive):
+        from app.services.scope_paths import path_matches
+        paths = (self.list_paths(owner_user_id=owner_user_id, project=project)
+                 if project else self.list_owner_paths(owner_user_id=owner_user_id))
+        return [p for p in paths if path_matches(p, pattern, case_sensitive=case_sensitive)], len(paths)
 
     def delete_paths(self, *, owner_user_id, project, paths):
         if not paths:

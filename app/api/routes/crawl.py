@@ -77,7 +77,7 @@ class HtmlUploadResponse(BaseModel):
 # ==================== 路由 ====================
 
 @router.post("/urls", response_model=CrawlTaskResponse)
-async def crawl_urls(
+def crawl_urls(
     request: CrawlUrlsRequest,
     db: Session = Depends(get_db)
 ):
@@ -173,7 +173,7 @@ async def crawl_urls(
 
 
 @router.post("/html", response_model=HtmlUploadResponse)
-async def crawl_from_html(
+def crawl_from_html(
     file: UploadFile = File(..., description="HTML文件"),
     use_proxy: bool = Form(False, description="是否使用代理"),
     auto_index: bool = Form(True, description="爬取后是否自动索引"),
@@ -193,7 +193,7 @@ async def crawl_from_html(
         raise HTTPException(400, f"Expected HTML file, got: {ext}")
 
     # 读取文件内容
-    content = await file.read()
+    content = file.file.read()
     try:
         html_content = content.decode("utf-8", errors="ignore")
     except Exception:
@@ -278,7 +278,7 @@ async def crawl_from_html(
 
 
 @router.get("/records", response_model=CrawlRecordListResponse)
-async def list_crawl_records(
+def list_crawl_records(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     task_id: Optional[int] = Query(None, description="任务ID筛选"),

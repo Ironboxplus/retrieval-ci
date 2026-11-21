@@ -1,0 +1,90 @@
+{
+ "dois": [
+  "10.1109/tpami.2023.3296600",
+  "10.1109/tpami.2023.3329725",
+  "10.1109/tpami.2023.3328397",
+  "10.1007/s11263-025-02489-1",
+  "10.1007/s11263-024-02023-9"
+ ],
+ "response": [
+  {
+   "paperId": "2c0fb8e8b233a5abb6469df7ac1c23556d44811a",
+   "title": "OPAL: Occlusion Pattern Aware Loss for Unsupervised Light Field Disparity Estimation",
+   "externalIds": {
+    "DBLP": "journals/pami/LiZWDHWY24",
+    "ArXiv": "2203.02231",
+    "DOI": "10.1109/TPAMI.2023.3296600",
+    "CorpusId": 247244753,
+    "PubMed": "37463080"
+   },
+   "openAccessPdf": {
+    "url": "https://arxiv.org/pdf/2203.02231",
+    "status": "GREEN",
+    "license": "CCBY"
+   }
+  },
+  {
+   "paperId": "195fb923a979f9eddb1ba7ac55de7c2230188c9f",
+   "title": "PFENet++: Boosting Few-Shot Semantic Segmentation With the Noise-Filtered Context-Aware Prior Mask",
+   "externalIds": {
+    "DBLP": "journals/corr/abs-2109-13788",
+    "ArXiv": "2109.13788",
+    "DOI": "10.1109/TPAMI.2023.3329725",
+    "CorpusId": 238198065,
+    "PubMed": "37917518"
+   },
+   "openAccessPdf": {
+    "url": "https://arxiv.org/pdf/2109.13788",
+    "status": "GREEN",
+    "license": null
+   }
+  },
+  {
+   "paperId": "d8fbe83ea0863722ad445f8f6bb7c4d4d9793071",
+   "title": "False Correlation Reduction for Offline Reinforcement Learning",
+   "externalIds": {
+    "DBLP": "journals/pami/DengFWYBZWJ24",
+    "ArXiv": "2110.12468",
+    "DOI": "10.1109/TPAMI.2023.3328397",
+    "CorpusId": 239769234,
+    "PubMed": "37903051"
+   },
+   "openAccessPdf": {
+    "url": "https://arxiv.org/pdf/2110.12468",
+    "status": "GREEN",
+    "license": null
+   }
+  },
+  {
+   "paperId": "09c27a852e8747a7d4774748048a4484900e6467",
+   "title": "EventEgo3D++: 3D Human Motion Capture from A Head-Mounted Event Camera",
+   "externalIds": {
+    "PubMedCentral": "12420717",
+    "ArXiv": "2502.07869",
+    "DBLP": "journals/corr/abs-2502-07869",
+    "DOI": "10.1007/s11263-025-02489-1",
+    "CorpusId": 276287810,
+    "PubMed": "40937461"
+   },
+   "openAccessPdf": {
+    "url": "https://link.springer.com/content/pdf/10.1007/s11263-025-02489-1.pdf",
+    "status": "HYBRID",
+    "license": "CCBY"
+   }
+  },
+  {
+   "paperId": "1dd0a1c199e3d5bdac6e58bd1ec2281fe5182b59",
+   "title": "Robust Heterogeneous Model Fitting for Multi-source Image Correspondences",
+   "externalIds": {
+    "DBLP": "journals/ijcv/LinHLLWW24",
+    "DOI": "10.1007/s11263-024-02023-9",
+    "CorpusId": 267968836
+   },
+   "openAccessPdf": {
+    "url": "",
+    "status": "CLOSED",
+    "license": null
+   }
+  }
+ ]
+}

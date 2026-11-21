@@ -1,0 +1,171 @@
+{
+ "paper": "jmlr-2022-21-0052",
+ "page": 13,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     343,
+     78,
+     872,
+     102
+    ],
+    "block_content": "REGULARIZED K-MEANS THROUGH HARD-THRESHOLDING"
+   },
+   {
+    "block_id": 1,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     175,
+     184,
+     551,
+     210
+    ],
+    "block_content": "5. Synthetic Data Experiments"
+   },
+   {
+    "block_id": 2,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     226,
+     1048,
+     414
+    ],
+    "block_content": "In this section we empirically evaluate the proposed methodology in four separate simulation studies. The first focuses on comparing the different penalty types within the regularized K-means framework of Equation 2. The second compares different techniques for selecting the regularization parameter  $ \\lambda $. The third simulation study compares the proposed HTK-means method with other existing approaches to regularized clustering. The fourth and final simulation study investigates whether AIC and the proposed sparse starting values can improve the performance of other regularized clustering algorithms."
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     416,
+     1047,
+     469
+    ],
+    "block_content": "We start by describing the synthetic data generation process used throughout the simulation studies."
+   },
+   {
+    "block_id": 4,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     175,
+     499,
+     525,
+     524
+    ],
+    "block_content": "5.1 Synthetic Data Generation"
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     537,
+     1046,
+     677
+    ],
+    "block_content": "The data generation process starts from the approach of Sun et al. (2012) and extends this in several directions. We generate data sets of  $ n \\in \\{80, 800\\} $ observations  $ \\underline{x_1}, \\ldots, \\underline{x_n} $ in  $ p \\in \\{50, 200, 500, 1000\\} $ dimensions. First the true cluster assignment vector  $ \\underline{y} = y_1, \\ldots, y_n $ is sampled from  $ \\{1, \\ldots, K\\} $ where  $ K \\in \\{2, 4, 8\\} $. For each observation  $ \\underline{x_i} $, only the first 50 variables are informative. They are sampled from  $ \\mathcal{N}\\left(\\underline{\\mu}(y_i), I_{50}\\right) $, where  $ \\underline{\\mu}(y_i) $ is given by"
+   },
+   {
+    "block_id": 6,
+    "block_label": "display_formula",
+    "block_bbox": [
+     230,
+     712,
+     992,
+     916
+    ],
+    "block_content": " $$ \\begin{aligned}\\underline{\\mu}_{K=2}(\\boldsymbol{y}_{i})&=\\gamma\\mathbf{1}_{50}\\mathbf{1}_{y_{i}=1}-\\gamma\\mathbf{1}_{50}\\mathbf{1}_{y_{i}=2}\\\\\\underline{\\mu}_{K=4}(\\boldsymbol{y}_{i})&=(-\\gamma\\mathbf{1}_{25},\\gamma\\mathbf{1}_{25})\\mathbf{1}_{y_{i}=1}+\\gamma\\mathbf{1}_{50}\\mathbf{1}_{y_{i}=2}+(\\gamma\\mathbf{1}_{25},-\\gamma\\mathbf{1}_{25})\\mathbf{1}_{y_{i}=3}-\\gamma\\mathbf{1}_{50}\\mathbf{1}_{y_{i}=4}\\\\\\underline{\\mu}_{K=8}(\\boldsymbol{y}_{i})&=(\\gamma\\mathbf{1}_{17},\\gamma\\mathbf{1}_{17},\\gamma\\mathbf{1}_{16})\\mathbf{1}_{y_{i}=1}+(\\gamma\\mathbf{1}_{17},-\\gamma\\mathbf{1}_{17},\\gamma\\mathbf{1}_{16})\\mathbf{1}_{y_{i}=2}\\\\&+(\\gamma\\mathbf{1}_{17},\\gamma\\mathbf{1}_{17},-\\gamma\\mathbf{1}_{16})\\mathbf{1}_{y_{i}=3}+(\\gamma\\mathbf{1}_{17},-\\gamma\\mathbf{1}_{17},-\\gamma\\mathbf{1}_{16})\\mathbf{1}_{y_{i}=4}\\\\&+(-\\gamma\\mathbf{1}_{17},\\gamma\\mathbf{1}_{17},\\gamma\\mathbf{1}_{16})\\mathbf{1}_{y_{i}=5}+(-\\gamma\\mathbf{1}_{17},-\\gamma\\mathbf{1}_{17},\\gamma\\mathbf{1}_{16})\\mathbf{1}_{y_{i}=6}\\\\&+(-\\gamma\\mathbf{1}_{17},\\gamma\\mathbf{1}_{17},-\\gamma\\mathbf{1}_{16})\\mathbf{1}_{y_{i}=7}+(-\\gamma\\mathbf{1}_{17},-\\gamma\\mathbf{1}_{17},-\\gamma\\mathbf{1}_{16})\\mathbf{1}_{y_{i}=8}\\end{aligned} $$ "
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     926,
+     1050,
+     1196
+    ],
+    "block_content": "Large values of $\\gamma$ produce well-separated clusters and small values of $\\gamma$ produce clusters with a lot of overlap. We vary the value of $\\gamma$ in $\\{0.4, 0.5, 0.6, 0.7, 0.8\\}$. The remaining $p-50$ are noise variables sampled randomly from $\\mathcal{N}(0,1)$. For each of the 120 simulation settings, we generate 100 data sets and average the results over these replications. The range of simulations setups under consideration is fairly broad. The setups with $n=800$ are roughly covered by the Theorems in Section 3, whereas the $n=80$ settings complement these results in a higher-dimensional setting. For each combination of $n$ and $p$, the range of $\\gamma$ values more or less covers the transition from poor performances (for low values of $\\gamma$) to excellent performances (for larger $\\gamma$). Finally the values of $K$ cover many practical clustering tasks, where often a relatively small number of clusters are sought."
+   },
+   {
+    "block_id": 8,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1198,
+     1048,
+     1249
+    ],
+    "block_content": "Before clustering, we standardize the data so that each variable has a mean of 0 and a variance of 1."
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     1251,
+     1047,
+     1359
+    ],
+    "block_content": "In order to evaluate clustering performance, we calculate the adjusted rand index (ARI) (Rand, 1971; Hubert and Arabie, 1985) between the estimated partition and the true clustering. The ARI has an expected value of 0 for random clusterings of the data. A perfect agreement between the true and estimated partitions corresponds to an ARI of 1."
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1361,
+     1049,
+     1413
+    ],
+    "block_content": "We compare the regularized K-means algorithms with the different penalties. Each of the methods is calculated on a grid of 40 lambda values given by  $ 10^{-2+4i/40} $, for i ="
+   },
+   {
+    "block_id": 11,
+    "block_label": "number",
+    "block_bbox": [
+     601,
+     1449,
+     625,
+     1468
+    ],
+    "block_content": "13"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['16', '17', '25']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 21,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 1.0,
+   "numbers_unknown": 3,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.0,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

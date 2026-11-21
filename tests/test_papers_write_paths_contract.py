@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts" / "remote_embed"))
 
 from app.models.schemas import Chunk
+from core.indexing.embedding_profile import current_embed_fp
 from core.storage.papers_payload import project_papers_payload
 from core.storage.qdrant_store import QdrantStore
 from pipeline.paper_crawler.integration.api_routes import _build_paper_point_payload
@@ -59,6 +60,7 @@ class TestApiRoutesWritePath:
             "source_type": "paper", "level": chunk_row["level"],
             "venue": paper_meta["venue"], "year": paper_meta["year"],
             "venue_tier": paper_meta["venue_tier"], "content": chunk_row["content"],
+            "embed_fp": current_embed_fp(),
         }
         assert payload == project_papers_payload(expected_raw)
         assert payload["doc_id"] == "42605"  # D2 — int SQL doc_id normalized to str

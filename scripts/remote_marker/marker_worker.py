@@ -130,7 +130,15 @@ def _load_done(done_path: Path) -> set[str]:
     return {line.strip() for line in done_path.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
+def _retired() -> None:
+    """RETIRED: Marker loads torch / surya models into this process; PDF->Markdown is the registered PaddleOCR-VL worker now."""
+    from core.inference_retired import EXTRACTOR_INSTEAD, RetiredInferencePath
+
+    raise RetiredInferencePath("marker_worker.py (in-process torch / surya Marker)", EXTRACTOR_INSTEAD)
+
+
 def main() -> int:
+    _retired()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)

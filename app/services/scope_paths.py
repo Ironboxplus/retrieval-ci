@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import ntpath
 import posixpath
+from dataclasses import dataclass
 from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
 import pathspec
+
+from core.paths import safe_relative_path
 
 
 def _is_windows_device_path(path: str) -> bool:
@@ -76,20 +79,12 @@ def normalize_relative_path(path: str) -> str:
     are rejected instead of being silently reinterpreted: ``path_glob`` must be relative
     to ``repo_root``/``scope_dir`` and never select a sibling scope by accident.
     """
-    raw = (path or "").replace("\\", "/")
-    windows_path = PureWindowsPath(raw)
-    posix_path = PurePosixPath(raw)
-    # A drive-relative path such as E:folder is not absolute, but is still outside the
-    # scope-relative namespace. PureWindowsPath exposes that distinction via ``drive``.
-    if windows_path.drive or windows_path.root or posix_path.is_absolute():
-        raise ValueError("path_glob/file path must be scope-relative, not absolute")
-    trailing_slash = raw.endswith("/")
-    if ".." in posix_path.parts:
-        raise ValueError("path_glob/file path must not contain '..' components")
-    normalized = posix_path.as_posix()
-    if normalized in {"", "."}:
-        raise ValueError("path_glob/file path must name a scope-relative file or directory")
-    return normalized + "/" if trailing_slash else normalized
+    return safe_relative_path(
+        path,
+        what="path_glob/file path",
+        allow_trailing_slash=True,
+        reject_empty_segments=False,
+    )
 
 
 def _normalize_stored_relative_path(path: str) -> str | None:
@@ -103,6 +98,14 @@ def _normalize_stored_relative_path(path: str) -> str | None:
         return normalize_relative_path(raw)
     except ValueError:
         return None
+
+
+def has_dot_directory_segment(path: str) -> bool:
+    """True if any DIRECTORY segment of a relative path starts with ".". The Journal doc
+    walker never descends into dot-directories, so such a path (``.conversations/...``) is
+    outside every scan envelope; a dot-FILE basename (``notes/.hidden.md``) is not."""
+    segments = path.replace("\\", "/").split("/")[:-1]
+    return any(s.startswith(".") and s not in {".", ".."} for s in segments)
 
 
 def stored_relative_path_identity(path: str, *, case_sensitive: bool) -> str | None:
@@ -185,3 +188,123 @@ def is_scope_ancestor(parent_norm: str, child_norm: str) -> bool:
     parent = path_type(parent_norm)
     child = path_type(child_norm)
     return parent != child and child.is_relative_to(parent)
+
+
+def scope_ancestors(scope: str) -> list[tuple[str, str]]:
+    """``(ancestor scope, path of ``scope`` below it)`` pairs, nearest first, up to the root.
+
+    Only lexical: nothing here knows which ancestors are indexed. The remainder uses
+    forward slashes and, for Windows scopes, the case-folded canonical spelling, so it can
+    be compared with a stored relative path under :func:`stored_relative_path_identity`.
+    A scope that is not an absolute path has no ancestors.
+    """
+    canonical = canonicalize_scope_path(scope)
+    if not scope_looks_like_path(canonical):
+        return []
+    path_type: type[PurePath] = PureWindowsPath if is_windows_scope(canonical) else PurePosixPath
+    path = path_type(canonical)
+    return [
+        (canonicalize_scope_path(parent.as_posix()), path.relative_to(parent).as_posix())
+        for parent in path.parents
+    ]
+
+
+# --- literal anchors of a glob / directory, shared by every SQL path prefilter -------
+# A search narrowed to a directory or ``path_glob`` must not read every stored path of the
+# scope. The gitignore semantics stay in Python (``path_matches``); this only derives which
+# stored paths could possibly match, in comparison spelling, so each store (journal titles,
+# catalog rel_paths) can turn the same anchors into its own SQL.
+
+_GLOB_META = frozenset("*?[")
+
+
+@dataclass(frozen=True)
+class PathReach:
+    """Literal beginnings that bound the stored paths a glob or directory can accept.
+
+    ``prefixes``: the path starts with one of these strings.
+    ``entries``: the path equals one of these (a file) or lies under it (a directory).
+    ``directories``: the path lies strictly under one of these.
+    ``any_depth``: like ``entries`` but the name may sit at any directory depth.
+
+    Strings are in canonical spelling (case-folded for case-insensitive scopes) and say
+    nothing about legacy stored spellings (leading ``/``, ``./``, ``//``, backslashes):
+    each store accommodates those in its own medium.
+    """
+
+    prefixes: tuple[str, ...] = ()
+    entries: tuple[str, ...] = ()
+    directories: tuple[str, ...] = ()
+    any_depth: tuple[str, ...] = ()
+
+
+def sql_foldable(text: str) -> bool:
+    """Whether SQLite's ASCII-only ``lower()`` agrees with ``str.casefold`` on ``text``.
+
+    True for ASCII and for scripts without case (CJK). False for a cased non-ASCII letter:
+    ``lower('É')`` stays ``É`` in SQLite while the Python identity folds it to ``é``, so a
+    range over ``lower(path)`` could miss rows the exact match accepts."""
+    return all(
+        ch.isascii() or (ch.casefold() == ch and ch.lower() == ch and ch.upper() == ch)
+        for ch in text
+    )
+
+
+def glob_reach(pattern: str, *, case_sensitive: bool) -> PathReach | None:
+    """Anchors of a ``path_glob``, or None when its reach is not provably bounded.
+
+    Never narrower than ``path_matches``: a pattern whose first segment is a wildcard,
+    a negation, a comment or padded with whitespace has no literal anchor.
+    """
+    if not pattern or pattern != pattern.strip() or pattern[0] in "!#":
+        return None
+    core = pattern.rstrip("/")
+    if not case_sensitive:
+        core = core.casefold()
+        if not sql_foldable(core):
+            return None
+    if not core:
+        return None
+    anchored = "/" in core  # slash at the start or in the middle => relative to the scope root
+    meta_at = next((i for i, ch in enumerate(core) if ch in _GLOB_META), None)
+    if meta_at is not None:
+        prefix = core[:meta_at]
+        if not anchored or not prefix:
+            return None
+        return PathReach(prefixes=(prefix,))
+    # a bare name matches that segment at any depth
+    return PathReach(entries=(core,), any_depth=() if anchored else (core,))
+
+
+def directory_reach(directory: str, *, case_sensitive: bool) -> PathReach | None:
+    """Anchors of "every file below this scope-relative directory".
+
+    ``directory`` is a literal path (``[`` or ``*`` in a name are ordinary characters),
+    already normalised by :func:`normalize_relative_path`, without a trailing slash."""
+    core = directory.strip("/")
+    if not case_sensitive:
+        core = core.casefold()
+        if not sql_foldable(core):
+            return None
+    return PathReach(directories=(core,)) if core else None
+
+
+def scopes_share_files(a: str, b: str) -> bool:
+    """Whether a file indexed under scope ``a`` can be the SAME physical file as one
+    indexed under scope ``b`` (identity is :func:`file_abspath`).
+
+    Stored relative paths are scope-relative and never contain ``..``
+    (:func:`normalize_relative_path`), so ``file_abspath(a, x) == file_abspath(b, y)``
+    is only possible when the scopes are equal after normalisation (e.g. Windows case
+    variants) or one is an ancestor of the other.  Siblings, including a shared string
+    prefix such as ``/erp`` vs ``/erp-backup``, can never collide.
+
+    A scope that cannot be canonicalised (drive-relative, device path) raises in
+    ``file_abspath`` too, so it cannot hold a resolvable file and is unrelated to
+    everything instead of failing the caller's whole enumeration.
+    """
+    try:
+        na, nb = normalize_scope(a), normalize_scope(b)
+    except ValueError:
+        return False
+    return na == nb or is_scope_ancestor(na, nb) or is_scope_ancestor(nb, na)

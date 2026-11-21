@@ -1,0 +1,193 @@
+{
+ "paper": "jmlr-2022-21-1148",
+ "page": 23,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.018000000000000016,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     427,
+     79,
+     789,
+     102
+    ],
+    "block_content": "PARAMETERIZED MATRIX COMPLETION"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     185,
+     974,
+     211
+    ],
+    "block_content": "Compare with (6), and use the simplified notations introduced in (21). We can see"
+   },
+   {
+    "block_id": 2,
+    "block_label": "display_formula",
+    "block_bbox": [
+     257,
+     223,
+     963,
+     277
+    ],
+    "block_content": " $$ f(\\boldsymbol{X},\\boldsymbol{Y})=f_{\\mathrm{c l e a n}}(\\boldsymbol{X},\\boldsymbol{Y})-\\frac{1}{p}\\langle\\mathcal{P}_{\\Omega}(\\boldsymbol{X}\\boldsymbol{Y}^{\\top}-\\boldsymbol{M}^{\\star}),\\mathcal{P}_{\\Omega}(\\boldsymbol{N})\\rangle+\\frac{1}{2p}\\|\\mathcal{P}_{\\Omega}(\\boldsymbol{N})\\|_{F}^{2}. $$ "
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     209,
+     290,
+     315,
+     313
+    ],
+    "block_content": "Therefore,"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     294,
+     330,
+     927,
+     415
+    ],
+    "block_content": " $$ \\begin{aligned}\\langle\\nabla f(\\boldsymbol{X},\\boldsymbol{Y}),\\mathrm{vec}(\\boldsymbol{\\Delta}_{\\boldsymbol{X}},\\boldsymbol{\\Delta}_{\\boldsymbol{Y}})\\rangle&=\\langle\\nabla f_{\\mathrm{clean}}(\\boldsymbol{X},\\boldsymbol{Y}),\\mathrm{vec}(\\boldsymbol{\\Delta}_{\\boldsymbol{X}},\\boldsymbol{\\Delta}_{\\boldsymbol{Y}})\\rangle\\\\&\\quad-\\frac{1}{p}\\langle\\mathcal{P}_{\\Omega}(\\boldsymbol{\\Delta}_{\\boldsymbol{X}}\\boldsymbol{Y}^{\\top}+\\boldsymbol{X}\\boldsymbol{\\Delta}_{\\boldsymbol{Y}}^{\\top}),\\mathcal{P}_{\\Omega}(\\boldsymbol{N})\\rangle\\end{aligned} $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     176,
+     431,
+     219,
+     452
+    ],
+    "block_content": "and"
+   },
+   {
+    "block_id": 6,
+    "block_label": "display_formula",
+    "block_bbox": [
+     248,
+     465,
+     973,
+     552
+    ],
+    "block_content": " $$ \\begin{align*}&\\mathrm{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})^{\\top}\\nabla^{2}f(\\boldsymbol{X},\\boldsymbol{Y})\\mathrm{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})\\\\=&\\mathrm{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})^{\\top}\\nabla^{2}f_{\\mathrm{clean}}(\\boldsymbol{X},\\boldsymbol{Y})\\mathrm{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})-\\frac{2}{p}\\langle\\mathcal{P}_{\\Omega}(\\Delta_{\\boldsymbol{X}}\\Delta_{\\boldsymbol{Y}}^{\\top}),\\mathcal{P}_{\\Omega}(\\boldsymbol{N})\\rangle.\\end{align*} $$ "
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     176,
+     566,
+     1046,
+     615
+    ],
+    "block_content": "Therefore, we only need to concern about  $ f_{\\mathrm{clean}}(\\boldsymbol{X}, \\boldsymbol{Y}) $ now, which has already been discussed in Ge et al. (2017). Interested readers can refer to Ge et al. (2017) for the detail."
+   },
+   {
+    "block_id": 8,
+    "block_label": "text",
+    "block_bbox": [
+     209,
+     620,
+     604,
+     644
+    ],
+    "block_content": "By Ge et al. (2017, Lemma 16), we have"
+   },
+   {
+    "block_id": 9,
+    "block_label": "display_formula",
+    "block_bbox": [
+     207,
+     661,
+     1011,
+     909
+    ],
+    "block_content": " $$ \\begin{aligned}&\\operatorname{vec}(\\Delta\\mathbf{x},\\Delta\\mathbf{y})^{\\top}\\nabla^{2}f_{\\operatorname{clean}}(\\mathbf{X},\\mathbf{Y})\\operatorname{vec}(\\Delta\\mathbf{x},\\Delta\\mathbf{y})-4\\langle\\nabla f_{\\operatorname{clean}}(\\mathbf{X},\\mathbf{Y}),\\operatorname{vec}(\\Delta\\mathbf{x},\\Delta\\mathbf{y})\\rangle\\\\ \\leq&\\frac{1}{4}\\left\\{\\left\\|\\Delta\\mathbf{z}\\Delta\\mathbf{\\Sigma}_{\\mathbf{Z}}^{\\top}\\right\\|_{F}^{2}-3\\left\\|\\mathbf{Z}\\mathbf{Z}^{\\top}-\\mathbf{W}\\mathbf{W}^{\\top}\\right\\|_{F}^{2}\\right\\}+\\left(\\frac{1}{p}\\left\\|\\mathcal{P}_{\\Omega}\\left(\\Delta\\mathbf{x}\\Delta\\mathbf{\\Sigma}_{\\mathbf{Y}}^{\\top}\\right)\\right\\|_{F}^{2}-\\|\\Delta\\mathbf{x}\\Delta\\mathbf{\\Sigma}_{\\mathbf{Y}}^{\\top}\\|_{F}^{2}\\right)\\\\ &-\\left(\\frac{3}{p}\\left\\|\\mathcal{P}_{\\Omega}\\left(\\mathbf{X}\\mathbf{Y}^{\\top}-\\mathbf{U}\\mathbf{V}^{\\top}\\right)\\right\\|_{F}^{2}-3\\|\\mathbf{X}\\mathbf{Y}^{\\top}-\\mathbf{U}\\mathbf{V}^{\\top}\\|_{F}^{2}\\right)\\\\ &+\\lambda\\left[\\operatorname{vec}(\\Delta\\mathbf{x})^{\\top}\\nabla^{2}G_{\\alpha}(\\mathbf{X})\\operatorname{vec}(\\Delta\\mathbf{x})-4\\left\\langle\\nabla G_{\\alpha}(\\mathbf{X}),\\Delta\\mathbf{x}\\right\\rangle\\right]\\\\ &+\\lambda\\left[\\operatorname{vec}(\\Delta\\mathbf{y})^{\\top}\\nabla^{2}G_{\\alpha}(\\mathbf{Y})\\operatorname{vec}(\\Delta\\mathbf{y})-4\\left\\langle\\nabla G_{\\alpha}(\\mathbf{Y}),\\Delta\\mathbf{y}\\right\\rangle\\right].\\end{aligned} $$ "
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     210,
+     919,
+     315,
+     945
+    ],
+    "block_content": "Therefore,"
+   },
+   {
+    "block_id": 11,
+    "block_label": "display_formula",
+    "block_bbox": [
+     193,
+     957,
+     1027,
+     1373
+    ],
+    "block_content": " $$ \\begin{aligned}&\\operatorname{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})^{\\top}\\nabla^{2}f(\\boldsymbol{X},\\boldsymbol{Y})\\operatorname{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})-4\\langle\\nabla f(\\boldsymbol{X},\\boldsymbol{Y}),\\operatorname{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})\\rangle\\\\=&\\operatorname{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})^{\\top}\\nabla^{2}f_{\\operatorname{clean}}(\\boldsymbol{X},\\boldsymbol{Y})\\operatorname{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})-\\frac{2}{p}\\langle\\mathcal{P}_{\\Omega}(\\Delta_{\\boldsymbol{X}}\\Delta_{\\boldsymbol{Y}}^{\\top}),\\mathcal{P}_{\\Omega}(\\boldsymbol{N})\\rangle\\\\&-4\\langle\\nabla f_{\\operatorname{clean}}(\\boldsymbol{X},\\boldsymbol{Y}),\\operatorname{vec}(\\Delta_{\\boldsymbol{X}},\\Delta_{\\boldsymbol{Y}})\\rangle+\\frac{4}{p}\\langle\\mathcal{P}_{\\Omega}(\\Delta_{\\boldsymbol{X}}\\boldsymbol{Y}^{\\top}+\\boldsymbol{X}\\Delta_{\\boldsymbol{Y}}^{\\top}),\\mathcal{P}_{\\Omega}(\\boldsymbol{N})\\rangle\\\\\\leq&\\frac{4}{p}\\langle\\mathcal{P}_{\\Omega}(\\Delta_{\\boldsymbol{X}}\\boldsymbol{V}^{\\top}+\\boldsymbol{U}\\Delta_{\\boldsymbol{Y}}^{\\top}),\\mathcal{P}_{\\Omega}(\\boldsymbol{N})\\rangle+\\frac{6}{p}\\langle\\mathcal{P}_{\\Omega}(\\Delta_{\\boldsymbol{X}}\\Delta_{\\boldsymbol{Y}}^{\\top}),\\mathcal{P}_{\\Omega}(\\boldsymbol{N})\\rangle\\\\&+\\frac{1}{4}\\left\\{\\left\\|\\Delta_{\\boldsymbol{Z}}\\Delta_{\\boldsymbol{Z}}^{\\top}\\right\\|_{F}^{2}-3\\left\\|\\boldsymbol{Z}\\boldsymbol{Z}^{\\top}-\\boldsymbol{W}\\boldsymbol{W}^{\\top}\\right\\|_{F}^{2}\\right\\}+\\left(\\frac{1}{p}\\left\\|\\mathcal{P}_{\\Omega}\\left(\\Delta_{\\boldsymbol{X}}\\Delta_{\\boldsymbol{Y}}^{\\top}\\right)\\right\\|_{F}^{2}-\\|\\Delta_{\\boldsymbol{X}}\\Delta_{\\boldsymbol{Y}}^{\\top}\\|_{F}^{2}\\right)\\\\&-\\left(\\frac{3}{p}\\left\\|\\mathcal{P}_{\\Omega}\\left(\\boldsymbol{X}\\boldsymbol{Y}^{\\top}-\\boldsymbol{U}\\boldsymbol{V}^{\\top}\\right)\\right\\|_{F}^{2}-3\\|\\boldsymbol{X}\\boldsymbol{Y}^{\\top}-\\boldsymbol{U}\\boldsymbol{V}^{\\top}\\|_{F}^{2}\\right)\\\\&+\\lambda\\left[\\operatorname{vec}(\\Delta_{\\boldsymbol{X}})^{\\top}\\nabla^{2}G_{\\alpha}(\\boldsymbol{X})\\operatorname{vec}(\\Delta_{\\boldsymbol{X}})-4\\left\\langle\\nabla G_{\\alpha}(\\boldsymbol{X}),\\Delta_{\\boldsymbol{X}}\\right\\rangle\\right]\\\\&+\\lambda\\left[\\operatorname{vec}(\\Delta_{\\boldsymbol{Y}})^{\\top}\\nabla^{2}G_{\\alpha}(\\boldsymbol{Y})\\operatorname{vec}(\\Delta_{\\boldsymbol{Y}})-4\\left\\langle\\nabla G_{\\alpha}(\\boldsymbol{Y}),\\Delta_{\\boldsymbol{Y}}\\right\\rangle\\right].\\end{aligned} $$ "
+   },
+   {
+    "block_id": 12,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     1387,
+     698,
+     1413
+    ],
+    "block_content": "Combining with (15) and Lemma 3 finishes the proof."
+   },
+   {
+    "block_id": 13,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1451,
+     625,
+     1469
+    ],
+    "block_content": "23"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "length: Markdown/page letters = 1.46, outside (0.85, 1.15)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 6,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.956,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.459,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

@@ -30,14 +30,18 @@ function getApiBase(): string {
   return v ?? '/api';
 }
 
-// Stable cache key from request shape. Sorted so {a,b} === {b,a}.
-export function searchCacheKey(req: SearchRequest): string {
+export const DEFAULT_SEARCH_ENDPOINT = '/search/stream';
+
+// Stable cache key from request shape. Sorted so {a,b} === {b,a}. A non-default
+// endpoint is part of the key so the same body on two endpoints never shares a result.
+export function searchCacheKey(req: SearchRequest, endpoint: string = DEFAULT_SEARCH_ENDPOINT): string {
   const ordered = Object.keys(req).sort().reduce<Record<string, unknown>>((acc, k) => {
     const v = (req as unknown as Record<string, unknown>)[k];
     if (v !== undefined && v !== null && v !== '') acc[k] = v;
     return acc;
   }, {});
-  return JSON.stringify(ordered);
+  const body = JSON.stringify(ordered);
+  return endpoint === DEFAULT_SEARCH_ENDPOINT ? body : `${endpoint}|${body}`;
 }
 
 /**
@@ -53,29 +57,25 @@ export function useSearchStream() {
   const qc = useQueryClient();
   const [state, setState] = useState<State>(INITIAL);
   const abortRef = useRef<AbortController | null>(null);
-  const lastKeyRef = useRef<string | null>(null);
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
     setState(INITIAL);
-    lastKeyRef.current = null;
   }, []);
 
   // Hydrate from cache. Returns true if a cached snapshot was found.
-  const hydrate = useCallback((req: SearchRequest): boolean => {
-    const key = searchCacheKey(req);
+  const hydrate = useCallback((req: SearchRequest, endpoint: string = DEFAULT_SEARCH_ENDPOINT): boolean => {
+    const key = searchCacheKey(req, endpoint);
     const cached = qc.getQueryData<SearchResponse>(['search', key]);
     if (cached) {
-      lastKeyRef.current = key;
       setState({ stage: 'complete', progress: {}, data: cached });
       return true;
     }
     return false;
   }, [qc]);
 
-  const mutate = useCallback(async (req: SearchRequest) => {
-    const key = searchCacheKey(req);
-    lastKeyRef.current = key;
+  const mutate = useCallback(async (req: SearchRequest, endpoint: string = DEFAULT_SEARCH_ENDPOINT) => {
+    const key = searchCacheKey(req, endpoint);
 
     // Same request as cached → skip network entirely.
     const cached = qc.getQueryData<SearchResponse>(['search', key]);
@@ -90,7 +90,7 @@ export function useSearchStream() {
     setState({ stage: 'embed', progress: {} });
 
     try {
-      const resp = await fetch(`${getApiBase()}/search/stream`, {
+      const resp = await fetch(`${getApiBase()}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
@@ -148,7 +148,7 @@ export function useSearchStream() {
 
   const isPending = state.stage !== 'idle' && state.stage !== 'complete' && state.stage !== 'error';
 
-  return { ...state, mutate, reset, isPending, hydrate, lastKey: lastKeyRef.current };
+  return { ...state, mutate, reset, isPending, hydrate };
 }
 
 function apply(prev: State, ev: Record<string, unknown>): State {

@@ -1,0 +1,9 @@
+claude-session.jsonl and codex-rollout.jsonl are verbatim copies of the registry samples
+from https://github.com/vshulcz/deja-vu (fixtures/registry/claude-code/session.jsonl and
+fixtures/registry/codex/rollout-2026-07-17T09-00-00-registry-codex.jsonl), fetched 2026-11-04.
+
+deja-vu is MIT licensed, Copyright (c) 2026 Vladislav Shulcz. The MIT notice applies to these files:
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files, to deal in the Software without restriction, subject to the
+inclusion of the copyright notice and permission notice in all copies or substantial portions.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.

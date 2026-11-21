@@ -1,0 +1,20 @@
+{
+ "id": 22895105,
+ "title": "Learning Geometric Transformation for Point Cloud Completion",
+ "doi": "",
+ "defined_type_name": "journal contribution",
+ "files": [
+  {
+   "id": 40628105,
+   "name": "IJCV_Xianzhu_GTNet.pdf",
+   "size": 3934825,
+   "is_link_only": false,
+   "download_url": "https://ndownloader.figshare.com/files/40628105",
+   "supplied_md5": "ae6e16da51ad1b862628228ff54048c8",
+   "computed_md5": "ae6e16da51ad1b862628228ff54048c8",
+   "mimetype": "application/pdf"
+  }
+ ],
+ "url_public_html": "https://figshare.le.ac.uk/articles/journal_contribution/Learning_Geometric_Transformation_for_Point_Cloud_Completion/22895105",
+ "is_public": true
+}

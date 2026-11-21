@@ -236,6 +236,20 @@ def test_events_and_progress_written(store, session_factory):
     assert sub["total"] == 10 and sub["progress"] == 10  # complete bumps to total
 
 
+def test_a_gate_that_passes_with_a_note_shows_it_on_the_stage(store, session_factory):
+    # task 1302: the extract gate passes 259/297 and must say that 38 were refused, not just "completed"
+    task_id = store.create_task(task_type="ingest_pipeline")
+    specs = [
+        _spec("extract", probe=_probe(259, 297), gate=lambda c: GateResult(True, "38/297 refused verification")),
+        _spec("preindex", probe=_probe(0, 10), gate=lambda c: GateResult(True)),
+    ]
+    assert PipelineOrchestrator(task_id, specs, _ctx(), store).run() == "completed"
+    assert "38/297 refused verification" in store.get_subtask(task_id, "extract")["message"]
+    assert store.get_subtask(task_id, "preindex")["message"] == "completed"
+    msgs = [e.message for e in _events(session_factory, task_id)]
+    assert any("Extract: completed" in m and "38/297 refused verification" in m for m in msgs)
+
+
 def test_two_orchestrators_on_same_resource_serialize(concurrent_store):
     store = concurrent_store
     """Two pipelines sharing a resource_key must run sequentially, not interleave.
@@ -422,3 +436,88 @@ def test_cancel_racing_with_stage_completion_cannot_flip_parent_to_completed(sto
     assert final == "cancelled"
     assert store.get_task(task_id)["status"] == "cancelled"
     assert store.get_subtask(task_id, "download")["status"] == "cancelled"
+
+
+def _wait_queued_on(locks, resource, n, timeout=5.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while locks._waiting(resource) < n:
+        assert time.monotonic() < deadline, f"only {locks._waiting(resource)} of {n} queued"
+        time.sleep(0.002)
+
+
+def _run_gpu_queue(store, locks, holder, first_in_line, second_in_line):
+    """Real orchestrators on one shared StageLockSet. `holder` runs a stage that
+    holds "gpu" until released; then `first_in_line` and `second_in_line`
+    ((task_id, stage_key) pairs) queue on "gpu" in that order. Returns the order
+    in which the three stages actually ran."""
+    import threading
+
+    order: list = []
+    holding, release = threading.Event(), threading.Event()
+
+    def held_run(ctx, sink):
+        order.append(holder)
+        holding.set()
+        release.wait(timeout=10)
+
+    def start(task_id, key, run):
+        spec = _spec(key, run=run, resource_key="gpu")
+        t = threading.Thread(
+            target=lambda: PipelineOrchestrator(
+                task_id, [spec], _ctx(), store, locks=locks,
+            ).run(),
+            daemon=True,
+        )
+        t.start()
+        return t
+
+    threads = [start(holder[0], holder[1], held_run)]
+    assert holding.wait(timeout=5)
+    for i, (task_id, key) in enumerate((first_in_line, second_in_line), start=1):
+        threads.append(start(task_id, key, lambda ctx, sink, tk=(task_id, key): order.append(tk)))
+        _wait_queued_on(locks, "gpu", i)
+    release.set()
+    for t in threads:
+        t.join(timeout=10)
+        assert not t.is_alive()
+    return order
+
+
+def test_older_tasks_embed_is_granted_before_younger_tasks_extract(concurrent_store):
+    """2026-11-13: task 1305's embed queued behind younger tasks' extracts and
+    lost every release. Grant order follows task id, not who polls first."""
+    store = concurrent_store
+    t1 = store.create_task(task_type="ingest_pipeline")
+    t2 = store.create_task(task_type="ingest_pipeline")
+    t3 = store.create_task(task_type="ingest_pipeline")
+
+    order = _run_gpu_queue(
+        store, StageLockSet(),
+        holder=(t2, "extract"),
+        first_in_line=(t3, "extract"),  # arrives first ...
+        second_in_line=(t1, "embed"),   # ... but is the younger task
+    )
+
+    assert order == [(t2, "extract"), (t1, "embed"), (t3, "extract")]
+
+
+def test_resuming_stage_is_granted_before_older_fresh_stage(concurrent_store):
+    """W78: a stage whose subtask already started (a remote worker may still be
+    on the resource) goes ahead of an older task's fresh stage."""
+    store = concurrent_store
+    fresh = store.create_task(task_type="ingest_pipeline")
+    holder = store.create_task(task_type="ingest_pipeline")
+    resumed = store.create_task(task_type="ingest_pipeline")
+    store.ensure_subtask(resumed, "embed", subtask_type="pipeline_stage", name="Embed", order=0)
+    store.start_subtask(resumed, "embed", message="running", stage="embed")
+
+    order = _run_gpu_queue(
+        store, StageLockSet(),
+        holder=(holder, "extract"),
+        first_in_line=(fresh, "extract"),
+        second_in_line=(resumed, "embed"),
+    )
+
+    assert order == [(holder, "extract"), (resumed, "embed"), (fresh, "extract")]
