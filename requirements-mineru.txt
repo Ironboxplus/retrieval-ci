@@ -1,0 +1,13 @@
+# MinerU PDF→Markdown extraction (Stage J primary strategy).
+#
+# Install on the kss bulk-extraction host:
+#   python3 -m venv /home/kss/arc/mineru/.venv
+#   source /home/kss/arc/mineru/.venv/bin/activate
+#   pip install -r requirements-mineru.txt
+#
+# Model cache (PDF-Extract-Kit-1.0, ~1.2 GB):
+#   Pre-cached at /mnt/nvme-disk/.cache/huggingface/hub/ on kss; first
+#   run will fetch missing weights from modelscope (HF mirror blocked).
+mineru>=3.1.0,<4.0.0
+pymupdf>=1.23.0          # fallback extractor + a few MinerU internals
+tqdm>=4.66.0             # worker progress bars
