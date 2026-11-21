@@ -6,6 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from config import settings
+from app.services.pipeline.queue_tasks import QueueTasks
 from app.services.public_code.access_profiles import GitAccessProfileResolver
 from app.services.public_code.bundle_import import PublicCodeBundleImportService
 from app.services.public_code.control_service import PublicCodeControlService
@@ -115,6 +116,7 @@ def get_public_code_job_service() -> PublicCodeJobService:
         control_service=get_public_code_control_service(),
         index_service=get_public_code_index_service(),
         job_store=get_public_code_repository(),
+        tasks=QueueTasks(),
     )
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import hashlib
 import json
 import logging
@@ -17,14 +18,19 @@ import os
 import re
 import shutil
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field, fields
+from datetime import date
+import unicodedata
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any, Iterable, Optional
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse, urlsplit
 
 import httpx
 import yaml
 from bs4 import BeautifulSoup
+from httpx_curl_cffi import AsyncCurlTransport
 from pypdf import PdfReader
 
 from config import settings as retrieval_settings
@@ -33,11 +39,16 @@ from pipeline.download_control import (
     AggregateDownloadRateLimiter,
     ChainedProxyPool,
     ChainedTargetHTTPError,
+    ChallengePageError,
     DEFAULT_DOWNLOAD_BYTES_PER_SECOND,
     DEFAULT_STREAM_CHUNK_BYTES,
+    HostTurnQueue,
+    blocking_status,
+    is_challenge_page,
     require_explicit_proxy,
     require_reachable_proxy,
 )
+from pipeline.http_retry import retry_after_from
 from pipeline.paper_crawler.models.paper import Conference, Paper, PaperMetadata, PaperType
 from pipeline.paper_crawler.track_classifier import MAIN_TRACKS, classify_track
 from pipeline.paper_crawler.runtime_files import (
@@ -56,6 +67,17 @@ LOGGER = logging.getLogger(__name__)
 # Manifest keys that are deliberately not `CorpusPaper` fields. Dropping these is
 # expected, so they must not produce the unknown-field warning on every single row.
 _IGNORED_MANIFEST_KEYS = frozenset({"selection_rule"})
+_OPTIONAL_SOURCE_KEYS = (
+    "arxiv_id", "venue_tier", "track_type", "source_version", "withdrawn", "doi",
+    "full_text_source", "full_text_match", "official_pages", "full_text_check",
+    "pdf_rejected_identity",
+)
+# Where a paper's full text comes from. Venue, year, track, DOI and title always
+# come from the official listing; this only names the PDF's origin.
+FULL_TEXT_PUBLISHER = "publisher"
+FULL_TEXT_ARXIV = "arxiv"
+FULL_TEXT_OA_REPO = "oa_repo"
+ARXIV_PREPRINT_RULE = "arxiv_cs_html_preprint"
 
 DEFAULT_PROXY_URL = "http://127.0.0.1:10808"
 DEFAULT_TARGET_YEARS = (2022, 2023, 2024, 2025)
@@ -76,6 +98,14 @@ DEFAULT_TARGET_CONFERENCES = (
 DEFAULT_MANIFEST_CHECKPOINT_INTERVAL = 200
 DEFAULT_DOWNLOAD_RETRY_ATTEMPTS = 3
 DEFAULT_DOWNLOAD_CONCURRENCY = 4
+# A pair: Springer's edge answers OpenSSL's ClientHello with a challenge page whatever the IP
+# or headers, so downloads use curl_cffi's browser handshake, and the User-Agent must name the
+# same Chrome version (curl_cffi 0.17.0 DEFAULT_CHROME; this is the UA it sends for that target).
+DOWNLOAD_IMPERSONATE = "chrome152"
+DOWNLOAD_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+)
 OPENREVIEW_COOKIE_FILE_ENV = "OPENREVIEW_COOKIE_FILE"
 OPENREVIEW_PAGE_DELAY_SECONDS_ENV = "OPENREVIEW_PAGE_DELAY_SECONDS"
 
@@ -183,13 +213,7 @@ def load_openreview_cookies_from_env() -> Optional[httpx.Cookies]:
 
 def http_retry_delay_seconds(exc: Exception, attempt: int) -> float:
     if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
-        retry_after = exc.response.headers.get("retry-after")
-        if retry_after:
-            try:
-                return max(60.0, float(retry_after))
-            except ValueError:
-                pass
-        return 60.0
+        return max(60.0, retry_after_from(exc.response, default=0.0))
     return float(min(2 * attempt, 5))
 
 
@@ -234,10 +258,41 @@ class CorpusPaper:
     index_error: Optional[str] = None
     indexed_doc_id: Optional[str] = None
     indexed_doc_id: Optional[str] = None
+    # Set only for non-conference sources (arXiv preprints). None on every
+    # conference row, and then omitted from its manifest record so existing
+    # manifests and older readers see no new keys.
+    arxiv_id: Optional[str] = None
+    venue_tier: Optional[str] = None
+    track_type: Optional[str] = None
+    # arXiv only: the content version the Markdown was converted from, and
+    # whether the newest version is a withdrawal (a 0kb version).
+    source_version: Optional[str] = None
+    withdrawn: Optional[bool] = None
+    # Publisher DOI when the source states one. It is the identity the open-access
+    # resolver matches on, and it lands in SQL ``papers.doi``.
+    doi: Optional[str] = None
+    # Full-text provenance: publisher | arxiv | oa_repo, and the identity rule
+    # that admitted a non-publisher copy ("official", "s2_doi", "s2_doi+arxiv_doi",
+    # ...). arXiv copies also set ``arxiv_id`` and ``source_version`` (vN); the URL
+    # actually used is ``downloaded_from_url``. ``official_pages`` is the printed
+    # page count of the official version, for the content check of a non-publisher PDF.
+    full_text_source: Optional[str] = None
+    full_text_match: Optional[str] = None
+    official_pages: Optional[int] = None
+    # Page-1 title / page-count check of the stored PDF: "ok", or the kept
+    # mismatch of a publisher copy ("mismatch: ..."). A non-publisher copy that
+    # fails is never stored; ``pdf_rejected_identity`` then says why.
+    full_text_check: Optional[str] = None
+    pdf_rejected_identity: Optional[str] = None
 
     def to_manifest_record(self) -> dict[str, Any]:
         record = asdict(self)
-        record["selection_rule"] = MAIN_CONFERENCE_RULE
+        for key in _OPTIONAL_SOURCE_KEYS:
+            if record.get(key) is None:
+                record.pop(key, None)
+        record["selection_rule"] = (
+            ARXIV_PREPRINT_RULE if self.track_type == "preprint" else MAIN_CONFERENCE_RULE
+        )
         return record
 
     @classmethod
@@ -284,10 +339,15 @@ class CorpusPaper:
             venue_track=self.venue_track,
             pdf_path=self.pdf_path,
             markdown_path=self.markdown_path,
+            arxiv_id=self.arxiv_id,
+            doi=self.doi,
+            venue_tier=self.venue_tier,
+            track_type=self.track_type,
+            full_text_source=self.full_text_source,
             metadata=PaperMetadata(
                 venue=self.conference,
                 year=self.year,
-                track="main_conference",
+                track="preprint" if self.track_type == "preprint" else "main_conference",
             ),
         )
 
@@ -324,7 +384,9 @@ class ConferencePaperCandidate:
 
 class OfficialProceedingsClient:
     def __init__(self, proxy_url: str = DEFAULT_PROXY_URL, timeout_seconds: int = 60):
-        self.proxy_url = proxy_url
+        # Every listing/metadata/OA-lookup request goes through the proxy; an
+        # empty or malformed one raises here instead of silently going direct.
+        self.proxy_url = require_explicit_proxy(proxy_url)
         self.timeout_seconds = timeout_seconds
         self.headers = {
             "User-Agent": (
@@ -341,6 +403,11 @@ class OfficialProceedingsClient:
             "timeout": self.timeout_seconds,
             "follow_redirects": True,
             "headers": self.headers,
+            # httpx 0.28.1: an explicit proxy= already wins over ambient
+            # HTTP(S)_PROXY / ALL_PROXY / NO_PROXY. trust_env=False additionally
+            # stops SSL_CERT_FILE / SSL_CERT_DIR from replacing the CA bundle, and
+            # keeps the proxy explicit if proxy is ever None (env proxies apply then).
+            "trust_env": False,
         }
         cookies = load_openreview_cookies_from_env()
         if cookies is not None:
@@ -395,21 +462,17 @@ class OfficialProceedingsClient:
                 return response.json()
             except Exception as exc:
                 last_error = exc
-                retry_after = None
+                retry_after = retry_after_from(exc, default=None)
                 status_code = None
                 if isinstance(exc, httpx.HTTPStatusError):
                     status_code = exc.response.status_code
-                    retry_after = exc.response.headers.get("retry-after")
                 self.reset_client()
-                if attempt == max_attempts:
-                    break
-                try:
-                    if status_code == 429:
-                        delay = max(60.0, float(retry_after or 0))
-                    else:
-                        delay = float(retry_after) if retry_after else min(2 * attempt, 8)
-                except ValueError:
-                    delay = 60.0 if status_code == 429 else min(2 * attempt, 8)
+                if attempt == max_attempts or status_code in (400, 401, 403, 404, 422):
+                    break  # the same request gets the same answer
+                if status_code == 429:
+                    delay = max(60.0, retry_after or 0.0)
+                else:
+                    delay = retry_after if retry_after is not None else min(2 * attempt, 8)
                 time.sleep(max(0.0, min(delay, 120.0)))
         raise RuntimeError(f"Failed to POST {url}: {last_error}") from last_error
 
@@ -721,6 +784,39 @@ class IcmlProceedingsSource(OfficialProceedingsSource):
         return list(papers.values())
 
 
+@dataclass(frozen=True, slots=True)
+class PtitleRow:
+    title: str
+    detail_url: str
+    authors: list[str]
+    pdf_url: str
+    links_node: Any
+
+
+def iter_ptitle_rows(container: Any, base_url: str) -> Iterable[PtitleRow]:
+    """Rows of the CVF/ECVA open-access layout: ``dt.ptitle``, authors ``dd``, links ``dd``."""
+    for title_node in container.find_all("dt", class_="ptitle"):
+        title = title_node.get_text(" ", strip=True)
+        if not title:
+            continue
+        title_anchor = title_node.find("a", href=True)
+        authors_node = title_node.find_next_sibling("dd")
+        links_node = authors_node.find_next_sibling("dd") if authors_node else None
+        if title_anchor is None or links_node is None:
+            continue
+        pdf_url = resolve_labeled_link(links_node, base_url, "pdf")
+        if pdf_url is None:
+            continue
+        authors_text = authors_node.get_text(" ", strip=True) if authors_node else ""
+        yield PtitleRow(
+            title=title,
+            detail_url=urljoin(base_url, title_anchor["href"]),
+            authors=[name.strip() for name in authors_text.split(",") if name.strip()],
+            pdf_url=pdf_url,
+            links_node=links_node,
+        )
+
+
 class CvfProceedingsSource(OfficialProceedingsSource):
     def __init__(self, conference_name: str):
         self.conference_name = conference_name
@@ -735,45 +831,27 @@ class CvfProceedingsSource(OfficialProceedingsSource):
         soup = client.get_soup(list_url)
         papers: dict[str, CorpusPaper] = {}
 
-        for title_node in soup.find_all("dt", class_="ptitle"):
-            title = title_node.get_text(" ", strip=True)
-            if not title:
-                continue
-
-            title_anchor = title_node.find("a", href=True)
-            authors_node = title_node.find_next_sibling("dd")
-            links_node = authors_node.find_next_sibling("dd") if authors_node else None
-            if title_anchor is None or links_node is None:
-                continue
-
-            detail_url = urljoin(list_url, title_anchor["href"])
-            pdf_url = resolve_labeled_link(links_node, list_url, "pdf")
+        for row in iter_ptitle_rows(soup, list_url):
             alternate_pdf_urls: list[str] = []
-
-            if pdf_url is None or detail_url is None:
-                continue
-
-            for anchor in links_node.find_all("a", href=True):
+            for anchor in row.links_node.find_all("a", href=True):
                 if normalize_link_label(anchor) != "arxiv":
                     continue
                 arxiv_pdf_url = build_arxiv_pdf_url(urljoin(list_url, anchor["href"]))
                 if arxiv_pdf_url and arxiv_pdf_url not in alternate_pdf_urls:
                     alternate_pdf_urls.append(arxiv_pdf_url)
 
-            file_stem = Path(detail_url).stem
-            authors_text = authors_node.get_text(" ", strip=True) if authors_node else ""
-            authors = [name.strip() for name in authors_text.split(",") if name.strip()]
+            file_stem = Path(row.detail_url).stem
             paper_id = f"{self.conference_name.lower()}-{year}-{sanitize_file_component(file_stem.lower())}"
 
             papers[paper_id] = CorpusPaper(
                 paper_id=paper_id,
-                title=title,
-                authors=authors,
+                title=row.title,
+                authors=row.authors,
                 conference=self.conference_name,
                 year=year,
-                pdf_url=pdf_url,
+                pdf_url=row.pdf_url,
                 alternate_pdf_urls=alternate_pdf_urls,
-                paper_page_url=detail_url,
+                paper_page_url=row.detail_url,
                 source_name="cvf_open_access",
             )
 
@@ -1253,6 +1331,148 @@ def _acm_doi_of(paper: "CorpusPaper") -> str:
     return (paper.pdf_url or "").replace("https://dl.acm.org/doi/pdf/", "").lower()
 
 
+def _loose_title_key(title: str) -> str:
+    return re.sub(r"[^0-9a-z]+", " ", (title or "").casefold()).strip()
+
+
+_ARXIV_URL_ID = re.compile(r"^/(?:pdf|abs)/|v\d+$|\.pdf$")
+
+
+def resolve_open_access_pdf_urls(
+    papers: Iterable[CorpusPaper],
+    client: OfficialProceedingsClient,
+    *,
+    preferred_hosts: frozenset[str] = frozenset(),
+    excluded_hosts: frozenset[str] = frozenset({"doi.org", "dl.acm.org"}),
+) -> dict[str, int]:
+    """Point DOI-identified papers at a legal open-access PDF.
+
+    Semantic Scholar's batch endpoint is used only as an identifier bridge: the
+    returned DOI and title must match the paper before its arXiv copy (or an
+    open PDF on a ``preferred_hosts`` publisher, which wins over arXiv) becomes
+    ``pdf_url``. The previous publisher URL stays an alternate and the DOI page
+    stays the paper page, preserving provenance. ``excluded_hosts`` are
+    publisher endpoints that do not serve the proxy.
+    """
+    selected = list(papers)
+    by_doi = {
+        (paper.doi or _acm_doi_of(paper)).lower(): paper
+        for paper in selected
+        if paper.doi or _acm_doi_of(paper)
+    }
+    stats = {
+        "requested": len(by_doi),
+        "matched": 0,
+        "resolved": 0,
+        "arxiv": 0,
+        "publisher_oa": 0,
+        "other_oa": 0,
+        "not_found": 0,
+        "identity_mismatch": 0,
+        "doi_url_mismatch": 0,
+    }
+    endpoint = "https://api.semanticscholar.org/graph/v1/paper/batch"
+    fields = "paperId,title,authors,externalIds,openAccessPdf"
+
+    items = list(by_doi.items())
+    for start in range(0, len(items), 500):
+        if start:
+            time.sleep(2.0)
+        batch = items[start:start + 500]
+        try:
+            response = client.post_json(
+                endpoint,
+                params={"fields": fields},
+                body={"ids": [f"DOI:{doi}" for doi, _ in batch]},
+            )
+        except RuntimeError as exc:
+            # Semantic Scholar answers 400 "No valid paper ids given" when it
+            # knows none of the batch: every paper is simply not found.
+            refusal = getattr(exc.__cause__, "response", None)
+            if refusal is None or refusal.status_code != 400 or "No valid paper ids" not in refusal.text:
+                raise
+            response = [None] * len(batch)
+        if not isinstance(response, list) or len(response) != len(batch):
+            raise RuntimeError(
+                "Semantic Scholar batch response did not preserve request cardinality"
+            )
+        apply_open_access_records(batch, response, stats, preferred_hosts=preferred_hosts,
+                                  excluded_hosts=excluded_hosts)
+    return stats
+
+
+def apply_open_access_records(
+    batch: list[tuple[str, CorpusPaper]],
+    records: list[Any],
+    stats: dict[str, int],
+    *,
+    preferred_hosts: frozenset[str],
+    excluded_hosts: frozenset[str],
+) -> None:
+    """Apply one Semantic Scholar batch response to ``(doi, paper)`` pairs."""
+    for (doi, paper), record in zip(batch, records):
+        if not isinstance(record, dict):
+            stats["not_found"] += 1
+            continue
+        external_ids = record.get("externalIds") or {}
+        returned_doi = str(external_ids.get("DOI") or "").lower()
+        if returned_doi != doi or _loose_title_key(str(record.get("title") or "")) != _loose_title_key(paper.title):
+            stats["identity_mismatch"] += 1
+            continue
+        stats["matched"] += 1
+
+        oa_url = str((record.get("openAccessPdf") or {}).get("url") or "").strip()
+        oa_host = (urlparse(oa_url).hostname or "").lower()
+        problem = candidate_url_problem(oa_url, paper) if oa_url else None
+        if problem is not None:
+            # The bridge matched the record by DOI, but a merged Semantic Scholar record can
+            # carry another paper's open PDF (a 2018 book chapter for a 2021 journal paper):
+            # the URL itself must prove it is this paper. The other candidates stay.
+            stats["doi_url_mismatch"] = stats.get("doi_url_mismatch", 0) + 1
+            LOGGER.info("Skipped open-access URL %s for %s: %s", oa_url, paper.paper_id, problem)
+            oa_url, oa_host = "", ""
+        arxiv_id = str(external_ids.get("ArXiv") or "").strip()
+        if not arxiv_id and oa_host == "arxiv.org":
+            # The bridge's open copy is on arXiv without an ArXiv external id:
+            # it is still an arXiv copy and gets the same version vetting.
+            arxiv_id = _ARXIV_URL_ID.sub("", urlparse(oa_url).path)
+        arxiv_url = f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else ""
+        # The publisher's own open PDF always wins and gets no preprint fallback
+        # (a challenge from its edge is not unavailability). Without one, arXiv
+        # comes first and an open repository copy stays as its fallback; both
+        # are non-publisher copies and pass the content check before use.
+        if oa_url.startswith("https://") and oa_host in preferred_hosts:
+            candidates = [(oa_url, "publisher_oa")]
+        else:
+            candidates = []
+            if arxiv_url:
+                candidates.append((arxiv_url, "arxiv"))
+            if oa_url.startswith("https://") and oa_host not in excluded_hosts and oa_url != arxiv_url:
+                candidates.append((oa_url, "other_oa"))
+        if not candidates:
+            continue
+        resolved_url, resolution_kind = candidates[0]
+        publisher_pdf_url = paper.pdf_url
+        paper.alternate_pdf_urls = list(dict.fromkeys(
+            url
+            for url in [*(url for url, _ in candidates[1:]), publisher_pdf_url, *paper.alternate_pdf_urls]
+            if url and url != resolved_url
+        ))
+        paper.pdf_url = resolved_url
+        if resolution_kind == "arxiv":
+            paper.arxiv_id = paper.arxiv_id or arxiv_id
+        paper.full_text_source = {
+            "publisher_oa": FULL_TEXT_PUBLISHER, "arxiv": FULL_TEXT_ARXIV, "other_oa": FULL_TEXT_OA_REPO,
+        }[resolution_kind]
+        paper.full_text_match = "official" if resolution_kind == "publisher_oa" else "s2_doi"
+        paper.pdf_resolution_status = "resolved_open_access"
+        paper.pdf_resolution_note = (
+            f"Resolved via Semantic Scholar {resolution_kind}; official DOI and title matched."
+        )
+        stats["resolved"] += 1
+        stats[resolution_kind] += 1
+
+
 def filter_main_track_papers(
     papers: list["CorpusPaper"],
     doi_to_track: dict[str, str],
@@ -1299,10 +1519,16 @@ class DblpAcmProceedingsSource(OfficialProceedingsSource):
         conference_name: str,
         dblp_venue_key: str,
         dblp_toc_overrides: Optional[dict[int, str]] = None,
+        crossref_container_titles: Optional[dict[int, str]] = None,
     ):
         self.conference_name = conference_name
         self.dblp_venue_key = dblp_venue_key
         self.dblp_toc_overrides = dblp_toc_overrides or {}
+        # Years listed here come from Crossref's exact container title: DBLP now
+        # answers API/TOC requests with an Anubis bot challenge.
+        self.crossref_container_titles = {
+            int(year): str(title) for year, title in (crossref_container_titles or {}).items()
+        }
 
     def _toc_keys_for_year(self, year: int) -> list[str]:
         """Return DBLP TOC key(s) for a given year. Supports str or list overrides."""
@@ -1328,6 +1554,15 @@ class DblpAcmProceedingsSource(OfficialProceedingsSource):
         return [a["text"].split(" 0")[0] for a in raw if a.get("text")]
 
     def collect_papers(self, year: int, client: OfficialProceedingsClient) -> list[CorpusPaper]:
+        if year in self.crossref_container_titles:
+            items = crossref_items(
+                client,
+                "/works",
+                filters=f"container-title:{self.crossref_container_titles[year]}",
+                select="DOI,title,page,author,type",
+            )
+            return self.papers_from_crossref(year, items)
+
         papers: dict[str, CorpusPaper] = {}
 
         for toc_key in self._toc_keys_for_year(year):
@@ -1371,6 +1606,37 @@ class DblpAcmProceedingsSource(OfficialProceedingsSource):
                 if not hit_list or offset >= total:
                     break
 
+        return list(papers.values())
+
+    def papers_from_crossref(self, year: int, items: Iterable[dict]) -> list[CorpusPaper]:
+        """Proceedings articles from Crossref, same ids and PDF URLs as the DBLP path.
+
+        Posters, demos, keynotes and front matter share the proceedings and the
+        DOI prefix; at these venues they are at most 4 printed pages while full
+        papers run 12+ (the W112 page-count rule).
+        """
+        papers: dict[str, CorpusPaper] = {}
+        for item in items:
+            doi = str(item.get("DOI") or "").strip()
+            title = plain_text((item.get("title") or [""])[0])
+            if not title or not doi.lower().startswith(self.PROCEEDINGS_DOI_PREFIX):
+                continue
+            pages = printed_page_count(item.get("page"))
+            if pages is None or pages <= _POSTER_MAX_PAGES:
+                continue
+            doi_suffix = doi[len(self.PROCEEDINGS_DOI_PREFIX):]
+            paper_id = f"{self.dblp_venue_key}-{year}-{doi_suffix}"
+            papers[paper_id] = CorpusPaper(
+                paper_id=paper_id,
+                title=title,
+                authors=crossref_author_names(item),
+                conference=self.conference_name,
+                year=year,
+                pdf_url=f"https://dl.acm.org/doi/pdf/{doi}",
+                paper_page_url=f"https://doi.org/{doi}",
+                source_name="crossref",
+                doi=doi,
+            )
         return list(papers.values())
 
     def collect_track_map(self, year: int, client: OfficialProceedingsClient) -> dict[str, str]:
@@ -1529,87 +1795,9 @@ class KddOfficialProceedingsSource(DblpAcmProceedingsSource):
         """Resolve DOI-identified KDD papers to non-ACM public PDF mirrors.
 
         ACM's edge currently challenges plain HTTP and browser fetches on the
-        configured exits. Semantic Scholar's batch endpoint is used only as an
-        identifier bridge: the returned DOI and normalized title must match the
-        official KDD row before an arXiv or other direct OA PDF is preferred.
-        The publisher PDF remains an alternate and the DOI landing page remains
-        the paper page, preserving provenance.
+        configured exits; see :func:`resolve_open_access_pdf_urls`.
         """
-        selected = list(papers)
-        by_doi = {
-            _acm_doi_of(paper): paper
-            for paper in selected
-            if _acm_doi_of(paper)
-        }
-        stats = {
-            "requested": len(by_doi),
-            "matched": 0,
-            "resolved": 0,
-            "arxiv": 0,
-            "other_oa": 0,
-            "not_found": 0,
-            "identity_mismatch": 0,
-        }
-        endpoint = "https://api.semanticscholar.org/graph/v1/paper/batch"
-        fields = "paperId,title,authors,externalIds,openAccessPdf"
-
-        items = list(by_doi.items())
-        for start in range(0, len(items), 500):
-            if start:
-                time.sleep(2.0)
-            batch = items[start:start + 500]
-            response = client.post_json(
-                endpoint,
-                params={"fields": fields},
-                body={"ids": [f"DOI:{doi}" for doi, _ in batch]},
-            )
-            if not isinstance(response, list) or len(response) != len(batch):
-                raise RuntimeError(
-                    "Semantic Scholar batch response did not preserve request cardinality"
-                )
-
-            for (doi, paper), record in zip(batch, response):
-                if not isinstance(record, dict):
-                    stats["not_found"] += 1
-                    continue
-                external_ids = record.get("externalIds") or {}
-                returned_doi = str(external_ids.get("DOI") or "").lower()
-                returned_title = str(record.get("title") or "")
-                if returned_doi != doi or normalize_title_key(returned_title) != normalize_title_key(paper.title):
-                    stats["identity_mismatch"] += 1
-                    continue
-                stats["matched"] += 1
-
-                resolved_url = ""
-                resolution_kind = ""
-                arxiv_id = str(external_ids.get("ArXiv") or "").strip()
-                if arxiv_id:
-                    resolved_url = f"https://arxiv.org/pdf/{arxiv_id}"
-                    resolution_kind = "arxiv"
-                else:
-                    oa_url = str((record.get("openAccessPdf") or {}).get("url") or "").strip()
-                    host = (urlparse(oa_url).hostname or "").lower()
-                    if oa_url.startswith("https://") and host not in {"doi.org", "dl.acm.org"}:
-                        resolved_url = oa_url
-                        resolution_kind = "other_oa"
-
-                if not resolved_url:
-                    continue
-                publisher_pdf_url = paper.pdf_url
-                paper.alternate_pdf_urls = [
-                    url
-                    for url in [publisher_pdf_url, *paper.alternate_pdf_urls]
-                    if url and url != resolved_url
-                ]
-                paper.pdf_url = resolved_url
-                paper.pdf_resolution_status = "resolved_open_access"
-                paper.pdf_resolution_note = (
-                    f"Resolved via Semantic Scholar {resolution_kind}; official DOI and title matched."
-                )
-                stats["resolved"] += 1
-                stats[resolution_kind] += 1
-
-        return stats
+        return resolve_open_access_pdf_urls(papers, client)
 
 
 class SigirOfficialProgramSource(DblpAcmProceedingsSource):
@@ -1825,6 +2013,7 @@ class UsenixProceedingsSource(OfficialProceedingsSource):
 
             # Reject non-paper entries (keynote/panel/etc) by sub-type taxonomy.
             subtype_node = article.select_one(".field-name-field-paper-sub-type .field-item")
+            subtype = ""
             if subtype_node is not None:
                 subtype = subtype_node.get_text(" ", strip=True)
                 if subtype in self._NON_PAPER_SUBTYPES:
@@ -1858,6 +2047,9 @@ class UsenixProceedingsSource(OfficialProceedingsSource):
                 pdf_url=pdf_url,
                 paper_page_url=paper_page_url,
                 source_name=self.source_name,
+                # Paper sub-types are proceedings tracks, e.g. OSDI's
+                # "Operational Systems Paper" -> operational_systems_paper.
+                venue_track=re.sub(r"[^0-9a-z]+", "_", subtype.casefold()).strip("_") or None,
             )
 
         return list(papers.values())
@@ -2045,18 +2237,853 @@ class NdssSymposiumSource(OfficialProceedingsSource):
         return list(papers.values())
 
 
+# ----------------------------------------------------------------- tier-1 sources
+# Crossref is the listing backend where DBLP now answers every API and TOC request
+# with an Anubis proof-of-work page (HTTP 202, verified 2026-11-10).
+CROSSREF_API = "https://api.crossref.org"
+CROSSREF_MAILTO_ENV = "CROSSREF_MAILTO"
+CROSSREF_PAGE_ROWS = 1000
+
+_PAGE_RANGE = re.compile(r"^\s*[A-Za-z]?(\d+)\s*[-–]\s*[A-Za-z]?(\d+)\s*$")
+
+
+def printed_page_count(pages: Optional[str]) -> Optional[int]:
+    """Inclusive length of a ``12-25`` page range; None when absent or unparseable."""
+    match = _PAGE_RANGE.match(pages or "")
+    if match is None:
+        return None
+    start, end = int(match.group(1)), int(match.group(2))
+    return end - start + 1 if end >= start else None
+
+
+def plain_text(markup: Optional[str]) -> str:
+    """Text of a Crossref title/abstract that may carry JATS or inline HTML."""
+    if not markup:
+        return ""
+    return " ".join(BeautifulSoup(markup, "html.parser").get_text(" ").split())
+
+
+def crossref_author_names(item: dict) -> list[str]:
+    names: list[str] = []
+    for author in item.get("author") or []:
+        name = " ".join(part for part in (author.get("given"), author.get("family")) if part)
+        name = name or author.get("name") or ""
+        if name.strip():
+            names.append(name.strip())
+    return names
+
+
+def crossref_items(
+    client: OfficialProceedingsClient,
+    path: str,
+    *,
+    filters: str,
+    select: str,
+    page_delay_seconds: float = 1.5,
+) -> list[dict]:
+    """Every Crossref work matching ``filters`` under ``path``, via cursor paging."""
+    items: list[dict] = []
+    cursor = "*"
+    while True:
+        params = {"filter": filters, "rows": str(CROSSREF_PAGE_ROWS), "cursor": cursor, "select": select}
+        mailto = os.environ.get(CROSSREF_MAILTO_ENV)
+        if mailto:
+            params["mailto"] = mailto
+        message = json.loads(client.get_text(f"{CROSSREF_API}{path}?{urlencode(params)}"))["message"]
+        page = message.get("items") or []
+        items.extend(page)
+        if not page or len(items) >= int(message.get("total-results") or 0):
+            return items
+        cursor = message["next-cursor"]
+        time.sleep(page_delay_seconds)
+
+
+def download_host(paper: "CorpusPaper") -> str:
+    return (urlparse(paper.pdf_url or "").hostname or "").lower()
+
+
+class EcvaProceedingsSource(OfficialProceedingsSource):
+    """ECCV from the ECVA open-access site, plus the live virtual site for 2026.
+
+    ``ecva.net/papers.php`` holds every archived edition on one page, one
+    accordion per edition, with the CVF ``dt.ptitle`` row layout. An edition that
+    ECVA has not archived yet (2026 on 2026-11-10) is read from the conference's
+    virtual-site JSON, whose rows carry the camera-ready PDF on the event host;
+    oral/spotlight events repeat a poster's paper under a negative id.
+    """
+
+    conference_name = "ECCV"
+    ARCHIVE_URL = "https://www.ecva.net/papers.php"
+    VIRTUAL_JSON_BY_YEAR = {
+        2026: "https://eccv.ecva.net/static/virtual/data/eccv-2026-orals-posters.json",
+    }
+
+    def supports_year(self, year: int) -> bool:
+        return year % 2 == 0
+
+    def collect_papers(self, year: int, client: OfficialProceedingsClient) -> list[CorpusPaper]:
+        if year in self.VIRTUAL_JSON_BY_YEAR:
+            return self.papers_from_virtual_json(year, json.loads(client.get_text(self.VIRTUAL_JSON_BY_YEAR[year])))
+        return self.papers_from_archive(year, client.get_soup(self.ARCHIVE_URL))
+
+    def papers_from_archive(self, year: int, soup: BeautifulSoup) -> list[CorpusPaper]:
+        section = None
+        for button in soup.select("button.accordion"):
+            if button.get_text(" ", strip=True) == f"ECCV {year} Papers":
+                section = button.find_next_sibling("div")
+                break
+        if section is None:
+            raise RuntimeError(f"ECVA archive has no ECCV {year} section")
+        papers: dict[str, CorpusPaper] = {}
+        for row in iter_ptitle_rows(section, self.ARCHIVE_URL):
+            stem = sanitize_file_component(Path(urlparse(row.pdf_url).path).stem.lower())
+            paper_id = f"eccv-{year}-{stem}"
+            doi = ""
+            for anchor in row.links_node.find_all("a", href=True):
+                match = re.search(r"(10\.\d{4,9}/[^\s?#]+)$", anchor["href"])
+                if match and normalize_link_label(anchor) == "doi":
+                    doi = match.group(1)
+            papers[paper_id] = CorpusPaper(
+                paper_id=paper_id,
+                title=row.title,
+                authors=[name.strip(" *") for name in row.authors],
+                conference=self.conference_name,
+                year=year,
+                pdf_url=row.pdf_url,
+                paper_page_url=row.detail_url,
+                source_name="ecva_open_access",
+                doi=doi or None,
+            )
+        return list(papers.values())
+
+    def papers_from_virtual_json(self, year: int, payload: dict) -> list[CorpusPaper]:
+        rows = payload.get("results") or []
+        track_by_title: dict[str, str] = {}
+        for row in rows:
+            event = str(row.get("eventtype") or "").lower()
+            if event in {"oral", "spotlight"}:
+                track_by_title.setdefault(normalize_title_key(row.get("name", "")), event)
+        papers: dict[str, CorpusPaper] = {}
+        for row in rows:
+            if str(row.get("eventtype") or "") != "Poster":
+                continue  # every oral/spotlight paper also has its poster row
+            title = " ".join(str(row.get("name") or "").split())
+            pdf_url = str(row.get("paper_pdf_url") or "").strip()
+            if not title or not pdf_url:
+                continue
+            stem = sanitize_file_component(Path(urlparse(pdf_url).path).stem.lower())
+            paper_id = f"eccv-{year}-{stem}"
+            papers[paper_id] = CorpusPaper(
+                paper_id=paper_id,
+                title=title,
+                authors=[a.get("fullname", "").strip() for a in row.get("authors") or [] if a.get("fullname")],
+                conference=self.conference_name,
+                year=year,
+                pdf_url=pdf_url,
+                paper_page_url=urljoin("https://eccv.ecva.net/", str(row.get("virtualsite_url") or "")),
+                source_name="eccv_virtual_site",
+                venue_track=track_by_title.get(normalize_title_key(title), "poster"),
+            )
+        return list(papers.values())
+
+
+class JmlrVolumeSource(OfficialProceedingsSource):
+    """JMLR volumes at ``jmlr.org/papers/v{N}`` (volume N = year - 1999).
+
+    Each paper is one ``<dl>``: title ``dt``, a ``dd`` with authors in ``b>i``
+    and abs/pdf/bib links. Machine Learning Open Source Software papers are
+    regular peer-reviewed JMLR papers, kept with ``venue_track='mloss'``.
+    """
+
+    conference_name = "JMLR"
+    VOLUME_YEAR_OFFSET = 1999
+
+    def supports_year(self, year: int) -> bool:
+        return year >= 2000
+
+    def collect_papers(self, year: int, client: OfficialProceedingsClient) -> list[CorpusPaper]:
+        volume = year - self.VOLUME_YEAR_OFFSET
+        index_url = f"https://jmlr.org/papers/v{volume}/"
+        return self.papers_from_volume_page(year, client.get_soup(index_url), index_url)
+
+    def papers_from_volume_page(self, year: int, soup: BeautifulSoup, index_url: str) -> list[CorpusPaper]:
+        volume = year - self.VOLUME_YEAR_OFFSET
+        papers: dict[str, CorpusPaper] = {}
+        for entry in soup.find_all("dl"):
+            title_node, info_node = entry.find("dt"), entry.find("dd")
+            if title_node is None or info_node is None:
+                continue
+            abs_anchor = info_node.find("a", href=re.compile(rf"/papers/v{volume}/[^/]+\.html$"))
+            pdf_anchor = next(
+                (a for a in info_node.find_all("a", href=True) if normalize_link_label(a) == "pdf"),
+                None,
+            )
+            if abs_anchor is None or pdf_anchor is None:
+                continue
+            jmlr_id = Path(abs_anchor["href"]).stem
+            author_node = info_node.select_one("b i") or info_node.find("b")
+            authors = [
+                name.strip()
+                for name in (author_node.get_text(" ", strip=True) if author_node else "").split(",")
+                if name.strip()
+            ]
+            is_mloss = info_node.find("a", href=re.compile(r"/mloss/?$")) is not None
+            paper_id = f"jmlr-{year}-{sanitize_file_component(jmlr_id)}"
+            papers[paper_id] = CorpusPaper(
+                paper_id=paper_id,
+                title=" ".join(title_node.get_text(" ", strip=True).split()),
+                authors=authors,
+                conference=self.conference_name,
+                year=year,
+                pdf_url=urljoin(index_url, pdf_anchor["href"]),
+                paper_page_url=urljoin(index_url, abs_anchor["href"]),
+                source_name="jmlr_volume_index",
+                venue_track="mloss" if is_mloss else "research",
+            )
+        return list(papers.values())
+
+
+# vol15 lists ``p2559-könig.pdf``; browsers and httpx send ``k%C3%B6nig`` and www.vldb.org
+# answers an HTML 404, while ``p2559-konig.pdf`` is the PDF (probed 2026-11-12). Entries
+# already percent-encoded in the listing (vol12 ``bleifu%C3%9F``) are served as listed.
+_ASCII_FOLD = str.maketrans({"ß": "ss", "ø": "o", "Ø": "O", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "æ": "ae", "œ": "oe"})
+
+
+def ascii_pdf_url(url: str) -> str:
+    """``url`` with raw non-ASCII path characters folded to ASCII; ASCII URLs unchanged."""
+    if url.isascii():
+        return url
+    parts = urlsplit(url)
+    folded = unicodedata.normalize("NFKD", parts.path.translate(_ASCII_FOLD))
+    return parts._replace(path="".join(char for char in folded if char.isascii())).geturl()
+
+
+class PvldbVolumeSource(OfficialProceedingsSource):
+    """VLDB research papers from the PVLDB volume page (volume N = year - 2007).
+
+    The page embeds its issue list as Next.js ``__NEXT_DATA__`` JSON with title,
+    authors, page range and PDF per paper, and abstracts in ``volumeSummaries``.
+    Demonstrations (4 pages, issue 12) and front matter are not research papers;
+    every research, EA&B, industry and vision paper is at least 7 pages.
+    """
+
+    conference_name = "VLDB"
+    VOLUME_YEAR_OFFSET = 2007
+    MIN_RESEARCH_PAGES = 7
+
+    def supports_year(self, year: int) -> bool:
+        return year >= 2008
+
+    def collect_papers(self, year: int, client: OfficialProceedingsClient) -> list[CorpusPaper]:
+        index_url = f"https://www.vldb.org/pvldb/volumes/{year - self.VOLUME_YEAR_OFFSET}/"
+        return self.papers_from_volume_page(year, client.get_text(index_url), index_url)
+
+    def papers_from_volume_page(self, year: int, html: str, index_url: str) -> list[CorpusPaper]:
+        match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.S)
+        if match is None:
+            raise RuntimeError(f"PVLDB volume page {index_url} has no __NEXT_DATA__")
+        props = json.loads(match.group(1))["props"]["pageProps"]
+        abstracts = {
+            str(row.get("Paper ID") or ""): str(row.get("Abstract") or "").strip()
+            for row in props.get("volumeSummaries") or []
+        }
+        papers: dict[str, CorpusPaper] = {}
+        for issue_rows in (props.get("groupedIssues") or {}).values():
+            for row in issue_rows:
+                title = " ".join(str(row.get("title") or "").split())
+                listed_url = str(row.get("pdf") or "").strip()
+                if not title or not listed_url or title == "Front Matter":
+                    continue
+                try:
+                    pages = int(row["end_page"]) - int(row["start_page"]) + 1
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if pages < self.MIN_RESEARCH_PAGES:
+                    continue
+                stem = Path(urlparse(listed_url).path).stem
+                pdf_url = ascii_pdf_url(listed_url)
+                paper_id = f"vldb-{year}-{sanitize_file_component(stem.lower())}"
+                papers[paper_id] = CorpusPaper(
+                    paper_id=paper_id,
+                    title=title,
+                    authors=[name.strip() for name in str(row.get("authors") or "").split(",") if name.strip()],
+                    conference=self.conference_name,
+                    year=year,
+                    pdf_url=pdf_url,
+                    paper_page_url=index_url,
+                    source_name="pvldb_volume_index",
+                    abstract=abstracts.get(f"vol{year - self.VOLUME_YEAR_OFFSET}/{stem}", ""),
+                )
+        return list(papers.values())
+
+
+# Proceedings front matter that IEEE CSDL lists with real page ranges
+# ("Table of Contents" 35 pages, "Author Index" 17 pages).
+_FRONT_MATTER_TITLE = re.compile(
+    r"^\s*(title page|table of contents|author index|program committee|organizing committee|"
+    r"steering committee|message from|welcome|foreword|preface|copyright|sponsors?|"
+    r"reviewers|front matter|back cover|cover)\b",
+    re.I,
+)
+
+
+class IeeeCsdlProceedingsSource(OfficialProceedingsSource):
+    """IEEE Computer Society proceedings (IEEE S&P) from the CSDL GraphQL API.
+
+    One request lists a proceeding with DOI, page range and the publisher's
+    ``isOpenAccess`` flag. Open-access articles download from CSDL's PDF endpoint
+    (it redirects to a signed, expiring link, so only the stable endpoint goes in
+    the manifest). Closed articles keep an empty ``pdf_url`` for the open-access
+    resolver; the ones it cannot resolve are not collected.
+    """
+
+    GRAPHQL_URL = "https://www.computer.org/csdl/api/v1/graphql"
+    PDF_URL = "https://www.computer.org/csdl/pds/api/csdl/proceedings/download-article/{id}/pdf"
+    PAGE_URL = "https://www.computer.org/csdl/proceedings-article/{prefix}/{year}/{fno}/{id}"
+    MIN_PAPER_PAGES = 5
+    QUERY = """query ($proceedingId: String!, $limitResults: Int, $skipResults: Int) {
+  articlesByProceeding: articlesByProceedingWithPagination(
+    proceedingId: $proceedingId limit: $limitResults skip: $skipResults) {
+    totalResults
+    articleResults { id doi idPrefix fno isOpenAccess pages title year authors { fullName } }
+  }
+}"""
+    open_access_only = True
+    # A conference paper is accepted within the year before its edition.
+    acceptance_lead_years = 1
+
+    def __init__(
+        self,
+        conference_name: str,
+        paper_id_prefix: str,
+        proceeding_ids: dict[int, str],
+        venue_aliases: Optional[list[str]] = None,
+    ):
+        self.conference_name = conference_name
+        self.paper_id_prefix = paper_id_prefix
+        self.proceeding_ids = {int(year): str(pid) for year, pid in proceeding_ids.items()}
+        self.venue_aliases = tuple(venue_aliases or ())
+
+    def supports_year(self, year: int) -> bool:
+        return year in self.proceeding_ids
+
+    def collect_papers(self, year: int, client: OfficialProceedingsClient) -> list[CorpusPaper]:
+        response = client.post_json(
+            self.GRAPHQL_URL,
+            body={
+                "query": self.QUERY,
+                "variables": {"proceedingId": self.proceeding_ids[year], "limitResults": 2000, "skipResults": 0},
+            },
+        )
+        return self.papers_from_graphql(year, response)
+
+    def papers_from_graphql(self, year: int, response: dict) -> list[CorpusPaper]:
+        listing = response["data"]["articlesByProceeding"]
+        articles = listing.get("articleResults") or []
+        if len(articles) != int(listing.get("totalResults") or 0):
+            raise RuntimeError(f"CSDL returned {len(articles)} of {listing.get('totalResults')} articles")
+        papers: dict[str, CorpusPaper] = {}
+        for article in articles:
+            title = " ".join(str(article.get("title") or "").split())
+            doi = str(article.get("doi") or "").strip()
+            pages = printed_page_count(article.get("pages"))
+            if not title or not doi or _FRONT_MATTER_TITLE.match(title):
+                continue
+            if pages is not None and pages < self.MIN_PAPER_PAGES:
+                continue
+            paper_id = f"{self.paper_id_prefix}-{year}-{sanitize_file_component(doi.rsplit('.', 1)[-1].lower())}"
+            paper = CorpusPaper(
+                paper_id=paper_id,
+                title=title,
+                authors=[a["fullName"].strip() for a in article.get("authors") or [] if a.get("fullName")],
+                conference=self.conference_name,
+                year=year,
+                pdf_url=self.PDF_URL.format(id=article["id"]) if article.get("isOpenAccess") else "",
+                paper_page_url=self.PAGE_URL.format(
+                    prefix=article.get("idPrefix") or self.paper_id_prefix,
+                    year=year, fno=article.get("fno") or "", id=article["id"],
+                ),
+                source_name="ieee_csdl",
+                doi=doi,
+                official_pages=pages,
+            )
+            if not paper.pdf_url:
+                paper.pdf_resolution_status = "needs_open_access"
+            papers[paper_id] = paper
+        return list(papers.values())
+
+    def resolve_open_access_pdf_urls(self, papers: Iterable[CorpusPaper], client: OfficialProceedingsClient) -> dict[str, int]:
+        return resolve_open_access_pdf_urls(
+            [paper for paper in papers if not paper.pdf_url],
+            client,
+            excluded_hosts=frozenset({"doi.org", "ieeexplore.ieee.org", "www.computer.org"}),
+        )
+
+
+_EDITORIAL_TITLE = re.compile(
+    r"^\s*(corrections? to|correction:|corrigendum|erratum|editorial|guest editorial|"
+    r"introduction to the special|comments? on|reply to|response to|retraction|"
+    r"expression of concern|editor'?s? note|in memoriam|reviewers? (list|of)|a message from|"
+    r"state of the journal)",
+    re.I,
+)
+
+
+class CrossrefJournalSource(OfficialProceedingsSource):
+    """Journal volumes (TPAMI, IJCV) listed through Crossref by ISSN.
+
+    The corpus year is the volume's year (``volume = year - offset``). Articles
+    without a volume are online-first and wait until one is assigned; editorials,
+    corrections and comments are not research papers. Publishers here do not
+    serve PDFs to the proxy, so every paper goes through the open-access
+    resolver and only resolved ones are collected.
+    """
+
+    open_access_only = True
+    # Articles go online up to ~2 years before their volume's year.
+    acceptance_lead_years = 2
+
+    def __init__(
+        self,
+        conference_name: str,
+        issn: str,
+        paper_id_prefix: str,
+        volume_year_offset: int,
+        doi_id: str = "last_segment",
+        open_access_hosts: Optional[list[str]] = None,
+        min_pages: int = 4,
+        venue_aliases: Optional[list[str]] = None,
+    ):
+        if doi_id not in {"last_segment", "suffix"}:
+            raise ValueError(f"doi_id must be last_segment or suffix, got {doi_id!r}")
+        self.conference_name = conference_name
+        self.issn = issn
+        self.paper_id_prefix = paper_id_prefix
+        self.volume_year_offset = int(volume_year_offset)
+        self.doi_id = doi_id
+        self.open_access_hosts = frozenset(host.lower() for host in open_access_hosts or ())
+        self.min_pages = int(min_pages)
+        self.venue_aliases = tuple(venue_aliases or ())
+
+    def supports_year(self, year: int) -> bool:
+        return year - self.volume_year_offset >= 1
+
+    def _id_of(self, doi: str) -> str:
+        suffix = doi.split("/", 1)[1] if "/" in doi else doi
+        value = suffix.rsplit(".", 1)[-1] if self.doi_id == "last_segment" else suffix
+        return sanitize_file_component(value.lower())
+
+    def collect_papers(self, year: int, client: OfficialProceedingsClient) -> list[CorpusPaper]:
+        # A volume's articles go online up to ~2 years before its print year.
+        items = crossref_items(
+            client,
+            f"/journals/{self.issn}/works",
+            filters=f"from-pub-date:{year - 3}-01-01,until-pub-date:{year}-12-31,type:journal-article",
+            select="DOI,title,volume,page,author,abstract",
+        )
+        return self.papers_from_crossref(year, items)
+
+    def papers_from_crossref(self, year: int, items: Iterable[dict]) -> list[CorpusPaper]:
+        volume = str(year - self.volume_year_offset)
+        papers: dict[str, CorpusPaper] = {}
+        for item in items:
+            if str(item.get("volume") or "").strip() != volume:
+                continue
+            title = plain_text((item.get("title") or [""])[0])
+            doi = str(item.get("DOI") or "").strip()
+            if not title or not doi or _EDITORIAL_TITLE.match(title):
+                continue
+            pages = printed_page_count(item.get("page"))
+            if pages is not None and pages < self.min_pages:
+                continue
+            paper_id = f"{self.paper_id_prefix}-{year}-{self._id_of(doi)}"
+            papers[paper_id] = CorpusPaper(
+                paper_id=paper_id,
+                title=title,
+                authors=crossref_author_names(item),
+                conference=self.conference_name,
+                year=year,
+                pdf_url="",
+                paper_page_url=f"https://doi.org/{doi}",
+                source_name="crossref",
+                abstract=plain_text(item.get("abstract")),
+                pdf_resolution_status="needs_open_access",
+                doi=doi,
+                official_pages=pages,
+            )
+        return list(papers.values())
+
+    def resolve_open_access_pdf_urls(self, papers: Iterable[CorpusPaper], client: OfficialProceedingsClient) -> dict[str, int]:
+        return resolve_open_access_pdf_urls(
+            [paper for paper in papers if not paper.pdf_url],
+            client,
+            preferred_hosts=self.open_access_hosts,
+            excluded_hosts=frozenset({"doi.org", "ieeexplore.ieee.org", "www.computer.org"}),
+        )
+
+
+ARXIV_API_URL = "https://export.arxiv.org/api/query"
+_ATOM = "{http://www.w3.org/2005/Atom}"
+_ARXIV_NS = "{http://arxiv.org/schemas/atom}"
+_ARXIV_VERSIONED_ID = re.compile(r"arxiv\.org/abs/(.+?)v(\d+)$")
+
+
+@dataclass(frozen=True)
+class ArxivRecord:
+    """The arXiv API's view of one paper: its latest version and what it says about itself."""
+
+    arxiv_id: str
+    version: int
+    updated: date
+    title: str
+    authors: tuple[str, ...]
+    doi: str
+    journal_ref: str
+    comment: str
+
+    @property
+    def versioned_pdf_url(self) -> str:
+        return f"https://arxiv.org/pdf/{self.arxiv_id}v{self.version}"
+
+
+def parse_arxiv_feed(xml_text: str) -> dict[str, ArxivRecord]:
+    """arXiv API Atom feed -> {bare arXiv id: latest-version record}."""
+    records: dict[str, ArxivRecord] = {}
+    root = ElementTree.fromstring(xml_text)
+    for entry in root.findall(f"{_ATOM}entry"):
+        match = _ARXIV_VERSIONED_ID.search((entry.findtext(f"{_ATOM}id") or "").strip())
+        if match is None:
+            continue  # an error entry, not a paper
+        records[match.group(1)] = ArxivRecord(
+            arxiv_id=match.group(1),
+            version=int(match.group(2)),
+            updated=date.fromisoformat((entry.findtext(f"{_ATOM}updated") or "")[:10]),
+            title=" ".join((entry.findtext(f"{_ATOM}title") or "").split()),
+            authors=tuple(
+                " ".join((author.findtext(f"{_ATOM}name") or "").split())
+                for author in entry.findall(f"{_ATOM}author")
+            ),
+            # Author-typed: tolerate a trailing period or space, nothing else.
+            doi=(entry.findtext(f"{_ARXIV_NS}doi") or "").strip().rstrip(".;, ").lower(),
+            journal_ref=" ".join((entry.findtext(f"{_ARXIV_NS}journal_ref") or "").split()),
+            comment=" ".join((entry.findtext(f"{_ARXIV_NS}comment") or "").split()),
+        )
+    return records
+
+
+def fetch_arxiv_records(
+    arxiv_ids: Iterable[str],
+    client: OfficialProceedingsClient,
+    *,
+    batch_size: int = 100,
+    delay_seconds: float = 3.0,
+) -> dict[str, ArxivRecord]:
+    """Latest-version records for ``arxiv_ids`` from the arXiv API (through the proxy)."""
+    wanted = list(dict.fromkeys(i for i in arxiv_ids if i))
+    records: dict[str, ArxivRecord] = {}
+    for start in range(0, len(wanted), batch_size):
+        if start:
+            time.sleep(delay_seconds)  # arXiv asks for one request every 3 s
+        batch = wanted[start:start + batch_size]
+        query = urlencode({"id_list": ",".join(batch), "max_results": len(batch)})
+        records.update(parse_arxiv_feed(client.get_text(f"{ARXIV_API_URL}?{query}")))
+    return records
+
+
+def vet_arxiv_full_text(
+    papers: Iterable[CorpusPaper],
+    records: dict[str, ArxivRecord],
+    *,
+    venue_aliases: Iterable[str],
+    acceptance_lead_years: int,
+) -> dict[str, int]:
+    """Keep an arXiv copy as full text only when it is this paper, in a usable version.
+
+    Applies to papers whose ``full_text_source`` is arxiv (admitted by the
+    Semantic Scholar DOI bridge). The arXiv record never relabels the paper; it
+    can only reject its own copy:
+
+    * its own DOI names a different paper -> rejected;
+    * its latest version predates ``acceptance_lead_years`` before the official
+      year and neither journal_ref nor comments name the venue -> an early draft,
+      rejected;
+    * otherwise the latest version is pinned (``.../pdf/<id>v<n>``) and recorded
+      in ``source_version``.
+
+    A rejected arXiv copy falls back to an open-repository copy when the bridge
+    found one, else the paper has no full text (``pdf_url`` empty).
+    """
+    aliases = [alias.casefold() for alias in venue_aliases if alias]
+    stats = {"arxiv_checked": 0, "arxiv_accepted": 0, "arxiv_missing": 0,
+             "arxiv_doi_conflict": 0, "arxiv_early_draft": 0, "fell_back_to_oa_repo": 0}
+    for paper in papers:
+        if paper.full_text_source != FULL_TEXT_ARXIV or not paper.arxiv_id:
+            continue
+        stats["arxiv_checked"] += 1
+        record = records.get(paper.arxiv_id)
+        official_doi = (paper.doi or "").lower()
+        about_self = f"{record.journal_ref} {record.comment}".casefold() if record else ""
+        names_venue = bool(record) and (
+            any(alias in about_self for alias in aliases) or (official_doi and official_doi in about_self)
+        )
+        reason = None
+        if record is None:
+            reason = "arxiv_missing"
+        elif record.doi and official_doi and record.doi != official_doi:
+            reason = "arxiv_doi_conflict"
+        elif record.updated < date(paper.year - acceptance_lead_years, 1, 1) and not names_venue:
+            reason = "arxiv_early_draft"
+        if reason is None:
+            paper.pdf_url = record.versioned_pdf_url
+            paper.alternate_pdf_urls = [u for u in paper.alternate_pdf_urls if u != paper.pdf_url]
+            paper.source_version = f"v{record.version}"
+            paper.full_text_match = "s2_doi" + (
+                "+arxiv_doi" if record.doi and record.doi == official_doi else ""
+            ) + ("+journal_ref" if names_venue else "")
+            stats["arxiv_accepted"] += 1
+            continue
+        stats[reason] += 1
+        LOGGER.info("Rejected arXiv copy %s for %s: %s", paper.arxiv_id, paper.paper_id, reason)
+        fallback = next((u for u in paper.alternate_pdf_urls if full_text_source_of_url(u) == FULL_TEXT_OA_REPO), None)
+        paper.arxiv_id = None
+        paper.source_version = None
+        if fallback:
+            paper.pdf_url = fallback
+            paper.alternate_pdf_urls = [u for u in paper.alternate_pdf_urls if u != fallback]
+            paper.full_text_source = FULL_TEXT_OA_REPO
+            paper.pdf_resolution_note = f"arXiv copy rejected ({reason}); open repository copy kept."
+            stats["fell_back_to_oa_repo"] += 1
+        else:
+            paper.pdf_url = ""
+            paper.full_text_source = None
+            paper.full_text_match = None
+            paper.pdf_resolution_status = "needs_open_access"
+            paper.pdf_resolution_note = f"arXiv copy rejected ({reason}); no other open copy."
+    return stats
+
+
+# Hosts that serve the official version of the venues this corpus collects.
+PUBLISHER_PDF_HOSTS = frozenset({
+    "www.ecva.net", "media.eventhosts.cc", "jmlr.org", "www.jmlr.org", "www.vldb.org",
+    "www.usenix.org", "www.computer.org", "link.springer.com", "dl.acm.org",
+    "ieeexplore.ieee.org", "doi.org",
+})
+
+
+# A full-text URL must prove it is THIS paper. Springer served a 2018 book chapter (an earlier
+# workshop version) as the open PDF of a 2021 TPAMI article: its URL carries the chapter's DOI.
+_DOI_IN_URL = re.compile(r"10\.\d{4,9}/[^?#\s]+")
+_DOI_URL_SUFFIX = re.compile(r"(?:\.pdf|/pdf|/epdf|/full|/fulltext|/abstract|/download)+$")
+ARXIV_HOSTS = frozenset({"arxiv.org", "export.arxiv.org"})
+# DOI registrant prefix -> the hosts of the publisher that owns it. These aggregate many venues,
+# so a URL there without a DOI proves nothing unless the paper belongs to that publisher.
+DOI_PREFIX_PUBLISHER_HOSTS = {
+    "10.1109": frozenset({"ieeexplore.ieee.org", "www.computer.org"}),
+    "10.1007": frozenset({"link.springer.com"}),
+    "10.1145": frozenset({"dl.acm.org"}),
+    "10.1016": frozenset({"www.sciencedirect.com", "sciencedirect.com"}),
+    "10.1002": frozenset({"onlinelibrary.wiley.com"}),
+    "10.1111": frozenset({"onlinelibrary.wiley.com"}),
+    "10.1038": frozenset({"www.nature.com"}),
+    "10.1137": frozenset({"epubs.siam.org"}),
+    "10.1093": frozenset({"academic.oup.com"}),
+    "10.1177": frozenset({"journals.sagepub.com"}),
+    "10.1080": frozenset({"www.tandfonline.com"}),
+    "10.1017": frozenset({"www.cambridge.org"}),
+    "10.1088": frozenset({"iopscience.iop.org"}),
+    "10.1103": frozenset({"journals.aps.org", "link.aps.org"}),
+    "10.1126": frozenset({"www.science.org"}),
+}
+AGGREGATE_PUBLISHER_HOSTS = frozenset().union(*DOI_PREFIX_PUBLISHER_HOSTS.values())
+
+
+def doi_in_url(url: str) -> Optional[str]:
+    """Lower-cased DOI a URL names (``.../10.1007/x_16.pdf`` -> ``10.1007/x_16``), or None."""
+    match = _DOI_IN_URL.search(unquote(url or ""))
+    if match is None:
+        return None
+    doi = _DOI_URL_SUFFIX.sub("", match.group(0).casefold().rstrip(".,;)"))
+    return doi.rstrip(".,;)") or None
+
+
+def _host_of(url: Optional[str]) -> str:
+    return (urlparse(url or "").hostname or "").lower()
+
+
+def official_doi_of(paper: "CorpusPaper") -> str:
+    """The listing's DOI, lower-cased; derived from the DOI page or ACM listing URL when unset."""
+    if paper.doi:
+        return paper.doi.strip().casefold()
+    if _host_of(paper.paper_page_url) == "doi.org":
+        return doi_in_url(paper.paper_page_url) or ""
+    for url in (paper.pdf_url, *paper.alternate_pdf_urls):
+        if _host_of(url) == "dl.acm.org" and doi_in_url(url):
+            return doi_in_url(url) or ""
+    return ""
+
+
+def _own_publisher_hosts(paper: "CorpusPaper", official_doi: str) -> set[str]:
+    hosts = set(DOI_PREFIX_PUBLISHER_HOSTS.get(official_doi.split("/", 1)[0], ()))
+    hosts.add(_host_of(paper.paper_page_url))
+    hosts.update(
+        _host_of(url) for url in (paper.pdf_url, *paper.alternate_pdf_urls)
+        if official_doi and doi_in_url(url) == official_doi
+    )
+    return hosts
+
+
+def candidate_url_problem(url: str, paper: "CorpusPaper") -> Optional[str]:
+    """Why a full-text URL is not provably this paper's, or None.
+
+    A URL that names a DOI must name the official one (case-insensitive). A URL on a
+    publisher that serves many venues, without any DOI, is only acceptable when the paper
+    is that publisher's. arXiv is vetted by its own record, and repositories by the
+    content check.
+    """
+    host = _host_of(url)
+    if not host or host in ARXIV_HOSTS:
+        return None
+    official = official_doi_of(paper)
+    named = doi_in_url(url)
+    if named is not None:
+        if named == official:
+            return None
+        return f"URL names DOI {named}, the official DOI is {official or 'unknown'}"
+    if host in AGGREGATE_PUBLISHER_HOSTS and host not in _own_publisher_hosts(paper, official):
+        return f"{host} URL carries no DOI and the paper is not that publisher's"
+    return None
+
+
+def full_text_source_of_url(url: str) -> str:
+    host = (urlparse(url or "").hostname or "").lower()
+    if host in {"arxiv.org", "export.arxiv.org"}:
+        return FULL_TEXT_ARXIV
+    if host in PUBLISHER_PDF_HOSTS:
+        return FULL_TEXT_PUBLISHER
+    return FULL_TEXT_OA_REPO
+
+
+def _content_key(text: str) -> str:
+    return re.sub(r"[^0-9a-z]+", "", unicodedata.normalize("NFKC", text or "").casefold())
+
+
+# Broken ligature glyphs ("E!ciency", "Ecient") are the commonest page-1
+# extraction fault in genuine PDFs (2 of 400 ACM publisher PDFs, 2026-11-11).
+# Dropping ff/fi/fl/ffi/ffl on both sides still compares the rest exactly.
+_LIGATURE_LETTERS = re.compile(r"ff[il]?|f[il]")
+
+
+# Bumped when the page-1 rule changes: a cached mismatch of an older rule is read again.
+FULL_TEXT_CHECK_RULE = 2
+TITLE_MISMATCH = "page-1 title does not match the official title"
+# The listing sometimes appends its own revision note ("... Approach (Revision)").
+_LISTING_SUFFIX = re.compile(r"\s*\(\s*(?:(?:major|minor)\s+)?revis\w*(?:\s+version)?\s*\)\s*$", re.I)
+# Fuzzy match: 2026-11-12 the exact rule rejected 9 of 453 right publisher PDFs (pypdf
+# mangled ligatures "Diusion", "!ery", math in the title, a camera-ready retitle). A
+# near-match counts only with corroboration: an official author on the page, and for a
+# short title no fuzziness at all (every word matters: "Slow vs. Fast" is not "Slow versus Fast").
+# It is only for the venue's own PDF, whose identity the official URL already vouches for. A
+# preprint with a retitled name is another version of the work ("I2DFormer" is not
+# "I2DFormer+"; 107 arXiv copies rejected on 2026-11-11, 58 would pass a fuzzy rule), and no
+# non-publisher copy is accepted as a different version.
+TITLE_FUZZY_RATIO = 0.85
+TITLE_FUZZY_MIN_CHARS = 20
+SUBTITLE_MIN_CHARS = 25
+TITLE_WINDOW_SEARCH_CHARS = 2500  # the title is at the top of page 1
+
+
+def _without_ligatures(key: str) -> str:
+    return _LIGATURE_LETTERS.sub("", key)
+
+
+def _best_window_ratio(title_key: str, page_key: str) -> float:
+    """Best SequenceMatcher ratio of the title against same-length windows of the page head."""
+    matcher = difflib.SequenceMatcher(autojunk=False)
+    matcher.set_seq2(title_key)
+    length, head, best = len(title_key), page_key[:TITLE_WINDOW_SEARCH_CHARS], 0.0
+    for start in range(max(1, len(head) - length + 1)):
+        matcher.set_seq1(head[start:start + length])
+        if matcher.real_quick_ratio() > best and matcher.quick_ratio() > best:
+            best = max(best, matcher.ratio())
+    return best
+
+
+def _official_author_on_page(authors: Iterable[str], page_key: str) -> bool:
+    """A surname (last word of an author name) is on the page. Short surnames match
+    almost any text, so they count only when no author has a longer one."""
+    surnames = [_content_key(name.split()[-1]) for name in authors if name and name.split()]
+    surnames = [surname for surname in surnames if surname]
+    pool = [surname for surname in surnames if len(surname) >= 4] or surnames
+    return any(surname in page_key for surname in pool)
+
+
+def _title_on_page(title: str, page_text: str, authors: Iterable[str] = (), *, fuzzy: bool = False) -> bool:
+    title = _LISTING_SUFFIX.sub("", title or "")
+    title_key, page_key = _content_key(title), _content_key(page_text)
+    if not title_key:
+        return False
+    if title_key in page_key or _without_ligatures(title_key) in _without_ligatures(page_key):
+        return True
+    if not fuzzy or len(title_key) < TITLE_FUZZY_MIN_CHARS or not _official_author_on_page(authors, page_key):
+        return False
+    plain_page = _without_ligatures(page_key)
+    subtitle = _content_key(title.split(":", 1)[1]) if ":" in title else ""
+    if len(subtitle) >= SUBTITLE_MIN_CHARS and (subtitle in page_key or _without_ligatures(subtitle) in plain_page):
+        return True
+    ratio = max(_best_window_ratio(title_key, page_key),
+                _best_window_ratio(_without_ligatures(title_key), plain_page))
+    return ratio >= TITLE_FUZZY_RATIO
+
+
+def full_text_content_problem(pdf_path: Path, paper: CorpusPaper, *, fuzzy: bool = False) -> Optional[str]:
+    """Why a PDF is not this paper's full text, or None when it is. See
+    :func:`full_text_text_problem` for the rule."""
+    try:
+        reader = PdfReader(str(pdf_path))
+        page_count = len(reader.pages)
+        first_page = reader.pages[0].extract_text() or ""
+    except Exception as exc:
+        return f"unreadable PDF ({type(exc).__name__}: {exc})"
+    return full_text_text_problem(first_page, page_count, paper, fuzzy=fuzzy)
+
+
+def full_text_text_problem(
+    first_page: str, page_count: int, paper: CorpusPaper, *, fuzzy: bool = False,
+) -> Optional[str]:
+    """Why page-1 text and a page count are not this paper's, or None.
+
+    Page 1 must carry the official title (compared without spacing, case, punctuation,
+    line-break hyphens or ligatures; a listing's "(Revision)" suffix ignored), or, with
+    ``fuzzy`` (the venue's own PDF only), nearly so with corroboration (see
+    ``_title_on_page``). The page count must be within a sane range of the official
+    printed length when that is known.
+    """
+    if not _title_on_page(paper.title, first_page, paper.authors, fuzzy=fuzzy):
+        return TITLE_MISMATCH
+    if paper.official_pages:
+        low, high = max(1, paper.official_pages // 2), paper.official_pages * 3 + 10
+        if not low <= page_count <= high:
+            return f"{page_count} pages, outside {low}-{high} for the official {paper.official_pages}"
+    return None
+
+
 _SOURCE_CLASS_MAP: dict[str, type] = {
     "AaaiTechnicalTracksSource": AaaiTechnicalTracksSource,
     "AclMainConferenceSource": AclMainConferenceSource,
+    "CrossrefJournalSource": CrossrefJournalSource,
     "CvfProceedingsSource": CvfProceedingsSource,
     "DblpAcmProceedingsSource": DblpAcmProceedingsSource,
+    "EcvaProceedingsSource": EcvaProceedingsSource,
     "EmnlpMainConferenceSource": EmnlpMainConferenceSource,
     "IclrOpenReviewSource": IclrOpenReviewSource,
     "IcmlProceedingsSource": IcmlProceedingsSource,
+    "IeeeCsdlProceedingsSource": IeeeCsdlProceedingsSource,
     "IjcaiProceedingsSource": IjcaiProceedingsSource,
+    "JmlrVolumeSource": JmlrVolumeSource,
     "KddOfficialProceedingsSource": KddOfficialProceedingsSource,
     "NdssSymposiumSource": NdssSymposiumSource,
     "NeuripsProceedingsSource": NeuripsProceedingsSource,
+    "PvldbVolumeSource": PvldbVolumeSource,
     "SigirOfficialProgramSource": SigirOfficialProgramSource,
     "UsenixProceedingsSource": UsenixProceedingsSource,
     "UsenixSecuritySource": UsenixSecuritySource,
@@ -2101,6 +3128,29 @@ def load_conference_registry(yaml_path: Optional[Path] = None) -> list[dict[str,
     return registry
 
 
+_VENUE_TIER_CACHE: Optional[dict[str, str]] = None
+
+
+def registry_venue_tier(venue: Optional[str]) -> Optional[str]:
+    """CCF tier the registry assigns to ``venue`` ("CCF-B" for ECCV), or None.
+
+    Ingest used to default every untiered paper to CCF-A, which is how IJCAI
+    2026 (CCF-B) landed in SQL as CCF-A. The registry is the only tier source.
+    """
+    global _VENUE_TIER_CACHE
+    if _VENUE_TIER_CACHE is None:
+        raw = yaml.safe_load(_CONF_YAML_PATH.read_text(encoding="utf-8"))
+        entries = raw.get("conferences", []) if isinstance(raw, dict) else raw
+        tiers: dict[str, str] = {}
+        for entry in entries:
+            ccf_tier = (entry.get("rank") or {}).get("ccf", "")
+            tier = f"CCF-{ccf_tier}" if ccf_tier else entry.get("venue_tier", "")
+            if tier:
+                tiers[str(entry.get("title", entry.get("name", ""))).casefold()] = tier
+        _VENUE_TIER_CACHE = tiers
+    return _VENUE_TIER_CACHE.get((venue or "").casefold())
+
+
 def load_categories(yaml_path: Optional[Path] = None) -> dict[str, dict[str, str]]:
     path = yaml_path or _CONF_YAML_PATH
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -2115,6 +3165,266 @@ def build_sources(yaml_path: Optional[Path] = None) -> dict[str, OfficialProceed
         for entry in load_conference_registry(yaml_path)
         if entry.get("source") is not None
     }
+
+
+class FullTextMismatch(ValueError):
+    """A downloaded non-publisher PDF that is not this paper's full text."""
+
+
+class NotAPdfError(ValueError):
+    """The URL answered something that is not a PDF (a landing page, an empty file): the same
+    body comes back on every refetch, so it is never retried."""
+
+
+def describe_non_pdf(path: Path, content_type: str) -> Optional[str]:
+    """Why a downloaded file is not a PDF, or None for a PDF cut short (worth a refetch)."""
+    size = path.stat().st_size if path.exists() else 0
+    if size == 0:
+        return "upstream served an empty file (0 bytes)"
+    with path.open("rb") as handle:
+        head = handle.read(1024)
+    if not head.lstrip().startswith(b"%PDF-"):
+        return f"not a PDF ({content_type or 'unknown content type'}, {size} bytes)"
+    return None
+
+
+def figshare_article_id(url: str) -> Optional[str]:
+    """Article id of a ``figshare.com/articles/<type>/<title>/<id>[/<version>]`` landing page."""
+    parts = urlparse(url or "")
+    if (parts.hostname or "").lower() not in {"figshare.com", "www.figshare.com"}:
+        return None
+    segments = [segment for segment in parts.path.split("/") if segment]
+    if len(segments) < 3 or segments[0] != "articles":
+        return None
+    if len(segments) >= 4 and segments[-1].isdigit() and segments[-2].isdigit() and len(segments[-1]) <= 3:
+        return segments[-2]  # .../<id>/<version>
+    return segments[-1] if segments[-1].isdigit() else None
+
+
+def figshare_file_url(record: dict[str, Any], title: str) -> str:
+    """Download URL of the PDF in a figshare article record (``/v2/articles/<id>``): its one
+    PDF file, else the single PDF whose name is the paper's title."""
+    pdfs = [
+        entry for entry in record.get("files") or []
+        if not entry.get("is_link_only") and entry.get("download_url")
+        and (str(entry.get("mimetype") or "").lower() == "application/pdf"
+             or str(entry.get("name") or "").lower().endswith(".pdf"))
+    ]
+    if not pdfs:
+        raise ValueError("figshare record has no PDF file")
+    if len(pdfs) > 1:
+        wanted = _content_key(title)
+        pdfs = [
+            entry for entry in pdfs
+            if len(key := _content_key(Path(str(entry.get("name") or "")).stem)) >= 8 and (key in wanted or wanted in key)
+        ]
+        if len(pdfs) != 1:
+            raise ValueError("figshare record has no single PDF named like the title")
+    return str(pdfs[0]["download_url"])
+
+
+async def resolve_repository_file_url(client: httpx.AsyncClient, url: str, title: str) -> str:
+    """The file behind a repository landing page. figshare answers its article pages with a
+    WAF challenge (HTTP 202, empty body), but its API names the file; any other URL is
+    returned unchanged. The file is still subject to the content check."""
+    article_id = figshare_article_id(url)
+    if article_id is None:
+        return url
+    response = await client.get(f"{urlparse(url).scheme}://api.figshare.com/v2/articles/{article_id}")
+    response.raise_for_status()
+    try:
+        return figshare_file_url(response.json(), title)
+    except ValueError as exc:
+        raise NotAPdfError(str(exc)) from exc
+
+
+# Full-text provenance travels with the PDF: the downloader does not write the
+# shared manifest (download_subset.py), so ``<pdf stem>.provenance.json`` beside
+# the PDF records what was actually used, and the per-slice manifest sync
+# (scripts/sync/sync_local_conf_md.py) folds it into the record before preindex.
+PROVENANCE_KEYS = (
+    "downloaded_from_url", "full_text_source", "full_text_match", "source_version", "arxiv_id",
+    "full_text_check",
+)
+
+
+def provenance_path(pdf_path: Path) -> Path:
+    return Path(pdf_path).with_suffix(".provenance.json")
+
+
+def write_full_text_provenance(pdf_path: Path, paper: "CorpusPaper") -> None:
+    record = {"paper_id": paper.paper_id, **{key: getattr(paper, key) for key in PROVENANCE_KEYS}}
+    if paper.full_text_check:
+        record["full_text_check_rule"] = FULL_TEXT_CHECK_RULE  # not a manifest key: sidecar-only
+    write_json_atomic(provenance_path(pdf_path), record)
+
+
+def read_full_text_provenance(pdf_path: Path) -> Optional[dict[str, Any]]:
+    record = load_json_with_recovery(provenance_path(pdf_path), None)
+    return record if isinstance(record, dict) else None
+
+
+# A non-publisher copy that fails the content check never stays in the PDF tree
+# (the extract stage converts everything there). It moves to
+# ``<corpus>/rejected_identity/<venue>/<year>/<paper>.pdf`` beside a reason
+# record, which the download batch gate counts as settled and the slice sync
+# turns into ``pdf_rejected_identity`` on the manifest record.
+REJECTED_IDENTITY_DIR = "rejected_identity"
+
+
+def identity_rejection_path(corpus_root: Path, conference: str, year: int, paper_id: str) -> Path:
+    return (
+        Path(corpus_root) / REJECTED_IDENTITY_DIR / conference.lower() / str(year)
+        / f"{sanitize_file_component(paper_id)}.json"
+    )
+
+
+def read_identity_rejections(corpus_root: Path, conference: str, year: int, paper_id: str) -> list[dict[str, Any]]:
+    record = load_json_with_recovery(identity_rejection_path(corpus_root, conference, year, paper_id), None)
+    if not isinstance(record, dict) or record.get("paper_id") != paper_id:
+        return []
+    return [entry for entry in record.get("rejections") or [] if isinstance(entry, dict)]
+
+
+def record_identity_rejection(
+    corpus_root: Path, paper: "CorpusPaper", pdf_file: Optional[Path], url: str, source: str, reason: str,
+) -> None:
+    path = identity_rejection_path(corpus_root, paper.conference, paper.year, paper.paper_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rejections = [
+        entry for entry in read_identity_rejections(corpus_root, paper.conference, paper.year, paper.paper_id)
+        if entry.get("url") != url
+    ]
+    rejections.append({"url": url, "full_text_source": source, "reason": reason})
+    if pdf_file is not None and Path(pdf_file).exists():
+        shutil.move(str(pdf_file), str(path.with_suffix(".pdf")))  # kept for review
+    write_json_atomic(path, {"paper_id": paper.paper_id, "rejections": rejections})
+
+
+def identity_rejection_summary(rejections: list[dict[str, Any]]) -> Optional[str]:
+    if not rejections:
+        return None
+    return "; ".join(f"{entry.get('full_text_source')} {entry.get('url')}: {entry.get('reason')}" for entry in rejections)
+
+
+def verify_full_text_identity(
+    papers: Iterable["CorpusPaper"], *, corpus_root: Path, pdf_root: Path, dry_run: bool = False,
+) -> dict[str, Any]:
+    """Content-check the PDFs already on disk, before anything is extracted.
+
+    Two rules apply to each stored copy. The URL it came from must prove it is this paper
+    (``candidate_url_problem``: another DOI in the URL is conclusive, whatever the host), and
+    page 1 must carry the title. A copy that fails the URL rule, or the title rule while
+    recorded as arXiv / open-repository (provenance sidecar or the record), moves out of the
+    PDF tree exactly like a rejected download. A publisher copy -- or one whose origin was
+    never recorded -- that only misses the title is never moved: genuine publisher PDFs miss
+    that check about 2% of the time (8 of 453 on 2026-11-11: a typo in the printed title, a
+    title revised after the listing, math in the title, no text layer; the rule was loosened
+    on 2026-11-12), so its result is reported and kept as ``full_text_check``. The verdict is
+    cached in the sidecar, so a PDF is read once per rule version; the URL rule is re-applied
+    on every pass because it reads no PDF. ``dry_run`` reports ``rejections`` without moving
+    or writing anything.
+    """
+    stats: Counter = Counter()
+    kept_mismatches: list[dict[str, Any]] = []
+    rejections: list[dict[str, Any]] = []
+    for paper in papers:
+        pdf_path = Path(pdf_root) / paper.conference.lower() / str(paper.year) / f"{sanitize_file_component(paper.paper_id)}.pdf"
+        if not is_valid_pdf_artifact(pdf_path):
+            continue
+        provenance = read_full_text_provenance(pdf_path) or {}
+        if provenance.get("paper_id") != paper.paper_id:
+            provenance = {}
+        # Origin never recorded (downloaded before 2026-11-11): the URL it came from, or the
+        # planned URL when that was the only candidate.
+        url = (
+            provenance.get("downloaded_from_url") or paper.downloaded_from_url
+            or (paper.pdf_url if not paper.alternate_pdf_urls else "")
+        )
+        url_problem = candidate_url_problem(url, paper) if url else None
+        verdict = provenance.get("full_text_check")
+        if url_problem is None and verdict and (
+            verdict == "ok" or provenance.get("full_text_check_rule") == FULL_TEXT_CHECK_RULE
+        ):
+            stats["already_checked"] += 1
+            continue
+        recorded = provenance.get("full_text_source") or paper.full_text_source
+        problem = url_problem or full_text_content_problem(
+            pdf_path, paper, fuzzy=recorded not in (FULL_TEXT_ARXIV, FULL_TEXT_OA_REPO),
+        )
+        if problem is not None and (url_problem is not None or recorded in (FULL_TEXT_ARXIV, FULL_TEXT_OA_REPO)):
+            LOGGER.warning("Rejected stored %s copy of %s: %s", recorded, paper.paper_id, problem)
+            rejections.append({"paper_id": paper.paper_id, "url": url, "full_text_source": recorded,
+                               "problem": problem, "pdf_path": str(pdf_path)})
+            stats["rejected"] += 1
+            if not dry_run:
+                record_identity_rejection(corpus_root, paper, pdf_path, url, recorded, problem)
+                provenance_path(pdf_path).unlink(missing_ok=True)
+            continue
+        if recorded is None:
+            if url and full_text_source_of_url(url) == FULL_TEXT_PUBLISHER:
+                recorded = FULL_TEXT_PUBLISHER
+        if problem is None:
+            stats["ok"] += 1
+        else:
+            stats["kept_mismatch"] += 1
+            kept_mismatches.append({
+                "paper_id": paper.paper_id, "title": paper.title, "full_text_source": recorded,
+                "pdf_path": str(pdf_path), "problem": problem,
+            })
+        if dry_run:
+            continue
+        provenance.update(
+            paper_id=paper.paper_id, full_text_check="ok" if problem is None else f"mismatch: {problem}",
+            full_text_check_rule=FULL_TEXT_CHECK_RULE,
+        )
+        if recorded is not None:
+            provenance["full_text_source"] = recorded
+        write_json_atomic(provenance_path(pdf_path), provenance)
+    return {**{key: stats[key] for key in ("ok", "kept_mismatch", "rejected", "already_checked")},
+            "kept_mismatches": kept_mismatches, "rejections": rejections}
+
+
+def collect_slice(
+    source: OfficialProceedingsSource,
+    year: int,
+    client: OfficialProceedingsClient,
+    *,
+    resolve_open_access: bool = False,
+) -> tuple[list[CorpusPaper], dict[str, Any]]:
+    """Collect one (venue, year) for the canonical manifest.
+
+    Sources marked ``open_access_only`` (publisher PDFs closed to the proxy)
+    always run the open-access resolver, and papers it cannot resolve are left
+    out: the corpus stores only papers with a legal open full text. Every paper
+    gets its venue tier from the registry so ingest never has to guess one.
+    """
+    papers = source.collect_papers(year, client)
+    report: dict[str, Any] = {"collected": len(papers)}
+    open_access_only = bool(getattr(source, "open_access_only", False))
+    resolve = getattr(source, "resolve_open_access_pdf_urls", None)
+    if resolve is not None and (open_access_only or resolve_open_access):
+        report["open_access"] = resolve(papers, client)
+        arxiv_ids = [p.arxiv_id for p in papers if p.full_text_source == FULL_TEXT_ARXIV and p.arxiv_id]
+        if arxiv_ids:
+            report["arxiv_vetting"] = vet_arxiv_full_text(
+                papers,
+                fetch_arxiv_records(arxiv_ids, client),
+                venue_aliases=(source.conference_name, *getattr(source, "venue_aliases", ())),
+                acceptance_lead_years=int(getattr(source, "acceptance_lead_years", 1)),
+            )
+    if open_access_only:
+        report["without_open_full_text"] = sum(1 for paper in papers if not paper.pdf_url)
+        papers = [paper for paper in papers if paper.pdf_url]
+    tier = registry_venue_tier(source.conference_name)
+    for paper in papers:
+        paper.venue_tier = paper.venue_tier or tier
+        if paper.full_text_source is None and paper.pdf_url:
+            # Unchanged by the resolver: the PDF is the official listing's own.
+            paper.full_text_source = full_text_source_of_url(paper.pdf_url)
+            paper.full_text_match = "official" if paper.full_text_source == FULL_TEXT_PUBLISHER else None
+    report["kept"] = len(papers)
+    return papers, report
 
 
 class MainConferenceCorpusBuilder:
@@ -2364,7 +3674,16 @@ class MainConferenceCorpusBuilder:
         max_bytes_per_second: int | None = DEFAULT_DOWNLOAD_BYTES_PER_SECOND,
         chained_proxy_pool: ChainedProxyPool | None = None,
         proxy_attempts_per_url: int = 24,
+        host_turns: bool = False,
+        host_cooldown_seconds: float = 300.0,
     ) -> list[CorpusPaper]:
+        """Download PDFs for ``papers``.
+
+        ``host_turns`` downloads serially through a :class:`HostTurnQueue`: two
+        consecutive requests never go to the same host while another host has
+        work, and a host that refuses (202 challenge, 403, 429, 503) is cooled
+        down instead of retried; its paper retries once after the cooldown.
+        """
         downloaded_papers = list(papers)
         total_count = len(downloaded_papers)
         proxy_url = require_explicit_proxy(self.proxy_url)
@@ -2376,6 +3695,9 @@ class MainConferenceCorpusBuilder:
             1,
             min(int(max_concurrent or self.download_concurrency), total_count or 1),
         )
+        if host_turns:
+            resolved_max_concurrent = 1
+        block_events: dict[str, list[tuple[str, Optional[float]]]] = {}
         min_request_interval_seconds = max(0.0, float(min_request_interval_seconds or 0.0))
         queue: asyncio.Queue[CorpusPaper] = asyncio.Queue()
         for paper in downloaded_papers:
@@ -2392,17 +3714,16 @@ class MainConferenceCorpusBuilder:
         )
         await asyncio.to_thread(require_reachable_proxy, proxy_url)
 
+        # No client-level ``proxy=``: httpx mounts ``all://`` to its own OpenSSL proxy transport and
+        # that mount wins over ``transport=`` (httpx 0.28.1 _client.py ``_transport_for_url``), which
+        # would bypass curl. The proxy belongs to the curl transport.
         client_options = {
-            "proxy": proxy_url,
+            "transport": AsyncCurlTransport(impersonate=DOWNLOAD_IMPERSONATE, proxy=proxy_url),
             "timeout": 120,
             "follow_redirects": True,
             "trust_env": False,
             "headers": {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
+                "User-Agent": DOWNLOAD_USER_AGENT,
                 "Accept": "application/pdf,*/*;q=0.8",
                 "Accept-Encoding": "identity",
             },
@@ -2427,9 +3748,12 @@ class MainConferenceCorpusBuilder:
                             total_count=total_count,
                         )
 
+            def pdf_path_for(paper: CorpusPaper) -> Path:
+                return self.pdf_root / paper.conference.lower() / str(paper.year) / f"{sanitize_file_component(paper.paper_id)}.pdf"
+
             async def download_single(paper: CorpusPaper) -> None:
                 nonlocal next_request_at
-                pdf_path = self.pdf_root / paper.conference.lower() / str(paper.year) / f"{sanitize_file_component(paper.paper_id)}.pdf"
+                pdf_path = pdf_path_for(paper)
                 pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
                 if is_valid_pdf_artifact(pdf_path):
@@ -2464,7 +3788,28 @@ class MainConferenceCorpusBuilder:
                             continue
                         unique_candidate_urls.append(normalized_candidate_url)
 
+                    known_bad = {
+                        entry.get("url")
+                        for entry in read_identity_rejections(self.corpus_root, paper.conference, paper.year, paper.paper_id)
+                    }
                     for candidate_url in unique_candidate_urls:
+                        if candidate_url in known_bad:
+                            continue  # the same bytes come back; it was already rejected
+                        # Defence in depth for manifests collected before the resolver refused
+                        # such URLs: a URL that cannot be this paper is never requested.
+                        url_problem = candidate_url_problem(candidate_url, paper)
+                        if url_problem is not None:
+                            url_source = full_text_source_of_url(candidate_url)
+                            LOGGER.warning(
+                                "Rejected %s URL %s for %s: %s", url_source, candidate_url, paper.paper_id, url_problem,
+                            )
+                            record_identity_rejection(
+                                self.corpus_root, paper, None, candidate_url, url_source, url_problem,
+                            )
+                            last_error = FullTextMismatch(f"{url_source} copy rejected: {url_problem}")
+                            continue
+                        download_url = candidate_url
+                        landing_resolved = False
                         attempts = (
                             1 if chained_proxy_pool is not None
                             else self.download_retry_attempts
@@ -2478,9 +3823,17 @@ class MainConferenceCorpusBuilder:
                                         if now < next_request_at:
                                             await asyncio.sleep(next_request_at - now)
                                         next_request_at = time.monotonic() + min_request_interval_seconds
+                                if not landing_resolved:
+                                    download_url = await resolve_repository_file_url(client, candidate_url, paper.title)
+                                    landing_resolved = True
+                                    if download_url != candidate_url:
+                                        url_problem = candidate_url_problem(download_url, paper)
+                                        if url_problem is not None:
+                                            raise FullTextMismatch(f"resolved file rejected: {url_problem}")
+                                served_content_type = ""
                                 if chained_proxy_pool is not None:
                                     await chained_proxy_pool.download_to_path(
-                                        candidate_url,
+                                        download_url,
                                         temporary_pdf_path,
                                         max_attempts=proxy_attempts_per_url,
                                         validator=is_valid_pdf_artifact,
@@ -2488,7 +3841,16 @@ class MainConferenceCorpusBuilder:
                                         cookies=cookies,
                                     )
                                 else:
-                                    async with client.stream("GET", candidate_url) as response:
+                                    async with client.stream("GET", download_url) as response:
+                                        served_content_type = response.headers.get("content-type", "")
+                                        if host_turns and response.status_code == 202:
+                                            # An accepted-but-challenge page (Anubis, IEEE),
+                                            # not a PDF: report it as the refusal it is.
+                                            raise httpx.HTTPStatusError(
+                                                f"challenge page (HTTP 202) for {candidate_url}",
+                                                request=response.request,
+                                                response=response,
+                                            )
                                         response.raise_for_status()
                                         iterator = response.aiter_bytes(DEFAULT_STREAM_CHUNK_BYTES).__aiter__()
                                         with temporary_pdf_path.open("wb") as output_file:
@@ -2502,18 +3864,67 @@ class MainConferenceCorpusBuilder:
                                                 if not chunk:
                                                     continue
                                                 output_file.write(chunk)
+                                    if (
+                                        host_turns
+                                        and not is_valid_pdf_artifact(temporary_pdf_path)
+                                        and is_challenge_page(temporary_pdf_path.read_bytes()[:65536])
+                                    ):
+                                        raise ChallengePageError(
+                                            f"anti-bot challenge page instead of a PDF from {candidate_url}",
+                                            response.status_code,
+                                        )
                                 if not is_valid_pdf_artifact(temporary_pdf_path):
+                                    why = describe_non_pdf(temporary_pdf_path, served_content_type)
+                                    if why is not None:
+                                        raise NotAPdfError(f"{why} from {download_url}")
                                     raise ValueError(f"Downloaded PDF validation failed for {paper.paper_id}")
+                                candidate_source = full_text_source_of_url(download_url)
+                                if paper.full_text_source is not None:
+                                    problem = full_text_content_problem(
+                                        temporary_pdf_path, paper, fuzzy=candidate_source == FULL_TEXT_PUBLISHER,
+                                    )
+                                    if problem is not None and candidate_source != FULL_TEXT_PUBLISHER:
+                                        LOGGER.warning(
+                                            "Rejected %s copy of %s from %s: %s",
+                                            candidate_source, paper.paper_id, candidate_url, problem,
+                                        )
+                                        record_identity_rejection(
+                                            self.corpus_root, paper, temporary_pdf_path,
+                                            candidate_url, candidate_source, problem,
+                                        )
+                                        raise FullTextMismatch(f"{candidate_source} copy rejected: {problem}")
+                                    # A publisher copy is the official one: a miss is kept and reported.
+                                    paper.full_text_check = "ok" if problem is None else f"mismatch: {problem}"
                                 temporary_pdf_path.replace(pdf_path)
                                 paper.pdf_path = str(pdf_path)
-                                paper.downloaded_from_url = candidate_url
+                                paper.downloaded_from_url = download_url
+                                if paper.full_text_source is not None:
+                                    paper.full_text_source = candidate_source
+                                    if candidate_source != FULL_TEXT_ARXIV:
+                                        paper.source_version = None
+                                        paper.arxiv_id = None
+                                    if candidate_url != paper.pdf_url:
+                                        paper.full_text_match = paper.full_text_match or "s2_doi"
+                                    write_full_text_provenance(pdf_path, paper)
                                 paper.pdf_resolution_status = "downloaded"
-                                paper.pdf_resolution_note = f"Resolved PDF from {candidate_url}"
+                                paper.pdf_resolution_note = f"Resolved PDF from {download_url}"
                                 paper.download_error = None
                                 return
                             except Exception as exc:
                                 last_error = exc
                                 remove_file_if_present(temporary_pdf_path)
+                                if host_turns and blocking_status(exc) is not None:
+                                    # Never retry a refusing host hot; the turn
+                                    # queue cools it down and retries later.
+                                    block_events.setdefault(paper.paper_id, []).append((
+                                        (urlparse(candidate_url).hostname or "").lower(),
+                                        retry_after_from(exc, default=None),
+                                    ))
+                                    break
+                                if isinstance(exc, (FullTextMismatch, NotAPdfError)) or (
+                                    host_turns and isinstance(exc, ValueError)
+                                ):
+                                    break  # the same body comes back on refetch
                                 if attempt == attempts:
                                     break
                                 LOGGER.warning(
@@ -2574,7 +3985,59 @@ class MainConferenceCorpusBuilder:
                     finally:
                         queue.task_done()
 
-            await asyncio.gather(*(worker() for _ in range(min(resolved_max_concurrent, total_count or 1))))
+            if host_turns:
+                # PDFs already on disk cost no request, so they take no turn:
+                # the alternation holds for the requests actually sent.
+                pending = []
+                for paper in downloaded_papers:
+                    if is_valid_pdf_artifact(pdf_path_for(paper)):
+                        await download_single(paper)
+                    else:
+                        pending.append(paper)
+                turns = HostTurnQueue(
+                    pending,
+                    host_of=download_host,
+                    venue_of=lambda paper: paper.conference,
+                    base_cooldown_seconds=host_cooldown_seconds,
+                )
+                while True:
+                    paper, wait_seconds = turns.next()
+                    if paper is None:
+                        if wait_seconds <= 0:
+                            break
+                        LOGGER.warning(
+                            "Every host with pending PDFs is cooling down; waiting %.0fs", wait_seconds
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        continue
+                    await download_single(paper)
+                    events = block_events.pop(paper.paper_id, [])
+                    for host, retry_after in events:
+                        turns.block(host, retry_after)
+                    if paper.pdf_path and paper.download_error is None:
+                        turns.ok((urlparse(paper.downloaded_from_url or "").hostname or "").lower())
+                    elif events and turns.requeue(paper):
+                        LOGGER.warning(
+                            "Host refused %s (%s); retrying after its cooldown",
+                            paper.paper_id,
+                            ", ".join(host for host, _ in events),
+                        )
+                for paper in turns.abandoned:
+                    paper.pdf_resolution_status = "download_deferred_blocked"
+                    if paper.download_error is None:
+                        # Never requested: its host was abandoned first. The line is the paper's outcome
+                        # for whoever reads the log (the cfscan runner's attempt records), like any failure.
+                        paper.download_error = (f"deferred: host {download_host(paper)} kept refusing "
+                                                "requests, abandoned for this run before this paper was asked for")
+                        LOGGER.warning("Failed to download %s: %s", paper.paper_id, paper.download_error)
+                if turns.abandoned_hosts:
+                    LOGGER.error(
+                        "Abandoned hosts after repeated refusals: %s (%d papers deferred)",
+                        sorted(turns.abandoned_hosts),
+                        len(turns.abandoned),
+                    )
+            else:
+                await asyncio.gather(*(worker() for _ in range(min(resolved_max_concurrent, total_count or 1))))
 
         self.save_manifest(downloaded_papers)
         return downloaded_papers

@@ -6,12 +6,8 @@ import json
 import sqlite3
 
 from core.indexing.chunker import Chunk
-from scripts.reconcile_paper_chunk_schema import (
-    ExistingChunkRecord,
-    build_document_reconciliation,
-    reconcile_slice,
-    validate_stale_point_scope,
-)
+from core.indexing.paper_chunk_reconcile import ExistingChunkRecord, build_document_reconciliation
+from scripts.reconcile_paper_chunk_schema import reconcile_slice, validate_stale_point_scope
 
 
 def _chunk(content: str, level: int, *, section: str, start: int = 0) -> Chunk:

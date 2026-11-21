@@ -208,7 +208,7 @@ def test_reindex_fts_backfills_existing_entries():
     from app.services.journal import fts
     with repo.session() as session:
         fts.ensure_fts(session)
-        fts.delete_entry(session, entry.entry_id)
+        fts.delete_entry(session, entry.id)
     assert repo.keyword_search(query="reindex")[1] == 0
 
     assert repo.reindex_fts() == 1

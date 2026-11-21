@@ -1,0 +1,182 @@
+{
+ "paper": "jmlr-2022-21-1146",
+ "page": 37,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0020000000000000018,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     190,
+     78,
+     1026,
+     102
+    ],
+    "block_content": "STOCHASTIC DCA WITH VARIANCE REDUCTION AND APPLICATIONS IN MACHINE LEARNING"
+   },
+   {
+    "block_id": 1,
+    "block_label": "chart",
+    "block_bbox": [
+     229,
+     194,
+     460,
+     388
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 2,
+    "block_label": "figure_title",
+    "block_bbox": [
+     304,
+     396,
+     397,
+     420
+    ],
+    "block_content": "(a) cadata"
+   },
+   {
+    "block_id": 3,
+    "block_label": "chart",
+    "block_bbox": [
+     496,
+     196,
+     729,
+     387
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 4,
+    "block_label": "figure_title",
+    "block_bbox": [
+     540,
+     397,
+     697,
+     420
+    ],
+    "block_content": "(b) sgemm_product"
+   },
+   {
+    "block_id": 5,
+    "block_label": "chart",
+    "block_bbox": [
+     759,
+     200,
+     997,
+     388
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 6,
+    "block_label": "figure_title",
+    "block_bbox": [
+     788,
+     397,
+     984,
+     420
+    ],
+    "block_content": "(c) YearPredictionMSD"
+   },
+   {
+    "block_id": 7,
+    "block_label": "figure_title",
+    "block_bbox": [
+     189,
+     448,
+     1034,
+     475
+    ],
+    "block_content": "Figure 6: The performance of seven algorithms on the sparse linear regression problem"
+   },
+   {
+    "block_id": 8,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     515,
+     1048,
+     599
+    ],
+    "block_content": "Comparative algorithms. We compare our proposed algorithms with the standard DCA, the SDCA, the stochastic stagewise DC (SSDC) proposed in (Xu et al., 2019b), and the mini-batch stochastic proximal gradient (MB-SPG) (Xu et al., 2019a)."
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     620,
+     1049,
+     1203
+    ],
+    "block_content": "Experiment setups and results. The budget of SFO calls is set to be 30N. The regularization parameter  $ \\lambda $ and the parameter  $ \\alpha $ of the Capped- $ \\ell_1 $ are both set to be 1 throughout this experiment. To guarantee the convexity of DC components, we choose  $ \\gamma = \\max_{i=1,N} \\| x_i \\|^2 $. On the other hand, the minibatch size  $ b $ is chosen as  $ \\lfloor N^{\\frac{2}{3}} \\rfloor $,  $ \\lfloor N^{\\frac{2}{3}} \\rfloor $,  $ \\lceil 2\\sqrt{2} \\sqrt{N \\sqrt{N + 1}} \\rceil $,  $ \\lfloor 10\\% N \\rfloor $ for DCA-SVRG-v1, DCA-SVRG-v2, DCA-SAGA, and SDCA, respectively. For two versions of DCA-SVRG, we set  $ M = \\lfloor \\frac{1}{8\\sqrt{e - 1}} \\sqrt{b} \\rfloor $. About the SSDC, the nonconvex regularizer Capped- $ \\ell_1 $ is replaced by the Moreau envelope  $ r_\\mu $ (Xu et al., 2019b, Sect. 4). Moreover, the proximal operator of the Capped- $ \\ell_1 $ can be efficiently computed (see, e.g., (Gong et al., 2013)), which allows the SSDC to work. The parameter  $ \\mu $ controlling the Moreau envelope is required to match the (square) order of the final error  $ \\epsilon $ (Xu et al., 2019b, Theorem 10c), so it is set to be a relatively small number,  $ \\mu = 10^{-6} $. Note that, since the convex subproblem has a closed-form solution and the first DC component is not given as a large sum, no stochastic convex solver is required for the SSDC in this case. On the other hand, as remarked in (Xu et al., 2019a), the use of the Moreau envelope could be a bad idea as it introduces the approximation error while slowing down the convergence. Therefore, we further implement the mini-batch stochastic proximal gradient (MB-SPG) (Xu et al., 2019a) that uses directly the proximal operator of the Capped- $ \\ell_1 $. The minibatch size of MB-SPG is of order  $ \\mathcal{O}(1/\\epsilon^2) $ where  $ \\epsilon $ is the expected final error, so it is proper to set the minibatch size at  $ \\lfloor 10\\% N \\rfloor $. The constant  $ c $ (see (Xu et al., 2019a)) is in  $ (0, 0.5) $, so we set it at 0.25 which is a neutral number between the two extremes; Meanwhile, as discussed earlier, the Lipschitz smoothness parameter can be chosen as  $ \\max_{i=1,N} \\| x_i \\|^2 $."
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1202,
+     1048,
+     1283
+    ],
+    "block_content": "We report the mean curve and the mean absolute deviation (over 10 runs) of the objective value of five comparative algorithms in Figure 6, where the mean absolute deviation is scaled up by a factor of 20 for visibility."
+   },
+   {
+    "block_id": 11,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     1304,
+     1049,
+     1414
+    ],
+    "block_content": "Comments. It is observed that, once again, DCA-SAGA is the best algorithm over all tested cases where it decreases the objective value in a fast rate to obtain good solutions. Meanwhile, the performances of DCA-SVRG-v1 and DCA-SVRG-v2 are almost identical and are the second best on sgemm_product and YearPredictionMSD data sets. On the other hand, the performance of DCA-SVRG-v2 is higher than that of DCA-SVRG-v1. This indicates that the performance of DCA-SVRG-v2 is higher than that of DCA-SVRG-v1."
+   },
+   {
+    "block_id": 12,
+    "block_label": "number",
+    "block_bbox": [
+     599,
+     1450,
+     624,
+     1469
+    ],
+    "block_content": "37"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "fabrication: Markdown text 'ishigherthanthatofdcasvrgvthisindicatesthattheperformanceofd' is 42% on the page (< 50%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 17,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 0.425,
+   "omission_min_coverage": 0.956,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.058,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

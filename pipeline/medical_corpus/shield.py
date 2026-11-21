@@ -13,6 +13,11 @@ from enum import Enum
 from typing import Mapping, Optional
 
 from pipeline.crawler.captcha_detector import CaptchaDetector, CaptchaType
+from pipeline.http_retry import exponential_backoff_seconds, retry_after_seconds
+
+# A server may name an hour; a download thread waits at most this long on its say-so
+# (the same ceiling the arXiv OAI walk applies to its 503 Retry-After).
+MAX_RETRY_AFTER_SECONDS = 600.0
 
 
 class ShieldKind(str, Enum):
@@ -35,6 +40,7 @@ class ShieldDecision:
     message: str
     captcha_type: Optional[str] = None
     confidence: float = 0.0
+    retry_after_s: Optional[float] = None  # the server's own Retry-After, when it sent a usable one
 
     @property
     def blocked(self) -> bool:
@@ -91,10 +97,18 @@ def classify_http_shield(
     if code == 429:
         retry_after = headers.get("retry-after")
         msg = "HTTP 429 rate limited" + (f" retry-after={retry_after}" if retry_after else "")
-        return ShieldDecision(ShieldKind.RATE_LIMIT, True, msg)
+        return ShieldDecision(
+            ShieldKind.RATE_LIMIT, True, msg,
+            retry_after_s=retry_after_seconds(retry_after, default=None),
+        )
 
     if code in {408, 500, 502, 503, 504}:
-        return ShieldDecision(ShieldKind.TRANSIENT, True, f"HTTP {code} transient")
+        return ShieldDecision(
+            ShieldKind.TRANSIENT, True, f"HTTP {code} transient",
+            retry_after_s=(
+                retry_after_seconds(headers.get("retry-after"), default=None) if code == 503 else None
+            ),
+        )
 
     if code == 404:
         return ShieldDecision(ShieldKind.NOT_FOUND, False, "HTTP 404 not found")
@@ -166,10 +180,15 @@ def classify_http_shield(
     return ShieldDecision(ShieldKind.NONE, False, "ok")
 
 
-def retry_delay_seconds(decision: ShieldDecision, attempt: int, *, base: float = 1.5) -> float:
-    """Bounded exponential delay for retryable shield decisions."""
+def retry_delay_seconds(decision: ShieldDecision, attempt: int) -> float:
+    """Bounded delay for retryable shield decisions; never shorter than the
+    server's own Retry-After (capped at ``MAX_RETRY_AFTER_SECONDS``)."""
     if not decision.retryable:
         return 0.0
     if decision.kind == ShieldKind.RATE_LIMIT:
-        return float(min(120.0, 30.0 * attempt))
-    return float(min(60.0, base * (2 ** max(0, attempt - 1))))
+        delay = float(min(120.0, 30.0 * attempt))
+    else:
+        delay = exponential_backoff_seconds(attempt)
+    if decision.retry_after_s is not None:
+        delay = max(delay, min(decision.retry_after_s, MAX_RETRY_AFTER_SECONDS))
+    return delay

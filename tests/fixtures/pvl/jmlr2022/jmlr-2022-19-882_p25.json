@@ -1,0 +1,315 @@
+{
+ "paper": "jmlr-2022-19-882",
+ "page": 25,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0010000000000000009,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     222,
+     78,
+     992,
+     102
+    ],
+    "block_content": "Bayesian Multinomial Logistic Normal Models through Marginally LTPs"
+   },
+   {
+    "block_id": 1,
+    "block_label": "display_formula",
+    "block_bbox": [
+     523,
+     182,
+     638,
+     212
+    ],
+    "block_content": " $$ \\pi=\\phi^{-1}(\\eta) $$ "
+   },
+   {
+    "block_id": 2,
+    "block_label": "display_formula",
+    "block_bbox": [
+     523,
+     217,
+     702,
+     246
+    ],
+    "block_content": " $$ \\eta\\sim T(v,B,\\Xi,A). $$ "
+   },
+   {
+    "block_id": 3,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     174,
+     361,
+     578,
+     387
+    ],
+    "block_content": "B.2 Efficient Form for Uncollapsing"
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     400,
+     1048,
+     562
+    ],
+    "block_content": "Here we provide an efficient means of sampling from the conditional density  $ p(\\Theta, \\Sigma \\mid \\eta, Y) $ for the GMDLM. First we recognize that  $ \\Theta $ is conditionally independent of  $ Y $ given  $ \\eta $. Therefore, our task simplifies to sampling from  $ p(\\Theta, \\Sigma \\mid \\eta) $. The problem is identical to the standard filtering and simulation smoothing problem solved by West and Harrison (1997, p. 603-604). Again, the problem is defined by the following model (which we will refer to as the MDM model)"
+   },
+   {
+    "block_id": 5,
+    "block_label": "display_formula",
+    "block_bbox": [
+     423,
+     581,
+     762,
+     613
+    ],
+    "block_content": " $$ \\eta_{t}^{T}=F_{t}^{T}\\Theta_{t}+\\nu_{t}^{T},\\quad\\nu_{t}\\sim N(0,\\gamma_{t}\\Sigma) $$ "
+   },
+   {
+    "block_id": 6,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1004,
+     585,
+     1044,
+     611
+    ],
+    "block_content": "(38)"
+   },
+   {
+    "block_id": 7,
+    "block_label": "display_formula",
+    "block_bbox": [
+     424,
+     617,
+     800,
+     645
+    ],
+    "block_content": " $$ \\Theta_{t}=G_{t}\\Theta_{t-1}+\\Omega_{t},\\quad\\Omega_{t}\\sim N(0,W_{t},\\Sigma) $$ "
+   },
+   {
+    "block_id": 8,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1005,
+     618,
+     1043,
+     643
+    ],
+    "block_content": "(39)"
+   },
+   {
+    "block_id": 9,
+    "block_label": "display_formula",
+    "block_bbox": [
+     423,
+     651,
+     616,
+     678
+    ],
+    "block_content": " $$ \\Theta_{0}\\sim N(M_{0},C_{0},\\Sigma) $$ "
+   },
+   {
+    "block_id": 10,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1004,
+     652,
+     1043,
+     676
+    ],
+    "block_content": "(40)"
+   },
+   {
+    "block_id": 11,
+    "block_label": "display_formula",
+    "block_bbox": [
+     430,
+     683,
+     581,
+     711
+    ],
+    "block_content": " $$ \\Sigma\\sim I W(\\Xi,\\upsilon). $$ "
+   },
+   {
+    "block_id": 12,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1004,
+     684,
+     1043,
+     710
+    ],
+    "block_content": "(41)"
+   },
+   {
+    "block_id": 13,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     733,
+     1047,
+     898
+    ],
+    "block_content": "Following West and Harrison (1997), below we restate the filtering and retrospective recursions needed to sample from $p(\\Theta, \\Sigma \\mid \\eta)$. Note that all densities in this subsection are conditional on the parameters $F_t$, $G_t$, $W_t$, $\\Sigma$, $M_0$ and $C_0$ but that this dependence has been suppressed for notational simplicity. Let us introduce $v_t$ and $\\Xi_t$ as filtering parameters at step $t$. Further, we define $v_0 = v$ and $\\Xi_0 = \\Xi$. As a final piece of notation we introduce $H_t^T$ as a shorthand for the set $\\{\\eta_t^T, \\ldots, \\eta_1^T\\}$"
+   },
+   {
+    "block_id": 14,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     176,
+     922,
+     697,
+     947
+    ],
+    "block_content": "B.2.1 Filtering Recursions for MDLM Model"
+   },
+   {
+    "block_id": 15,
+    "block_label": "text",
+    "block_bbox": [
+     177,
+     962,
+     390,
+     987
+    ],
+    "block_content": "(1) Posterior at t-1:"
+   },
+   {
+    "block_id": 16,
+    "block_label": "display_formula",
+    "block_bbox": [
+     424,
+     1007,
+     795,
+     1075
+    ],
+    "block_content": " $$ \\begin{align*}p(\\Sigma\\mid\\boldsymbol{H}_{t-1}^{T})&\\sim IW(\\Xi_{t-1},\\upsilon_{t-1})\\\\p(\\Theta_{t-1}\\mid\\Sigma,\\boldsymbol{H}_{t-1}^{T})&\\sim N(M_{t-1},C_{t-1},\\Sigma)\\end{align*} $$ "
+   },
+   {
+    "block_id": 17,
+    "block_label": "text",
+    "block_bbox": [
+     177,
+     1095,
+     315,
+     1121
+    ],
+    "block_content": "(2) Prior at t:"
+   },
+   {
+    "block_id": 18,
+    "block_label": "display_formula",
+    "block_bbox": [
+     565,
+     1144,
+     698,
+     1171
+    ],
+    "block_content": " $$ A_{t}=G_{t}M_{t-1} $$ "
+   },
+   {
+    "block_id": 19,
+    "block_label": "display_formula",
+    "block_bbox": [
+     563,
+     1177,
+     778,
+     1208
+    ],
+    "block_content": " $$ R_{t}=G_{t}C_{t-1}G_{t}^{T}+W_{t} $$ "
+   },
+   {
+    "block_id": 20,
+    "block_label": "display_formula",
+    "block_bbox": [
+     476,
+     1213,
+     771,
+     1245
+    ],
+    "block_content": " $$ p(\\Sigma\\mid H_{t-1}^{T})\\sim I W(\\Xi_{t-1},v_{t-1}) $$ "
+   },
+   {
+    "block_id": 21,
+    "block_label": "display_formula",
+    "block_bbox": [
+     443,
+     1250,
+     745,
+     1280
+    ],
+    "block_content": " $$ p(\\Theta_{t}\\mid\\Sigma,H_{t-1}^{T})\\sim N(A_{t},R_{t},\\Sigma) $$ "
+   },
+   {
+    "block_id": 22,
+    "block_label": "text",
+    "block_bbox": [
+     177,
+     1301,
+     497,
+     1327
+    ],
+    "block_content": "(3) One-step ahead forecast at t:"
+   },
+   {
+    "block_id": 23,
+    "block_label": "display_formula",
+    "block_bbox": [
+     560,
+     1347,
+     747,
+     1416
+    ],
+    "block_content": " $$ \\begin{aligned}\\boldsymbol{f}_{t}^{T}&=\\boldsymbol{F}_{t}^{T}\\boldsymbol{A}_{t}\\\\q_{t}&=\\gamma_{t}+\\boldsymbol{F}_{t}^{T}\\boldsymbol{R}_{t}\\boldsymbol{F}_{t}\\end{aligned} $$ "
+   },
+   {
+    "block_id": 24,
+    "block_label": "number",
+    "block_bbox": [
+     599,
+     1449,
+     625,
+     1469
+    ],
+    "block_content": "25"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "formula_symbol: display formula '\\\\eta\\\\sim T(v,B,\\\\Xi,A).' lacks characters the page has there (coverage 0.58 < 0.9)",
+   "formula_symbol: display formula 'p(\\\\Sigma\\\\mid H_{t-1}^{T})\\\\sim I W(\\\\Xi_{t-1},v_{t-1' lacks characters the page has there (coverage 0.87 < 0.9)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 31,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 0.925,
+   "omission_min_coverage": 0.969,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.973,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 0.833,
+   "soft_issues": 2
+  }
+ }
+}

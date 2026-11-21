@@ -1,0 +1,248 @@
+{
+ "paper": "jmlr-2022-20-1469",
+ "page": 22,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     492,
+     80,
+     726,
+     101
+    ],
+    "block_content": "SASAKI AND TAKENOUCHI"
+   },
+   {
+    "block_id": 1,
+    "block_label": "figure_title",
+    "block_bbox": [
+     173,
+     206,
+     1045,
+     261
+    ],
+    "block_content": "Table 5: Comparison of contamination models in influence function analysis (Propositions 5 and 6).  $ \\delta_{\\bar{x}}(x) $ and  $ \\delta_{\\bar{u}}(u) $ denote the Delta functions having point masses at  $ \\bar{x} $ and  $ \\bar{u} $, respectively."
+   },
+   {
+    "block_id": 2,
+    "block_label": "table",
+    "block_bbox": [
+     196,
+     256,
+     1029,
+     380
+    ],
+    "block_content": "<table><tr><td>Contamination model 1</td><td>Contamination model 2</td></tr><tr><td>$ \\bar{p}(\\boldsymbol{x}, \\boldsymbol{u}) = (1 - \\epsilon)p(\\boldsymbol{x}, \\boldsymbol{u}) + \\epsilon\\delta_{\\bar{u}}(\\boldsymbol{u})p(\\boldsymbol{x}) $</td><td>$ \\bar{p}(\\boldsymbol{x}, \\boldsymbol{u}) = (1 - \\epsilon)p(\\boldsymbol{x}, \\boldsymbol{u}) + \\epsilon\\delta_{\\bar{x}}(\\boldsymbol{x})\\delta_{\\bar{u}}(\\boldsymbol{u}) $</td></tr><tr><td>$ \\bar{p}(\\boldsymbol{x}) = p(\\boldsymbol{x}) $</td><td>$ \\bar{p}(\\boldsymbol{x}) = (1 - \\epsilon)p(\\boldsymbol{x}) + \\epsilon\\delta_{\\bar{x}}(\\boldsymbol{x}) $</td></tr><tr><td>$ \\bar{p}(\\boldsymbol{u}) = (1 - \\epsilon)p(\\boldsymbol{u}) + \\epsilon\\delta_{\\bar{u}}(\\boldsymbol{u}) $</td><td>$ \\bar{p}(\\boldsymbol{u}) = (1 - \\epsilon)p(\\boldsymbol{u}) + \\epsilon\\delta_{\\bar{u}}(\\boldsymbol{u}) $</td></tr></table>"
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     227,
+     443,
+     1046,
+     497
+    ],
+    "block_content": "where  $ \\delta(x, u) $ denotes the joint density for outliers. Eq.(26) leads to the following contaminated marginal densities:"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     329,
+     519,
+     944,
+     547
+    ],
+    "block_content": " $$ \\bar{p}(\\boldsymbol{x}):=(1-\\epsilon)p(\\boldsymbol{x})+\\epsilon\\delta(\\boldsymbol{x})\\quad\\mathrm{a n d}\\quad\\bar{p}(\\boldsymbol{u}):=(1-\\epsilon)p(\\boldsymbol{u})+\\epsilon\\delta(\\boldsymbol{u}), $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     229,
+     570,
+     293,
+     593
+    ],
+    "block_content": "where"
+   },
+   {
+    "block_id": 6,
+    "block_label": "display_formula",
+    "block_bbox": [
+     396,
+     610,
+     879,
+     663
+    ],
+    "block_content": " $$ \\delta(x):=\\int\\delta(x,u)\\mathrm{d}u\\quad\\mathrm{a n d}\\quad\\delta(u):=\\int\\delta(x,u)\\mathrm{d}x. $$ "
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     692,
+     1050,
+     825
+    ],
+    "block_content": "The fundamental difference between these contamination scenarios is whether or not input data x is contaminated by outliers. Next, we perform two analyses for outlier-robustness: One analysis is performed under the condition that the contamination ratio  $ \\epsilon $ is small, while another one does not necessarily assume that  $ \\epsilon $ is small and thus heavy contamination of outliers is also within the scope of the analysis."
+   },
+   {
+    "block_id": 8,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     174,
+     853,
+     551,
+     876
+    ],
+    "block_content": "4.3.1 INFLUENCE FUNCTION ANALYSIS"
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     891,
+     1047,
+     944
+    ],
+    "block_content": "Here, we perform influence function analysis (Hampel et al., 2011), which is an established tool in robust statistics and assumes that the densities for outliers are given as follows:"
+   },
+   {
+    "block_id": 10,
+    "block_label": "display_formula",
+    "block_bbox": [
+     322,
+     967,
+     898,
+     995
+    ],
+    "block_content": " $$ \\delta(x,u)=\\delta_{\\bar{x}}(x)\\delta_{\\bar{u}}(u),\\quad\\delta(x)=\\delta_{\\bar{x}}(x)\\quad\\mathrm{a n d}\\quad\\delta(u)=\\delta_{\\bar{u}}(u), $$ "
+   },
+   {
+    "block_id": 11,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1006,
+     969,
+     1045,
+     992
+    ],
+    "block_content": "(27)"
+   },
+   {
+    "block_id": 12,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     1017,
+     1044,
+     1096
+    ],
+    "block_content": "where  $ \\delta_{\\bar{x}}(x) $ and  $ \\delta_{\\bar{u}}(u) $ are the Dirac delta functions having point masses at  $ \\bar{x} $ and  $ \\bar{u} $, respectively. Eq.(27) implies that  $ \\delta(u|x) = \\delta_{\\bar{u}}(u) $ and  $ \\int \\delta(u|x)p(x)dx = \\delta_{\\bar{u}}(u) $ in the contamination model 1. Table 5 is a comparison of contamination models 1 and 2 in this analysis."
+   },
+   {
+    "block_id": 13,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     1099,
+     1047,
+     1152
+    ],
+    "block_content": "In this analysis, we suppose that a model  $ r_{\\theta}(x, u) $ is parametrized by  $ \\theta $ and has the following properties:"
+   },
+   {
+    "block_id": 14,
+    "block_label": "text",
+    "block_bbox": [
+     207,
+     1171,
+     959,
+     1198
+    ],
+    "block_content": " $ r_{\\theta}(x, u) $ and its gradient  $ g_{\\theta}(x, u) $ are continuous where  $ g_{\\theta}(x, u): = \\nabla_{\\theta} r_{\\theta}(x, u) $."
+   },
+   {
+    "block_id": 15,
+    "block_label": "display_formula",
+    "block_bbox": [
+     210,
+     1216,
+     867,
+     1243
+    ],
+    "block_content": " $$ \\bullet \\quad |r_{\\theta}(x,u)|\\to\\infty\\mathrm{a n d}\\|g_{\\theta}(x,u)\\|\\to\\infty\\mathrm{a s}\\|x\\|\\to\\infty\\mathrm{a n d/o r}\\|u\\|\\to\\infty. $$ "
+   },
+   {
+    "block_id": 16,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     1263,
+     1047,
+     1343
+    ],
+    "block_content": "These properties are simply used to discuss the robustness of the estimators based on the influence function, and satisfied by standard models such neural networks with an unbounded activation function (e.g., the softplus function). Based on  $ r_{\\theta}(\\boldsymbol{x}, \\boldsymbol{u}) $, we define two estimators as"
+   },
+   {
+    "block_id": 17,
+    "block_label": "display_formula",
+    "block_bbox": [
+     385,
+     1364,
+     834,
+     1407
+    ],
+    "block_content": " $$ \\theta^{\\star}:=\\underset{\\theta}{\\operatorname{a r g m i n}}J(r_{\\theta})\\quad\\mathrm{a n d}\\quad\\theta_{\\epsilon}:=\\underset{\\theta}{\\operatorname{a r g m i n}}\\bar{J}(r_{\\theta}), $$ "
+   },
+   {
+    "block_id": 18,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1450,
+     625,
+     1469
+    ],
+    "block_content": "22"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "table: only 60% of the words in the table region are in its cells (< 90%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 28,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.95,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.015,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.4,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

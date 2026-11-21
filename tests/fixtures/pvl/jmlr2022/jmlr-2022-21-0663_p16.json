@@ -1,0 +1,138 @@
+{
+ "paper": "jmlr-2022-21-0663",
+ "page": 16,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     456,
+     78,
+     761,
+     102
+    ],
+    "block_content": "ALLOUCHE, GIRARD AND GOBET"
+   },
+   {
+    "block_id": 1,
+    "block_label": "figure_title",
+    "block_bbox": [
+     510,
+     181,
+     631,
+     206
+    ],
+    "block_content": "MSLE(0.99)"
+   },
+   {
+    "block_id": 2,
+    "block_label": "table",
+    "block_bbox": [
+     239,
+     203,
+     983,
+     517
+    ],
+    "block_content": "<table><tr><td>$ \\gamma $</td><td>$ \\mu $ \\n $ (\\rho_1, \\rho_2) $</td><td colspan=\"2\">1.1</td><td colspan=\"2\">2</td><td colspan=\"2\">10</td></tr><tr><td rowspan=\"3\">0.1</td><td>$ (-1, -2) $</td><td>0.895</td><td>0.116</td><td>0.545</td><td>0.097</td><td>0.232</td><td>0.037</td></tr><tr><td>$ (-1, -3) $</td><td>0.923</td><td>0.103</td><td>0.732</td><td>0.082</td><td>0.553</td><td>0.143</td></tr><tr><td>$ (-2, -3) $</td><td>0.677</td><td>0.190</td><td>0.836</td><td>0.083</td><td>0.700</td><td>0.174</td></tr><tr><td rowspan=\"3\">0.5</td><td>$ (-1, -2) $</td><td>3.576</td><td>1.058</td><td>10.673</td><td>1.006</td><td>2.567</td><td>1.321</td></tr><tr><td>$ (-1, -3) $</td><td>1.943</td><td>0.958</td><td>6.913</td><td>1.569</td><td>3.812</td><td>3.252</td></tr><tr><td>$ (-2, -3) $</td><td>10.809</td><td>1.707</td><td>10.157</td><td>1.201</td><td>1.306</td><td>1.195</td></tr><tr><td rowspan=\"3\">0.9</td><td>$ (-1, -2) $</td><td>47.742</td><td>4.966</td><td>-</td><td>6.473</td><td>-</td><td>8.651</td></tr><tr><td>$ (-1, -3) $</td><td>44.949</td><td>3.129</td><td>-</td><td>4.573</td><td>45.900</td><td>3.205</td></tr><tr><td>$ (-2, -3) $</td><td>-</td><td>3.860</td><td>36.304</td><td>6.390</td><td>44.814</td><td>5.922</td></tr></table>"
+   },
+   {
+    "block_id": 3,
+    "block_label": "figure_title",
+    "block_bbox": [
+     543,
+     543,
+     601,
+     567
+    ],
+    "block_content": "AKE"
+   },
+   {
+    "block_id": 4,
+    "block_label": "table",
+    "block_bbox": [
+     239,
+     563,
+     983,
+     878
+    ],
+    "block_content": "<table><tr><td>$ \\gamma $</td><td>$ \\mu $  $ ( \\rho_1, \\rho_2) $</td><td colspan=\"2\">1.1</td><td colspan=\"2\">2</td><td colspan=\"2\">10</td></tr><tr><td rowspan=\"3\">0.1</td><td>(-1, -2)</td><td>3.122</td><td>2.865</td><td>7.385</td><td>8.322</td><td>2.807</td><td>2.855</td></tr><tr><td>(-1, -3)</td><td>3.102</td><td>2.293</td><td>5.671</td><td>6.958</td><td>1.585</td><td>2.415</td></tr><tr><td>(-2, -3)</td><td>2.519</td><td>3.244</td><td>4.596</td><td>7.125</td><td>1.823</td><td>2.340</td></tr><tr><td rowspan=\"3\">0.5</td><td>(-1, -2)</td><td>3.052</td><td>2.234</td><td>4.857</td><td>1.772</td><td>2.265</td><td>2.015</td></tr><tr><td>(-1, -3)</td><td>6.261</td><td>2.342</td><td>4.538</td><td>1.665</td><td>2.616</td><td>1.301</td></tr><tr><td>(-2, -3)</td><td>5.772</td><td>2.134</td><td>12.277</td><td>1.408</td><td>4.245</td><td>1.531</td></tr><tr><td rowspan=\"3\">0.9</td><td>(-1, -2)</td><td>2.555</td><td>2.103</td><td>-</td><td>1.990</td><td>-</td><td>1.932</td></tr><tr><td>(-1, -3)</td><td>3.788</td><td>1.861</td><td>-</td><td>1.700</td><td>1.623</td><td>1.429</td></tr><tr><td>(-2, -3)</td><td>-</td><td>1.696</td><td>5.632</td><td>1.788</td><td>1.991</td><td>1.181</td></tr></table>"
+   },
+   {
+    "block_id": 5,
+    "block_label": "figure_title",
+    "block_bbox": [
+     505,
+     904,
+     638,
+     928
+    ],
+    "block_content": "Kendall's tau"
+   },
+   {
+    "block_id": 6,
+    "block_label": "table",
+    "block_bbox": [
+     237,
+     927,
+     983,
+     1243
+    ],
+    "block_content": "<table><tr><td>$ \\gamma $</td><td>$ \\mu (\\tau_{{C}^{\\theta}_{\\mu}}) $\\n $ (\\rho_1, \\rho_2) $</td><td colspan=\"2\">1.1 (0.1)</td><td colspan=\"2\">2 (0.5)</td><td colspan=\"2\">10 (0.9)</td></tr><tr><td rowspan=\"3\">0.1</td><td>(-1, -2)</td><td>0.092</td><td>0.091</td><td>0.514</td><td>0.531</td><td>0.905</td><td>0.895</td></tr><tr><td>(-1, -3)</td><td>0.093</td><td>0.083</td><td>0.477</td><td>0.500</td><td>0.900</td><td>0.905</td></tr><tr><td>(-2, -3)</td><td>0.086</td><td>0.083</td><td>0.511</td><td>0.480</td><td>0.899</td><td>0.903</td></tr><tr><td rowspan=\"3\">0.5</td><td>(-1, -2)</td><td>0.090</td><td>0.088</td><td>0.493</td><td>0.500</td><td>0.903</td><td>0.900</td></tr><tr><td>(-1, -3)</td><td>0.106</td><td>0.096</td><td>0.506</td><td>0.502</td><td>0.901</td><td>0.900</td></tr><tr><td>(-2, -3)</td><td>0.093</td><td>0.087</td><td>0.473</td><td>0.502</td><td>0.885</td><td>0.898</td></tr><tr><td rowspan=\"3\">0.9</td><td>(-1, -2)</td><td>0.088</td><td>0.090</td><td>-</td><td>0.503</td><td>-</td><td>0.901</td></tr><tr><td>(-1, -3)</td><td>0.091</td><td>0.088</td><td>-</td><td>0.499</td><td>0.899</td><td>0.897</td></tr><tr><td>(-2, -3)</td><td>-</td><td>0.089</td><td>0.487</td><td>0.498</td><td>0.900</td><td>0.900</td></tr></table>"
+   },
+   {
+    "block_id": 7,
+    "block_label": "figure_title",
+    "block_bbox": [
+     172,
+     1261,
+     1047,
+     1424
+    ],
+    "block_content": "Table 1: Comparison between the best GAN (left column) and EV-GAN (right column) results on simulated data for the 27 combinations of parameters using two model selection criteria. Top: MSLE criterion at level  $ \\xi = 0.99 $, MSLE( $ \\xi $)  $ \\geq 0.48 $ are not reported, all results are scaled by  $ 10^2 $. Center: AKE criterion, the results are scaled by  $ 10^3 $. Bottom: Kendall's tau (using the same models as the ones based on the AKE criterion). Best results are emphasized in bold."
+   },
+   {
+    "block_id": 8,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1450,
+     625,
+     1470
+    ],
+    "block_content": "16"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "table: only 75% of the words in the table region are in its cells (< 90%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 17,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.956,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.005,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.25,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

@@ -1,0 +1,292 @@
+{
+ "paper": "jmlr-2022-20-064",
+ "page": 37,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.010000000000000009,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     323,
+     78,
+     893,
+     102
+    ],
+    "block_content": "NEW INSIGHTS FOR THE MULTIVARIATE SQUARE-ROOT LASSO"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     185,
+     1052,
+     292
+    ],
+    "block_content": "Proof of Theorem 3. To prove Theorem 3, we follow the proof technique detailed in Negahban et al. (2012). For $\\delta > 0$, define the set $\\mathsf{B}_{\\delta,c} = \\{\\boldsymbol{\\Delta} \\in \\mathbb{R}^{p \\times q} : \\|\\boldsymbol{\\Delta}\\|_F = \\delta, g(\\boldsymbol{\\Delta}_{\\mathcal{N}^\\perp}) \\leq \\check{c} g(\\boldsymbol{\\Delta}_\\mathcal{N})\\}$ and let $\\mathcal{L}(\\boldsymbol{\\beta}) = \\|\\boldsymbol{Y} - \\boldsymbol{X} \\boldsymbol{\\beta}\\|_*/ \\sqrt{n} + \\lambda g(\\boldsymbol{\\beta})$. Because $\\mathcal{L}$ is convex and $\\hat{\\boldsymbol{\\beta}}_g$ is its minimizer, on $\\mathcal{A}_c$,"
+   },
+   {
+    "block_id": 2,
+    "block_label": "display_formula",
+    "block_bbox": [
+     348,
+     293,
+     875,
+     336
+    ],
+    "block_content": " $$ \\operatorname*{i n f}_{\\mathbf{\\Delta}\\in\\mathsf{B}_{\\delta,c}}\\left\\{\\mathcal{L}(\\mathbf{\\beta}_{*}+\\mathbf{\\Delta})-\\mathcal{L}(\\mathbf{\\beta}_{*})\\right\\}>0\\implies\\|\\hat{\\mathbf{\\beta}}_{g}-\\mathbf{\\beta}_{*}\\|_{F}\\leq\\delta. $$ "
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     347,
+     1047,
+     428
+    ],
+    "block_content": "For a proof of this fact, see the proof of Lemma 4 of the Supplementary Material to Negahban et al. (2012). To simplify notation, let  $ D(\\boldsymbol{\\Delta}) = \\mathcal{L}(\\boldsymbol{\\beta}_*) + \\boldsymbol{\\Delta}) - \\mathcal{L}(\\boldsymbol{\\beta}_*) $ so that we need only show that  $ \\inf_{\\Delta \\in \\mathbb{B}_{\\delta,c}} D(\\boldsymbol{\\Delta}) > 0 $ for  $ \\delta = \\lambda \\check{c} \\Psi_g(\\mathcal{N}) / \\phi $. Notice first that"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     242,
+     448,
+     980,
+     503
+    ],
+    "block_content": " $$ D(\\boldsymbol{\\Delta})=\\frac{1}{\\sqrt{n}}\\|\\boldsymbol{Y}-\\boldsymbol{X}(\\boldsymbol{\\beta}_{*}+\\boldsymbol{\\Delta})\\|_{*}-\\frac{1}{\\sqrt{n}}\\|\\boldsymbol{Y}-\\boldsymbol{X}\\boldsymbol{\\beta}_{*}\\|_{*}+\\lambda g(\\boldsymbol{\\beta}_{*}+\\boldsymbol{\\Delta})-\\lambda g(\\boldsymbol{\\beta}_{*}) $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "display_formula",
+    "block_bbox": [
+     295,
+     510,
+     877,
+     560
+    ],
+    "block_content": " $$ \\geq\\phi\\|\\boldsymbol{\\Delta}\\|_{F}^{2}-\\frac{1}{\\sqrt{n}}|\\mathrm{tr}(\\boldsymbol{\\Delta}^{\\top}\\boldsymbol{X}^{\\top}\\boldsymbol{U}_{\\epsilon}\\boldsymbol{V}_{\\epsilon}^{\\top})|+\\lambda g(\\boldsymbol{\\beta}_{*}+\\boldsymbol{\\Delta})-\\lambda g(\\boldsymbol{\\beta}_{*}) $$ "
+   },
+   {
+    "block_id": 6,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1004,
+     518,
+     1044,
+     544
+    ],
+    "block_content": "(24)"
+   },
+   {
+    "block_id": 7,
+    "block_label": "display_formula",
+    "block_bbox": [
+     302,
+     566,
+     871,
+     616
+    ],
+    "block_content": " $$ \\geq\\phi\\|\\mathbf{\\Delta}\\|_{F}^{2}-\\frac{1}{\\sqrt{n}}|\\mathrm{tr}(\\mathbf{\\Delta}^{\\top}\\mathbf{X}^{\\top}\\mathbf{U}_{\\epsilon}\\mathbf{V}_{\\epsilon}^{\\top})|+\\lambda g(\\mathbf{\\Delta}_{\\mathcal{N}^{\\perp}})-\\lambda g(\\mathbf{\\Delta}_{\\mathcal{N}}) $$ "
+   },
+   {
+    "block_id": 8,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1004,
+     576,
+     1043,
+     601
+    ],
+    "block_content": "(25)"
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     640,
+     1051,
+     694
+    ],
+    "block_content": "where (24) follows from the fact that  $ \\boldsymbol{\\Delta} \\in \\mathsf{B}_{\\delta,c} $ implies  $ \\boldsymbol{\\Delta} \\in \\mathcal{C}_{g}(\\mathcal{M}, \\mathcal{N}, c) $ and Lemma 13; and (25) follows from the triangle inequality"
+   },
+   {
+    "block_id": 10,
+    "block_label": "display_formula",
+    "block_bbox": [
+     173,
+     716,
+     1047,
+     745
+    ],
+    "block_content": " $$ g(\\boldsymbol{\\beta}_{*}+\\boldsymbol{\\Delta})-g(\\boldsymbol{\\beta}_{*})=g(\\boldsymbol{\\beta}_{*\\mathcal{M}}+\\boldsymbol{\\Delta}_{\\mathcal{N}}+\\boldsymbol{\\Delta}_{\\mathcal{N}^{\\perp}})-g(\\boldsymbol{\\beta}_{*\\mathcal{M}})\\geq g(\\boldsymbol{\\beta}_{*\\mathcal{M}}+\\boldsymbol{\\Delta}_{\\mathcal{N}^{\\perp}})-g(\\boldsymbol{\\Delta}_{\\mathcal{N}})-g(\\boldsymbol{\\beta}_{*\\mathcal{M}}), $$ "
+   },
+   {
+    "block_id": 11,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     766,
+     952,
+     792
+    ],
+    "block_content": "and decomposability of the penalty function g with respect to the pair  $ (\\mathcal{M},\\mathcal{N}^{\\perp}) $"
+   },
+   {
+    "block_id": 12,
+    "block_label": "display_formula",
+    "block_bbox": [
+     173,
+     814,
+     1060,
+     843
+    ],
+    "block_content": " $$ g(\\boldsymbol{\\beta}_{*\\mathcal{M}}+\\boldsymbol{\\Delta}_{\\mathcal{N}^{\\perp}})-g(\\boldsymbol{\\Delta}_{\\mathcal{N}})-g(\\boldsymbol{\\beta}_{*\\mathcal{M}})=g(\\boldsymbol{\\beta}_{*\\mathcal{M}})+g(\\boldsymbol{\\Delta}_{\\mathcal{N}^{\\perp}})-g(\\boldsymbol{\\Delta}_{\\mathcal{N}})-g(\\boldsymbol{\\beta}_{*\\mathcal{M}})=g(\\boldsymbol{\\Delta}_{\\mathcal{N}^{\\perp}})-g(\\boldsymbol{\\Delta}_{\\mathcal{N}}). $$ "
+   },
+   {
+    "block_id": 13,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     864,
+     860,
+     890
+    ],
+    "block_content": "Thus, applying Hölder's inequality to the second term in (25), we have"
+   },
+   {
+    "block_id": 14,
+    "block_label": "display_formula",
+    "block_bbox": [
+     242,
+     915,
+     872,
+     967
+    ],
+    "block_content": " $$ D(\\mathbf{\\Delta})\\geq\\phi\\|\\mathbf{\\Delta}\\|_{F}^{2}-\\frac{1}{\\sqrt{n}}g(\\mathbf{\\Delta})\\tilde{g}(\\mathbf{X}^{\\top}\\mathbf{U}_{\\epsilon}\\mathbf{V}_{\\epsilon}^{\\top})+\\lambda g(\\mathbf{\\Delta}_{\\mathcal{N}^{\\perp}})-\\lambda g(\\mathbf{\\Delta}_{\\mathcal{N}}). $$ "
+   },
+   {
+    "block_id": 15,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     993,
+     781,
+     1021
+    ],
+    "block_content": "It then follows that on event  $ \\mathcal{A}_c = \\{\\lambda \\geq (c/\\sqrt{n})\\tilde{g}(X^\\top U_\\epsilon V_\\epsilon^\\top)\\} $,"
+   },
+   {
+    "block_id": 16,
+    "block_label": "display_formula",
+    "block_bbox": [
+     242,
+     1046,
+     869,
+     1206
+    ],
+    "block_content": " $$ \\begin{align*}D(\\boldsymbol{\\Delta})&\\geq\\phi\\|\\boldsymbol{\\Delta}\\|_{F}^{2}-\\frac{\\lambda}{c}g(\\boldsymbol{\\Delta})+\\lambda g(\\boldsymbol{\\Delta}_{\\mathcal{N}^\\perp})-\\lambda g(\\boldsymbol{\\Delta}_{\\mathcal{N}}),\\\\&\\geq\\phi\\|\\boldsymbol{\\Delta}\\|_{F}^{2}-\\frac{\\lambda}{c}g(\\boldsymbol{\\Delta}_{\\mathcal{N}})-\\frac{\\lambda}{c}g(\\boldsymbol{\\Delta}_{\\mathcal{N}^\\perp})+\\lambda g(\\boldsymbol{\\Delta}_{\\mathcal{N}^\\perp})-\\lambda g(\\boldsymbol{\\Delta}_{\\mathcal{N}}),\\\\&=\\phi\\|\\boldsymbol{\\Delta}\\|_{F}^{2}-\\lambda\\left(\\frac{c+1}{c}\\right)g(\\boldsymbol{\\Delta}_{\\mathcal{N}})+\\lambda\\left(\\frac{c-1}{c}\\right)g(\\boldsymbol{\\Delta}_{\\mathcal{N}^\\perp}),\\end{align*} $$ "
+   },
+   {
+    "block_id": 17,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1005,
+     1112,
+     1043,
+     1137
+    ],
+    "block_content": "(26)"
+   },
+   {
+    "block_id": 18,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1225,
+     1018,
+     1251
+    ],
+    "block_content": "where (26) follows from the triangle equality  $ g(\\boldsymbol{\\Delta}) \\leq g(\\boldsymbol{\\Delta}_{\\mathcal{N}}) + g(\\boldsymbol{\\Delta}_{\\mathcal{N}^{\\perp}}) $. Then, because"
+   },
+   {
+    "block_id": 19,
+    "block_label": "display_formula",
+    "block_bbox": [
+     329,
+     1270,
+     892,
+     1323
+    ],
+    "block_content": " $$ g(\\mathbf{\\Delta}_{\\mathcal{N}})\\leq\\Psi_{g}(\\mathcal{N})\\|\\mathbf{\\Delta}\\|_{F}\\quad\\mathrm{~a n d~}\\quad\\lambda\\left(\\frac{c-1}{c}\\right)g(\\mathbf{\\Delta}_{\\mathcal{N}^{\\perp}})\\geq0, $$ "
+   },
+   {
+    "block_id": 20,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     1344,
+     317,
+     1367
+    ],
+    "block_content": "it follows that"
+   },
+   {
+    "block_id": 21,
+    "block_label": "display_formula",
+    "block_bbox": [
+     399,
+     1363,
+     822,
+     1417
+    ],
+    "block_content": " $$ D(\\mathbf{\\Delta})\\geq\\phi\\|\\mathbf{\\Delta}\\|_{F}^{2}-\\lambda\\left(\\frac{c+1}{c}\\right)\\Psi_{g}(\\mathcal{N})\\|\\mathbf{\\Delta}\\|_{F}. $$ "
+   },
+   {
+    "block_id": 22,
+    "block_label": "number",
+    "block_bbox": [
+     599,
+     1450,
+     625,
+     1469
+    ],
+    "block_content": "37"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "length: Markdown/page letters = 1.27, outside (0.85, 1.15)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 24,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 0.962,
+   "omission_min_coverage": 0.981,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.272,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

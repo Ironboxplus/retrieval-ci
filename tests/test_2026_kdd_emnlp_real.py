@@ -120,6 +120,7 @@ def test_registry_enables_both_2026_sources():
     )
 
 
+@pytest.mark.network
 def test_kdd_2026_live_official_list_is_complete(kdd_2026_papers):
     # The official page currently renders 1,415 rows, including seven exact
     # duplicate DOI rows. Canonical paper_id/DOI identity yields 1,408 papers.
@@ -153,6 +154,7 @@ def test_sigir_2026_registry_and_acm_cli_use_the_official_program_source():
     assert CONFERENCE_CONFIG["SIGIR"]["source_class"] is source_cls
 
 
+@pytest.mark.network
 def test_sigir_2026_live_final_program_is_main_conference_only(sigir_2026_papers):
     assert len(sigir_2026_papers) == 626
     assert len({paper.paper_id for paper in sigir_2026_papers}) == 626
@@ -180,6 +182,7 @@ def test_sigir_2026_live_final_program_is_main_conference_only(sigir_2026_papers
     )
 
 
+@pytest.mark.network
 def test_kdd_manifest_collection_keeps_acm_pdf_urls_by_default(
     kdd_2026_papers,
     official_client,
@@ -197,6 +200,7 @@ def test_kdd_manifest_collection_keeps_acm_pdf_urls_by_default(
     assert all(url.startswith("https://dl.acm.org/doi/pdf/") for url in before)
 
 
+@pytest.mark.needs_dev_data
 def test_kdd_download_manifest_selector_is_limited_to_2026():
     builder = corpus.MainConferenceCorpusBuilder(proxy_url=PROXY_URL)
     records = corpus.load_json_with_recovery(builder.manifest_path, default_value=[])
@@ -205,6 +209,7 @@ def test_kdd_download_manifest_selector_is_limited_to_2026():
     assert all(row.get("conference") == "KDD" and row.get("year") == 2026 for row in selected)
 
 
+@pytest.mark.network
 def test_emnlp_2026_live_announced_page_is_rejected_as_a_2025_replay(
     emnlp_2026_candidates,
 ):
@@ -223,6 +228,7 @@ def test_emnlp_2026_live_announced_page_is_rejected_as_a_2025_replay(
     assert replay["overlap_ratio"] >= 0.98
 
 
+@pytest.mark.network
 def test_emnlp_2026_openreview_main_decision_mapping_is_not_public_yet(
     emnlp_2026_candidates,
 ):
@@ -252,11 +258,13 @@ def test_emnlp_2026_openreview_main_decision_mapping_is_not_public_yet(
     assert notes == []
 
 
+@pytest.mark.needs_camoufox
 def test_selected_turnstile_fork_has_a_real_browser_backend():
     assert turnstile_available()
     assert minimal_backend_available()
 
 
+@pytest.mark.needs_camoufox
 def test_camoufox_runtime_can_access_a_closed_shadow_root():
     async def run_browser() -> str:
         from camoufox.async_api import AsyncCamoufox
@@ -299,6 +307,7 @@ def test_camoufox_runtime_can_access_a_closed_shadow_root():
     )
 
 
+@pytest.mark.network
 def test_kdd_2026_real_acm_download_uses_turnstile_solver(kdd_2026_papers, tmp_path: Path):
     pool_path = _runtime_pool_path()
     xray_path = _runtime_xray_path()
@@ -337,6 +346,7 @@ def test_kdd_2026_real_acm_download_uses_turnstile_solver(kdd_2026_papers, tmp_p
     assert result[0].download_error is None
 
 
+@pytest.mark.network
 def test_sigir_2026_real_acm_download_uses_two_hop_proxy(
     sigir_2026_papers,
     tmp_path: Path,

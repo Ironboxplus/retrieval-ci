@@ -15,6 +15,7 @@ Path model (matches the project's local-symlink → SMB layout):
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -47,14 +48,16 @@ class StageContext:
     concurrency: int = 8
     world_size: int = 8
     # Execution topology for the GPU stages (extract + embed):
-    #   "remote" — orchestrator on Arc, GPU work on a KSS-style box over
-    #              ssh + SMB-UNC polling + ship.sh (cwrsync). Original default.
-    #   "local"  — orchestrator runs ON the GPU box (self-hosted, post-4090
-    #              migration); extract/embed run via run_local against local
-    #              filesystem dirs. No ssh / SMB / ship.sh (W106).
-    # download / preindex / ingest already run local in BOTH modes — only
-    # extract + embed branch on this. Default "remote" keeps existing callers.
-    execution_mode: str = "remote"
+    #   "local"  — orchestrator runs ON the GPU box (self-hosted, .88);
+    #              extract/embed run via run_local against local filesystem
+    #              dirs. No ssh / SMB / ship.sh (W106). Default.
+    #   "remote" — retired 2026-11-02, kept for possible reuse: GPU work on a
+    #              KSS-style box over ssh + SMB polling + ship.sh. Its SMB
+    #              paths below name the old NAS tree, which was deleted after
+    #              .88 moved to local storage; repoint them before reviving.
+    #   "host"   — arXiv embed on an ssh embed host (embed_hosts.json).
+    # download / preindex / ingest run local in every mode.
+    execution_mode: str = "local"
     # Stacking factor: how many marker/embed ranks to launch per GPU that
     # passes preflight. Effective ranks = len(state.gpu_ids) * ranks_per_gpu.
     # 1 = original behavior (1 rank/GPU). 2 fits comfortably on a 24GB 4090
@@ -76,6 +79,15 @@ class StageContext:
     # Optional manifest path override (tests inject a temp manifest). When None,
     # falls back to corpus_root/manifests/paper_manifest.json.
     manifest_path_override: Optional[Path] = None
+
+    # Cancellation flag. PipelineOrchestrator replaces it with its own Event, so
+    # the one the runner sets on cancel is the one run_local() watches to kill
+    # the stage's subprocess.
+    abort: threading.Event = field(default_factory=threading.Event)
+    # Per-run parameters chosen by whoever started the task (a schedule's
+    # params, a manual run's overrides). Persisted in tasks.params_json["options"]
+    # so a restart or retry resumes with the same values.
+    options: dict = field(default_factory=dict)
 
     # ----------------------------------------------------------- computed paths
     @property
@@ -125,14 +137,6 @@ class StageContext:
         this (venue, year). Mirrors the corpus pdf layout: corpus_root/markdown/
         <conf_lower>/<year>. Used by the local extract probe/gate (W106)."""
         return self.corpus_root / "markdown" / self.conf_lower / str(self.year)
-
-    @property
-    def local_vectors_dir(self) -> Path:
-        """LOCAL embed output dir (vectors_*.parquet). Same flat, cross-venue
-        dir the ingest stage already reads (project_root/data/remote_embed/
-        vectors); exposed here so the local embed probe can glob it without
-        re-deriving the path (W106)."""
-        return self.project_root / "data" / "remote_embed" / "vectors"
 
     def md_count_local(self) -> int:
         """Count *.md in the LOCAL markdown dir. Missing dir → 0. The local

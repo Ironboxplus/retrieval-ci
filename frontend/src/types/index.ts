@@ -26,6 +26,8 @@ export interface SearchRequest {
   year?: number | number[];
   venue_tier?: string;
   title_only?: boolean;
+  // 包含已撤稿的 arXiv 论文；默认（缺省）排除。按 paper_ids 限定的请求不受影响。
+  include_withdrawn?: boolean;
   // 每篇论文卡片展示几个 chunk：true(默认)=只保留最高分；false=展开该论文全部命中片段。
   // 无论取值，结果始终按「论文最高分」分组排序（粒度=论文）。
   dedup_by_paper?: boolean;
@@ -191,6 +193,8 @@ export interface PaperBrowseParams {
   impact_level?: string;
   /** Keyword — matched against title + abstract (case-insensitive substring). */
   q?: string;
+  /** Include withdrawn arXiv papers; omitted = hidden. */
+  include_withdrawn?: boolean;
   page?: number;
   page_size?: number;
   sort_by?: string;
@@ -211,6 +215,10 @@ export interface PaperBrief {
   pdf_url?: string;
   doc_id?: number;
   indexed?: boolean;
+  /** arXiv only: withdrawn upstream (SQL is authoritative). */
+  withdrawn?: boolean;
+  /** Version the stored text belongs to, e.g. "v2"; absent for conference papers. */
+  source_version?: string | null;
 }
 
 export interface PaperBrowseResponse {
@@ -436,7 +444,9 @@ export interface WorkflowResponse {
 
 export interface WorkflowNode {
   id: number;
-  subtask_key: string;
+  subtask_key?: string | null;
+  /** The stable stage key (`download`, `extract`, ...) the workflow endpoint sends. */
+  key?: string | null;
   name: string;
   status: string;
   progress: number;
