@@ -1,0 +1,11 @@
+# Paths excluded from this repo's own code index (core/code_kb/chunker.py:
+# load_retrievalignore + path_excluded). Separate from .gitignore on purpose:
+# gitignore_allowed() resolves the ignore set with `git ls-files --cached ...`,
+# and --cached lists TRACKED files whatever .gitignore says, so a tracked
+# directory can only be kept out of the index from here.
+
+# Qdrant's local data directory (tools/qdrant/qdrant.exe writes here). 163 of its
+# files are tracked, so gitignore alone does not exclude them. Indexing segment
+# metadata produced 143 of the 176 bogus near-duplicate file pairs measured on
+# 2026-09-01 — every payload_index/config.json looks like every other one.
+storage/

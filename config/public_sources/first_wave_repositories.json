@@ -1,0 +1,270 @@
+{
+  "catalog_id": "public-code-first-wave",
+  "repositories": [
+    {
+      "source_id": "linux",
+      "domain": "systems",
+      "relative_path": "systems/linux",
+      "upstream_url": "https://github.com/torvalds/linux.git"
+    },
+    {
+      "source_id": "sqlite",
+      "domain": "systems",
+      "relative_path": "systems/sqlite",
+      "upstream_url": "https://github.com/sqlite/sqlite.git"
+    },
+    {
+      "source_id": "cpython",
+      "domain": "systems",
+      "relative_path": "systems/cpython",
+      "upstream_url": "https://github.com/python/cpython.git"
+    },
+    {
+      "source_id": "go",
+      "domain": "systems",
+      "relative_path": "systems/go",
+      "upstream_url": "https://github.com/golang/go.git"
+    },
+    {
+      "source_id": "postgresql",
+      "domain": "systems",
+      "relative_path": "systems/postgresql",
+      "upstream_url": "https://github.com/postgres/postgres.git"
+    },
+    {
+      "source_id": "ffmpeg",
+      "domain": "multimedia",
+      "relative_path": "multimedia/ffmpeg",
+      "upstream_url": "https://github.com/FFmpeg/FFmpeg.git"
+    },
+    {
+      "source_id": "llvm-project",
+      "domain": "compilers",
+      "relative_path": "compilers/llvm-project",
+      "upstream_url": "https://github.com/llvm/llvm-project.git"
+    },
+    {
+      "source_id": "pytorch",
+      "domain": "machine-learning",
+      "relative_path": "machine-learning/pytorch",
+      "upstream_url": "https://github.com/pytorch/pytorch.git"
+    },
+    {
+      "source_id": "numpy",
+      "domain": "machine-learning",
+      "relative_path": "machine-learning/numpy",
+      "upstream_url": "https://github.com/numpy/numpy.git"
+    },
+    {
+      "source_id": "scipy",
+      "domain": "machine-learning",
+      "relative_path": "machine-learning/scipy",
+      "upstream_url": "https://github.com/scipy/scipy.git"
+    },
+    {
+      "source_id": "scikit-learn",
+      "domain": "machine-learning",
+      "relative_path": "machine-learning/scikit-learn",
+      "upstream_url": "https://github.com/scikit-learn/scikit-learn.git"
+    },
+    {
+      "source_id": "vllm",
+      "domain": "machine-learning",
+      "relative_path": "machine-learning/vllm",
+      "upstream_url": "https://github.com/vllm-project/vllm.git"
+    },
+    {
+      "source_id": "sglang",
+      "domain": "machine-learning",
+      "relative_path": "machine-learning/sglang",
+      "upstream_url": "https://github.com/sgl-project/sglang.git"
+    },
+    {
+      "source_id": "triton",
+      "domain": "gpu",
+      "relative_path": "gpu/triton",
+      "upstream_url": "https://github.com/triton-lang/triton.git"
+    },
+    {
+      "source_id": "cutlass",
+      "domain": "gpu",
+      "relative_path": "gpu/cutlass",
+      "upstream_url": "https://github.com/NVIDIA/cutlass.git"
+    },
+    {
+      "source_id": "cccl",
+      "domain": "gpu",
+      "relative_path": "gpu/cccl",
+      "upstream_url": "https://github.com/NVIDIA/cccl.git"
+    },
+    {
+      "source_id": "cudnn-frontend",
+      "domain": "gpu",
+      "relative_path": "gpu/cudnn-frontend",
+      "upstream_url": "https://github.com/NVIDIA/cudnn-frontend.git"
+    },
+    {
+      "source_id": "nccl",
+      "domain": "gpu",
+      "relative_path": "gpu/nccl",
+      "upstream_url": "https://github.com/NVIDIA/nccl.git"
+    },
+    {
+      "source_id": "cupy",
+      "domain": "gpu",
+      "relative_path": "gpu/cupy",
+      "upstream_url": "https://github.com/cupy/cupy.git"
+    },
+    {
+      "source_id": "flash-attention",
+      "domain": "gpu",
+      "relative_path": "gpu/flash-attention",
+      "upstream_url": "https://github.com/Dao-AILab/flash-attention.git"
+    },
+    {
+      "source_id": "xformers",
+      "domain": "gpu",
+      "relative_path": "gpu/xformers",
+      "upstream_url": "https://github.com/facebookresearch/xformers.git"
+    },
+    {
+      "source_id": "rocm-libraries",
+      "domain": "gpu",
+      "relative_path": "gpu/rocm-libraries",
+      "upstream_url": "https://github.com/ROCm/rocm-libraries.git"
+    },
+    {
+      "source_id": "amdmigraphx",
+      "domain": "gpu",
+      "relative_path": "gpu/amdmigraphx",
+      "upstream_url": "https://github.com/ROCm/AMDMIGraphX.git"
+    },
+    {
+      "source_id": "slurm",
+      "domain": "parallel",
+      "relative_path": "parallel/slurm",
+      "upstream_url": "https://github.com/SchedMD/slurm.git"
+    },
+    {
+      "source_id": "mpich",
+      "domain": "parallel",
+      "relative_path": "parallel/mpich",
+      "upstream_url": "https://github.com/pmodels/mpich.git"
+    },
+    {
+      "source_id": "openmpi",
+      "domain": "parallel",
+      "relative_path": "parallel/openmpi",
+      "upstream_url": "https://github.com/open-mpi/ompi.git"
+    },
+    {
+      "source_id": "ucx",
+      "domain": "parallel",
+      "relative_path": "parallel/ucx",
+      "upstream_url": "https://github.com/openucx/ucx.git"
+    },
+    {
+      "source_id": "libfabric",
+      "domain": "parallel",
+      "relative_path": "parallel/libfabric",
+      "upstream_url": "https://github.com/ofiwg/libfabric.git"
+    },
+    {
+      "source_id": "kokkos",
+      "domain": "parallel",
+      "relative_path": "parallel/kokkos",
+      "upstream_url": "https://github.com/kokkos/kokkos.git"
+    },
+    {
+      "source_id": "openblas",
+      "domain": "scientific-computing",
+      "relative_path": "scientific-computing/openblas",
+      "upstream_url": "https://github.com/OpenMathLib/OpenBLAS.git"
+    },
+    {
+      "source_id": "petsc",
+      "domain": "scientific-computing",
+      "relative_path": "scientific-computing/petsc",
+      "upstream_url": "https://gitlab.com/petsc/petsc.git"
+    },
+    {
+      "source_id": "hypre",
+      "domain": "scientific-computing",
+      "relative_path": "scientific-computing/hypre",
+      "upstream_url": "https://github.com/hypre-space/hypre.git"
+    },
+    {
+      "source_id": "mfem",
+      "domain": "scientific-computing",
+      "relative_path": "scientific-computing/mfem",
+      "upstream_url": "https://github.com/mfem/mfem.git"
+    },
+    {
+      "source_id": "dealii",
+      "domain": "scientific-computing",
+      "relative_path": "scientific-computing/dealii",
+      "upstream_url": "https://github.com/dealii/dealii.git"
+    },
+    {
+      "source_id": "julia",
+      "domain": "numerical-environments",
+      "relative_path": "numerical-environments/julia",
+      "upstream_url": "https://github.com/JuliaLang/julia.git"
+    },
+    {
+      "source_id": "octave",
+      "domain": "numerical-environments",
+      "relative_path": "numerical-environments/octave",
+      "upstream_url": "https://github.com/gnu-octave/octave.git",
+      "language_overrides": {
+        ".m": "matlab"
+      }
+    },
+    {
+      "source_id": "scilab",
+      "domain": "numerical-environments",
+      "relative_path": "numerical-environments/scilab",
+      "upstream_url": "https://github.com/scilab/scilab.git"
+    },
+    { "source_id": "illumos", "domain": "systems", "relative_path": "systems/illumos", "upstream_url": "https://github.com/illumos/illumos-gate.git" },
+    { "source_id": "zephyr", "domain": "systems", "relative_path": "systems/zephyr", "upstream_url": "https://github.com/zephyrproject-rtos/zephyr.git" },
+    { "source_id": "sel4", "domain": "systems", "relative_path": "systems/sel4", "upstream_url": "https://github.com/seL4/seL4.git" },
+    { "source_id": "zig", "domain": "systems", "relative_path": "systems/zig", "upstream_url": "https://github.com/ziglang/zig.git" },
+    { "source_id": "redis", "domain": "systems", "relative_path": "systems/redis", "upstream_url": "https://github.com/redis/redis.git" },
+    { "source_id": "rocksdb", "domain": "systems", "relative_path": "systems/rocksdb", "upstream_url": "https://github.com/facebook/rocksdb.git" },
+    { "source_id": "pion-webrtc", "domain": "multimedia", "relative_path": "multimedia/pion-webrtc", "upstream_url": "https://github.com/pion/webrtc.git" },
+    { "source_id": "libvpx", "domain": "multimedia", "relative_path": "multimedia/libvpx", "upstream_url": "https://github.com/webmproject/libvpx.git" },
+    { "source_id": "dav1d", "domain": "multimedia", "relative_path": "multimedia/dav1d", "upstream_url": "https://github.com/videolan/dav1d.git" },
+    { "source_id": "svt-av1", "domain": "multimedia", "relative_path": "multimedia/svt-av1", "upstream_url": "https://gitlab.com/AOMediaCodec/SVT-AV1.git" },
+    { "source_id": "x264", "domain": "multimedia", "relative_path": "multimedia/x264", "upstream_url": "https://code.videolan.org/videolan/x264.git" },
+    { "source_id": "tvm", "domain": "compilers", "relative_path": "compilers/tvm", "upstream_url": "https://github.com/apache/tvm.git" },
+    { "source_id": "xla", "domain": "compilers", "relative_path": "compilers/xla", "upstream_url": "https://github.com/openxla/xla.git" },
+    { "source_id": "iree", "domain": "compilers", "relative_path": "compilers/iree", "upstream_url": "https://github.com/iree-org/iree.git" },
+    { "source_id": "binaryen", "domain": "compilers", "relative_path": "compilers/binaryen", "upstream_url": "https://github.com/WebAssembly/binaryen.git" },
+    { "source_id": "wasmtime", "domain": "compilers", "relative_path": "compilers/wasmtime", "upstream_url": "https://github.com/bytecodealliance/wasmtime.git" },
+    { "source_id": "jax", "domain": "machine-learning", "relative_path": "machine-learning/jax", "upstream_url": "https://github.com/jax-ml/jax.git" },
+    { "source_id": "tensorflow", "domain": "machine-learning", "relative_path": "machine-learning/tensorflow", "upstream_url": "https://github.com/tensorflow/tensorflow.git" },
+    { "source_id": "transformers", "domain": "machine-learning", "relative_path": "machine-learning/transformers", "upstream_url": "https://github.com/huggingface/transformers.git" },
+    { "source_id": "deepspeed", "domain": "machine-learning", "relative_path": "machine-learning/deepspeed", "upstream_url": "https://github.com/microsoft/DeepSpeed.git" },
+    { "source_id": "megatron-lm", "domain": "machine-learning", "relative_path": "machine-learning/megatron-lm", "upstream_url": "https://github.com/NVIDIA/Megatron-LM.git" },
+    { "source_id": "tensorrt-llm", "domain": "machine-learning", "relative_path": "machine-learning/tensorrt-llm", "upstream_url": "https://github.com/NVIDIA/TensorRT-LLM.git" },
+    { "source_id": "llama-cpp", "domain": "machine-learning", "relative_path": "machine-learning/llama-cpp", "upstream_url": "https://github.com/ggml-org/llama.cpp.git" },
+    { "source_id": "onnxruntime", "domain": "machine-learning", "relative_path": "machine-learning/onnxruntime", "upstream_url": "https://github.com/microsoft/onnxruntime.git" },
+    { "source_id": "cuda-samples", "domain": "gpu", "relative_path": "gpu/cuda-samples", "upstream_url": "https://github.com/NVIDIA/cuda-samples.git" },
+    { "source_id": "warp", "domain": "gpu", "relative_path": "gpu/warp", "upstream_url": "https://github.com/NVIDIA/warp.git" },
+    { "source_id": "transformer-engine", "domain": "gpu", "relative_path": "gpu/transformer-engine", "upstream_url": "https://github.com/NVIDIA/TransformerEngine.git" },
+    { "source_id": "nvbench", "domain": "gpu", "relative_path": "gpu/nvbench", "upstream_url": "https://github.com/NVIDIA/nvbench.git" },
+    { "source_id": "aiter", "domain": "gpu", "relative_path": "gpu/aiter", "upstream_url": "https://github.com/ROCm/aiter.git" },
+    { "source_id": "composable-kernel", "domain": "gpu", "relative_path": "gpu/composable-kernel", "upstream_url": "https://github.com/ROCm/composable_kernel.git" },
+    { "source_id": "oneTBB", "domain": "parallel", "relative_path": "parallel/oneTBB", "upstream_url": "https://github.com/oneapi-src/oneTBB.git" },
+    { "source_id": "hpx", "domain": "parallel", "relative_path": "parallel/hpx", "upstream_url": "https://github.com/STEllAR-GROUP/hpx.git" },
+    { "source_id": "legion", "domain": "parallel", "relative_path": "parallel/legion", "upstream_url": "https://github.com/StanfordLegion/legion.git" },
+    { "source_id": "starpu", "domain": "parallel", "relative_path": "parallel/starpu", "upstream_url": "https://github.com/starpu-runtime/starpu.git" },
+    { "source_id": "ucc", "domain": "parallel", "relative_path": "parallel/ucc", "upstream_url": "https://github.com/openucx/ucc.git" },
+    { "source_id": "lapack", "domain": "scientific-computing", "relative_path": "scientific-computing/lapack", "upstream_url": "https://github.com/Reference-LAPACK/lapack.git" },
+    { "source_id": "fftw", "domain": "scientific-computing", "relative_path": "scientific-computing/fftw", "upstream_url": "https://github.com/FFTW/fftw3.git" },
+    { "source_id": "suitesparse", "domain": "scientific-computing", "relative_path": "scientific-computing/suitesparse", "upstream_url": "https://github.com/DrTimothyAldenDavis/SuiteSparse.git" },
+    { "source_id": "eigen", "domain": "scientific-computing", "relative_path": "scientific-computing/eigen", "upstream_url": "https://gitlab.com/libeigen/eigen.git" },
+    { "source_id": "ginkgo", "domain": "scientific-computing", "relative_path": "scientific-computing/ginkgo", "upstream_url": "https://github.com/ginkgo-project/ginkgo.git" }
+  ]
+}
