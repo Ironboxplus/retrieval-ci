@@ -476,7 +476,15 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _retired() -> None:
+    """RETIRED: this script loads a model into its own process; every model is a vLLM service now."""
+    from core.inference_retired import RERANKER_INSTEAD, RetiredInferencePath
+
+    raise RetiredInferencePath('verify_reranker_cuda_canary.py (in-process torch reranker canary)', RERANKER_INSTEAD)
+
+
 def main() -> int:
+    _retired()
     args = _parse_args()
     base_url = validate_release_target(args.base_url)
     if args.batch_size != RELEASE_BATCH_SIZE:

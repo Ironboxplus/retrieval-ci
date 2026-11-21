@@ -54,9 +54,10 @@ from app.services.match_doc.schemas import (
     MatchDocResponse,
 )
 from pipeline.parsers import BookmarkParser, PDFParser, TXTParser
+from core.indexing.embedders.bge_m3_core import InputTooLong
 from core.retrieval.pipeline import SearchPipeline, SearchRequest as PipelineSearchRequest
 from core.storage.qdrant_store import QdrantRetrievalUpstreamError
-from app.services.search_grouping import build_qdrant_filters, group_into_papers, attach_chunk_positions
+from app.services.search_grouping import arxiv_scope, build_qdrant_filters, group_into_papers, attach_chunk_positions
 from core.db.database import init_db
 from app.api.routes import register_routes
 from app.services.index_service import get_index_service
@@ -101,7 +102,23 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     init_db()
 
+    # Realign journal_fts rowids with entry ids before serving: the first journal
+    # request would otherwise pay for the rebuild. A failure here is not swallowed
+    # for good - every journal write re-runs the guard and raises until it succeeds.
+    try:
+        from app.services.journal import get_journal_service
+        get_journal_service().repository.ensure_fts_aligned()
+    except Exception as exc:
+        logger.error("journal_fts alignment failed at startup: %s", exc)
+
     logger.info("Initializing components...")
+
+    # The embedding service must be the one this build's fingerprint names. A service that serves other
+    # weights or a shorter limit raises here and stops the start-up: it is deliberately outside the
+    # try below, which turns any failure into "no search pipeline". One that stays silent for
+    # SERVICE_WAIT_S is logged, and the backend runs while embedding calls raise until it is up.
+    from core.indexing.embedders import require_embedding_service
+    require_embedding_service()
 
     logger.info("Loading BGE-M3 search pipeline...")
     try:
@@ -109,9 +126,11 @@ async def lifespan(app: FastAPI):
         # downstream callers (IndexService variants, SemanticSectionChunker
         # _BgeM3LlamaAdapter, SearchPipeline) share one hot-in-GPU instance.
         from core.indexing.embedders import get_embedder
-        from core.storage.qdrant_store import QdrantStore
+        from core.storage.corpus_store import build_search_store
         embedder = get_embedder()
-        store = QdrantStore()
+        # papers / arxiv / reviews routing; serves the single `papers` collection
+        # until the corpus layout file switches to the split (no restart needed).
+        store = build_search_store()
 
         reranker = None
         try:
@@ -146,65 +165,64 @@ async def lifespan(app: FastAPI):
             match_paper_job_runner = None
             logger.warning("match-paper job runner unavailable: %s", exc)
 
-    # W58 diag: background thread logs private commit every 60s to catch leaks
-    import threading, psutil, torch
-    def _mem_watchdog():
-        proc = psutil.Process()
-        while True:
-            mi = proc.memory_full_info()
-            gpu_a = torch.cuda.memory_allocated() / 1024**3 if torch.cuda.is_available() else 0
-            gpu_r = torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0
-            logger.info(
-                "mem.watchdog priv=%.2fGB ws=%.2fGB gpu_alloc=%.2fGB gpu_rsv=%.2fGB threads=%d",
-                getattr(mi, "private", getattr(mi, "uss", mi.rss)) / 1024**3, mi.rss / 1024**3, gpu_a, gpu_r, proc.num_threads(),
-            )
-            import time; time.sleep(60)
-    threading.Thread(target=_mem_watchdog, daemon=True).start()
+    # W58 diag: background thread logs private commit every 60s to catch leaks.
+    # 2026-11-20: the old value was psutil uss, which on Linux counts resident pages only and
+    # hid a 13 GB swapped-out rise; core.memory_watch logs VmData/VmSwap/VmRSS and captures
+    # thread stacks plus a tracemalloc window when VmData bursts.
+    import torch
+    from core.memory_watch import start_memory_watch
 
-    # Resume ingest pipelines left "running" by a prior (killed) process — W61.
-    # Guarded: a resume failure must never block startup.
-    try:
-        from app.services.pipeline.service import get_pipeline_runner
-        resumed = get_pipeline_runner().resume_running()
-        if resumed:
-            logger.info(f"pipeline.resume relaunched {len(resumed)} pipeline(s): {resumed}")
-    except Exception as e:
-        logger.warning(f"pipeline.resume skipped: {e}")
+    def _gpu_fields() -> str:
+        gpu_a = torch.cuda.memory_allocated() / 1024**3 if torch.cuda.is_available() else 0
+        gpu_r = torch.cuda.memory_reserved() / 1024**3 if torch.cuda.is_available() else 0
+        return "gpu_alloc=%.2fGB gpu_rsv=%.2fGB" % (gpu_a, gpu_r)
 
-    # Same for upload pipelines (extract→index for user-uploaded docs) — W61.
-    try:
-        from app.services.pipeline.upload_service import get_upload_runner
-        u_resumed = get_upload_runner().resume_running()
-        if u_resumed:
-            logger.info(f"upload.resume relaunched {len(u_resumed)} upload pipeline(s): {u_resumed}")
-    except Exception as e:
-        logger.warning(f"upload.resume skipped: {e}")
+    start_memory_watch(logger, extra=_gpu_fields)
 
-    # Medical OA downloads are a durable TaskStore pipeline.  The runner probes
-    # the atomically checkpointed manifest and resumes only on the designated
-    # .88 executor; a Windows/.111 process fails closed and never writes PDFs.
-    try:
-        from app.services.medical_corpus import get_medical_download_runner
-        medical_resumed = get_medical_download_runner().resume_running()
-        if medical_resumed:
-            logger.info(f"medical-download.resume relaunched {len(medical_resumed)} task(s): {medical_resumed}")
-    except Exception as e:
-        logger.warning(f"medical-download.resume skipped: {e}")
+    # Resume tasks left "running" by a prior (killed) process — W61: ingest
+    # pipelines, upload pipelines (extract→index) and medical OA downloads, each
+    # through its registered runner. The medical runner probes the atomically
+    # checkpointed manifest and resumes only on the designated .88 executor; a
+    # Windows/.111 process fails closed and never writes PDFs. Guarded per
+    # runner: one resume failure must never block startup or the others.
+    from app.services.pipeline.runner_registry import all_runners
+    for task_type, get_task_runner in all_runners().items():
+        try:
+            resumed = get_task_runner().resume_running()
+            if resumed:
+                logger.info(f"{task_type}.resume relaunched {len(resumed)} task(s): {resumed}")
+        except Exception as e:
+            logger.warning(f"{task_type}.resume skipped: {e}")
 
-    public_code_scheduler = None
-    try:
-        from app.services.public_code import get_public_code_update_scheduler
-        public_code_scheduler = get_public_code_update_scheduler()
-        public_code_scheduler.start()
-        logger.info("public-code scheduled update service started")
-    except Exception as e:
-        logger.warning(f"public-code scheduler skipped: {e}")
+    # Recurring jobs (public-code update checks, arXiv delta, ...). After the
+    # runners resumed, so a schedule firing at startup sees their running tasks.
+    scheduler_service = None
+    if settings.scheduler.enabled:
+        try:
+            from app.services.scheduler.service import get_scheduler_service
+            scheduler_service = get_scheduler_service()
+            if scheduler_service.start():
+                logger.info("scheduler service started")
+        except Exception as e:
+            logger.warning(f"scheduler skipped: {e}")
 
     yield
 
     # 关闭时清理
-    if public_code_scheduler is not None:
-        public_code_scheduler.stop()
+    # Stage pipelines first: their workers are stopped through the cancel path, but the tasks stay
+    # `running` and resume at the next start instead of a gate judging what a stopped worker left
+    # (the unit signals only this process, KillMode=mixed). Bounded wait: the run_local watcher
+    # kills a worker 10 s after its SIGTERM, well inside the unit's TimeoutStopSec=60.
+    try:
+        from app.services.pipeline.orchestrator import request_shutdown, wait_for_interrupted
+        if request_shutdown():
+            left = wait_for_interrupted(30.0)
+            if left:
+                logger.warning(f"pipeline.shutdown {left} pipeline(s) still unwinding; they resume at the next start")
+    except Exception as e:
+        logger.warning(f"pipeline shutdown skipped: {e}")
+    if scheduler_service is not None:
+        scheduler_service.shutdown()
     try:
         from app.services.public_code import get_public_code_job_service
         get_public_code_job_service().shutdown(wait=False)
@@ -299,7 +317,7 @@ app.include_router(make_log_relay_router(
 _conferences_cache: Optional[dict] = None
 
 @app.get("/api/conferences")
-async def get_conferences():
+def get_conferences():
     global _conferences_cache
     if _conferences_cache is None:
         from pipeline.paper_crawler.ccf_a_main_corpus import load_conference_registry, load_categories
@@ -329,7 +347,7 @@ async def get_conferences():
 # ==================== 文件上传 ====================
 
 @app.post("/api/upload", response_model=UploadResponse)
-async def upload_file(
+def upload_file(
     file: UploadFile = File(...),
     file_type: str = Form(...),
     background_tasks: BackgroundTasks = None
@@ -355,7 +373,7 @@ async def upload_file(
     file_ext = os.path.splitext(file.filename)[1]
     save_path = os.path.join(settings.upload_dir, f"{file_id}{file_ext}")
 
-    content = await file.read()
+    content = file.file.read()
     with open(save_path, "wb") as f:
         f.write(content)
 
@@ -497,7 +515,7 @@ async def upload_file(
 # ==================== 爬取 ====================
 
 @app.post("/api/crawl", response_model=CrawlResponse)
-async def start_crawl(request: CrawlRequest):
+def start_crawl(request: CrawlRequest):
     """启动网页爬取任务 — 委托给 EnhancedCrawler 路径。"""
     from app.tasks.crawl_tasks import enqueue_crawl_urls
 
@@ -559,6 +577,8 @@ async def search(request: SearchRequest):
         level=1 if request.title_only else None,
         filters=qdrant_filters,
         dedup_by_paper=request.dedup_by_paper,
+        include_preprints=request.include_preprints,
+        include_withdrawn=request.include_withdrawn,
     )
     # Offload the whole blocking path (embed + Qdrant + rerank + SQL enrich).
     # Running search_pipeline.search inline starved the asyncio event loop under
@@ -570,6 +590,8 @@ async def search(request: SearchRequest):
         pipe_resp = await asyncio.to_thread(search_pipeline.search, pipe_req)
     except QdrantRetrievalUpstreamError:
         raise HTTPException(503, "Search retrieval upstream unavailable; retry later")
+    except InputTooLong:
+        raise  # app.api.errors maps it to a 422 that states the token count
     except Exception as e:
         logger.error(f"Search pipeline failed: {e}")
         _tb.print_exc()
@@ -661,6 +683,10 @@ def _enrich_results_sync(results, request: SearchRequest):
                     "impact_level": p.impact_level,
                     "citation_count": p.citation_count,
                     "paper_id": p.paper_id,  # business ID — single source of truth
+                    # SQL is the authority: the Qdrant `withdrawn` flag can lag a
+                    # withdrawal/reinstatement. A bool, so False overrides a stale True.
+                    "withdrawn": bool(p.withdrawn),
+                    "source_version": p.source_version,
                 }
                 paper_info[p.doc_id] = {k: v for k, v in fields.items() if v is not None}
                 if p.title:
@@ -809,6 +835,8 @@ async def search_stream(request: SearchRequest):
         level=1 if request.title_only else None,
         filters=qdrant_filters,
         dedup_by_paper=request.dedup_by_paper,
+        include_preprints=request.include_preprints,
+        include_withdrawn=request.include_withdrawn,
     )
 
     async def streamer():
@@ -855,6 +883,23 @@ async def search_stream(request: SearchRequest):
     return StreamingResponse(streamer(), media_type="application/x-ndjson")
 
 
+# ==================== arXiv 预印本检索 ====================
+# 预印本与会议论文同在 `papers`（venue=arXiv、venue_tier=preprint），默认检索排除它们
+# （core/retrieval/pipeline.retrieve_filters）。这两个路由是同一条检索管线，范围固定为
+# venue_tier=preprint；venue / venue_tier 入参被覆盖，其余参数语义与 /api/search 相同。
+
+@app.post("/api/arxiv/search", response_model=SearchResponse)
+async def search_arxiv(request: SearchRequest):
+    """只检索 arXiv 预印本（venue_tier=preprint）。参数与 /api/search 相同。"""
+    return await search(arxiv_scope(request))
+
+
+@app.post("/api/arxiv/search/stream")
+async def search_arxiv_stream(request: SearchRequest):
+    """/api/arxiv/search 的 NDJSON 流式版本，事件格式同 /api/search/stream。"""
+    return await search_stream(arxiv_scope(request))
+
+
 # ==================== 文档匹配（功能2：doc → 最相近论文）====================
 
 
@@ -881,6 +926,8 @@ async def match_doc(request: MatchDocRequest):
         # 留在 event loop 上会让一次 match 把整个 backend 挂起几十秒（2026-09-06 实测：
         # match 卡住期间并发 /api/search 120s 不返回）。与 /api/search 同样 offload。
         return await asyncio.to_thread(service.match, request)
+    except InputTooLong:
+        raise  # a ValueError, but not a 400: app.api.errors maps it to 422 with the token count
     except ValueError as e:  # 输入校验错（缺字段 / 空文本 / MD 未就绪）
         raise HTTPException(400, str(e))
     except RuntimeError as e:  # 依赖未就绪
@@ -1026,7 +1073,7 @@ async def embed(request: EmbedRequest):
 
 # ==================== 统计 ====================
 
-def _get_stats_sync():
+def _compute_stats():
     from sqlalchemy import func, text
     from core.db.database import get_db_session
     from core.db.models import Document as DBDocument, Chunk as DBChunk, Paper as DBPaper
@@ -1038,9 +1085,9 @@ def _get_stats_sync():
         # (PK gaps). SQLite has internal row-count cache making COUNT fast on PK.
         total_chunks = db.execute(text("SELECT COUNT(*) FROM chunks")).scalar() or 0
 
-    from core.storage.qdrant_store import QdrantStore
+    from core.storage.corpus_store import paper_store
     try:
-        qdrant_count = QdrantStore().count()
+        qdrant_count = paper_store().count()
     except Exception:
         qdrant_count = 0
 
@@ -1058,6 +1105,13 @@ def _get_stats_sync():
     }
 
 
+def _get_stats_sync():
+    """COUNT(*) over the chunks table takes seconds: served from the shared stale-while-revalidate cache."""
+    from core.cache import TOTAL_COUNT_TTL_SECONDS, stats_cache
+
+    return stats_cache.get("api.stats", _compute_stats, ttl=TOTAL_COUNT_TTL_SECONDS)
+
+
 @app.get("/api/stats")
 async def get_stats():
     """获取索引统计信息"""
@@ -1068,7 +1122,7 @@ async def get_stats():
 # ==================== 配置 ====================
 
 @app.get("/api/config")
-async def get_config():
+def get_config():
     """获取当前配置"""
     return {
         "proxy": {
@@ -1086,7 +1140,7 @@ async def get_config():
 
 
 @app.post("/api/config/proxy")
-async def update_proxy(http_proxy: str):
+def update_proxy(http_proxy: str):
     """更新代理 URL（代理强制启用，不提供关闭开关）"""
     settings.proxy.http_proxy = http_proxy
     settings.proxy.https_proxy = http_proxy
@@ -1122,6 +1176,14 @@ def _frontend_port(request: Request) -> int | None:
         return None
 
 
+# Vite fingerprints every file under assets/, so those never change under a
+# name; index.html is the one pointer that does. Without explicit headers a
+# browser heuristically reused a stale index.html after a deploy and kept
+# running the previous bundle.
+_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
+_SPA_CACHE_CONTROL = "no-cache"
+
+
 def _frontend_unavailable(exc: FrontendAssetsUnavailable) -> HTTPException:
     logger.error("frontend bundle unavailable: %s", exc)
     return HTTPException(status_code=503, detail=str(exc))
@@ -1136,7 +1198,7 @@ async def serve_frontend_asset(asset_path: str, request: Request):
         raise _frontend_unavailable(exc) from exc
     if asset is None:
         raise HTTPException(status_code=404, detail="frontend asset not found")
-    return FileResponse(asset)
+    return FileResponse(asset, headers={"Cache-Control": _ASSET_CACHE_CONTROL})
 
 
 @app.get("/assets", include_in_schema=False)
@@ -1150,7 +1212,8 @@ async def serve_spa(spa_path: str, request: Request):
     """Serve a selected bundle's static file or its SPA index fallback."""
     try:
         return FileResponse(_frontend_assets.spa_file_for(
-            port=_frontend_port(request), path=spa_path))
+            port=_frontend_port(request), path=spa_path),
+            headers={"Cache-Control": _SPA_CACHE_CONTROL})
     except FrontendAssetsUnavailable as exc:
         raise _frontend_unavailable(exc) from exc
 
@@ -1179,6 +1242,10 @@ if __name__ == "__main__":
         return s
 
     _sockets = [_listen(host, port) for host, port in LISTEN_ADDRESSES]
-    uvicorn.Server(uvicorn.Config(app)).run(sockets=_sockets)
+    # Connections that never send a request are closed (2026-10-07 fd exhaustion);
+    # see app/api/idle_connections.py.
+    from app.api.idle_connections import http_protocol_class
+
+    uvicorn.Server(uvicorn.Config(app, http=http_protocol_class())).run(sockets=_sockets)
 # reload
 

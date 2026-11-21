@@ -11,13 +11,17 @@ callers never hold a session across a blocking stage run.
 """
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime
 from typing import Any, Callable, Optional
 
 from loguru import logger
 from sqlalchemy import or_
+from sqlalchemy.exc import OperationalError
 
 from core.db.database import get_db_session
+from core.timestamps import from_local_naive, from_utc_naive
 from core.db.models import (
     Task,
     TaskStatus,
@@ -31,10 +35,76 @@ _SUB_STATUS = {s.value: s for s in TaskSubtaskStatus}
 
 _TERMINAL = {"completed", "failed", "cancelled", "timeout"}
 
+# How long a log line (emit_event) keeps retrying a locked database before it is dropped. Each
+# attempt already waits the connection's busy_timeout (30 s in production), so 45 s means a second
+# attempt after the first one timed out, and a line is lost only after ~1 min of a held write lock.
+EVENT_RETRY_WINDOW_S = 45.0
+EVENT_RETRY_BACKOFF_S = 0.2
+
+
+def _is_lock_contention(exc: OperationalError) -> bool:
+    """SQLite refusing a write because another connection holds the lock (not a broken statement)."""
+    message = str(getattr(exc, "orig", exc)).lower()
+    return "database is locked" in message or "database table is locked" in message or "busy" in message
+
+# fn(task_id, task_type, status), called after a terminal transition committed.
+TerminalListener = Callable[[int, str, str], None]
+
+
+def _task_dict(t: Task) -> dict:
+    return {
+        "id": t.id,
+        "task_type": t.task_type,
+        "status": t.status.value if t.status else None,
+        "progress": t.progress or 0,
+        "total": t.total or 0,
+        "params": t.params_json or {},
+        "result": t.result_json,
+        "error": t.error_message,
+        "retry_count": t.retry_count or 0,
+        "max_retries": t.max_retries if t.max_retries is not None else 0,
+        "owner_user_id": t.owner_user_id,
+        "worker_id": t.worker_id,
+        # Epoch seconds. created_at is naive UTC (database default), started_at /
+        # completed_at are naive local (datetime.now()); see core/timestamps.py.
+        "created_at": from_utc_naive(t.created_at).timestamp() if t.created_at else 0.0,
+        "started_at": from_local_naive(t.started_at).timestamp() if t.started_at else None,
+        "finished_at": from_local_naive(t.completed_at).timestamp() if t.completed_at else None,
+    }
+
 
 class TaskStore:
+    # Terminal listeners are process-wide, not per instance: every runner builds
+    # its own TaskStore(), and the scheduler must hear about all of them. They
+    # fire for transitions made through set_task_status / compare_and_set_status
+    # (the orchestrator's and the cancel path's writers), after the commit.
+    _terminal_listeners: list[TerminalListener] = []
+    _listeners_lock = threading.Lock()
+
     def __init__(self, session_factory: Callable[[], Any] = get_db_session):
         self._sf = session_factory
+        self.event_retry_window_s = EVENT_RETRY_WINDOW_S
+
+    @classmethod
+    def add_terminal_listener(cls, fn: TerminalListener) -> None:
+        with cls._listeners_lock:
+            cls._terminal_listeners.append(fn)
+
+    @classmethod
+    def remove_terminal_listener(cls, fn: TerminalListener) -> None:
+        with cls._listeners_lock:
+            if fn in cls._terminal_listeners:
+                cls._terminal_listeners.remove(fn)
+
+    @classmethod
+    def _notify_terminal(cls, task_id: int, task_type: str, status: str) -> None:
+        with cls._listeners_lock:
+            listeners = list(cls._terminal_listeners)
+        for fn in listeners:
+            try:
+                fn(task_id, task_type, status)
+            except Exception:  # a listener must never break the status writer
+                logger.exception(f"task.terminal_listener.error task={task_id} status={status}")
 
     # ------------------------------------------------------------------ task
     def create_task(
@@ -63,21 +133,27 @@ class TaskStore:
             t = s.get(Task, task_id)
             if t is None:
                 return None
-            return {
-                "id": t.id,
-                "task_type": t.task_type,
-                "status": t.status.value if t.status else None,
-                "progress": t.progress or 0,
-                "total": t.total or 0,
-                "params": t.params_json or {},
-                "result": t.result_json,
-                "error": t.error_message,
-                "owner_user_id": t.owner_user_id,
-                "worker_id": t.worker_id,
-                "created_at": t.created_at.timestamp() if t.created_at else 0.0,
-                "started_at": t.started_at.timestamp() if t.started_at else None,
-                "finished_at": t.completed_at.timestamp() if t.completed_at else None,
-            }
+            return _task_dict(t)
+
+    def get_tasks(self, task_ids: list[int]) -> dict[int, dict]:
+        """get_task for many ids in one query; missing ids are absent."""
+        if not task_ids:
+            return {}
+        with self._sf() as s:
+            rows = s.query(Task).filter(Task.id.in_(task_ids)).all()
+            return {t.id: _task_dict(t) for t in rows}
+
+    def list_by_origin(
+        self, schedule_id: int, limit: int = 50, *, statuses: Optional[tuple[str, ...]] = None,
+    ) -> list[dict]:
+        """Tasks started by one schedule (params_json.origin.schedule_id), newest first."""
+        with self._sf() as s:
+            q = s.query(Task).filter(
+                Task.params_json["origin"]["schedule_id"].as_integer() == schedule_id
+            )
+            if statuses:
+                q = q.filter(Task.status.in_([_TASK_STATUS[x] for x in statuses]))
+            return [_task_dict(t) for t in q.order_by(Task.id.desc()).limit(limit).all()]
 
     def list_running(self, task_type: str) -> list[dict]:
         """All tasks of a type currently in `running` status (for conflict guard
@@ -86,6 +162,17 @@ class TaskStore:
             rows = (
                 s.query(Task)
                 .filter(Task.task_type == task_type, Task.status == TaskStatus.running)
+                .order_by(Task.id.asc())
+                .all()
+            )
+            return [{"id": t.id, "params": dict(t.params_json or {})} for t in rows]
+
+    def list_completed(self, task_type: str) -> list[dict]:
+        """Tasks of a type that finished successfully (id + params)."""
+        with self._sf() as s:
+            rows = (
+                s.query(Task)
+                .filter(Task.task_type == task_type, Task.status == TaskStatus.completed)
                 .order_by(Task.id.asc())
                 .all()
             )
@@ -112,6 +199,24 @@ class TaskStore:
                 for task in rows
             ]
 
+    def prune_completed(self, task_type: str, keep: int) -> int:
+        """Delete all but the newest `keep` completed tasks of one type.
+
+        Failed/cancelled rows are evidence of what went wrong and are never pruned.
+        Goes through the ORM so the events/subtasks cascade with the task row.
+        """
+        with self._sf() as s:
+            stale = (
+                s.query(Task)
+                .filter(Task.task_type == task_type, Task.status == TaskStatus.completed)
+                .order_by(Task.completed_at.desc(), Task.id.desc())
+                .offset(keep)
+                .all()
+            )
+            for task in stale:
+                s.delete(task)
+            return len(stale)
+
     def set_task_status(self, task_id: int, status: str, *, error: Optional[str] = None) -> None:
         with self._sf() as s:
             t = s.get(Task, task_id)
@@ -126,6 +231,9 @@ class TaskStore:
             if error is not None:
                 t.error_message = error
             t.last_heartbeat = now
+            task_type = t.task_type
+        if status in _TERMINAL:
+            self._notify_terminal(task_id, task_type, status)
 
     def compare_and_set_status(
         self,
@@ -134,8 +242,13 @@ class TaskStore:
         expect: set[str],
         new: str,
         error: Optional[str] = None,
+        result: Optional[dict] = None,
+        fill_progress: bool = False,
     ) -> bool:
         """Move a task to `new` ONLY while it is still in one of `expect`.
+
+        `result` and `fill_progress` (progress := total) ride the same UPDATE, so a
+        reader that sees the terminal status also sees the result.
 
         Returns True if this caller performed the transition, False if someone
         else already moved it (most importantly: cancelled it).
@@ -153,6 +266,10 @@ class TaskStore:
                 values["completed_at"] = now
             if error is not None:
                 values["error_message"] = error
+            if result is not None:
+                values["result_json"] = result
+            if fill_progress:
+                values["progress"] = Task.total
             changed = (
                 s.query(Task)
                 .filter(
@@ -166,7 +283,13 @@ class TaskStore:
                 s.query(Task).filter(
                     Task.id == task_id, Task.started_at.is_(None),
                 ).update({"started_at": now}, synchronize_session=False)
-            return bool(changed)
+            task_type = (
+                s.query(Task.task_type).filter(Task.id == task_id).scalar()
+                if changed and new in _TERMINAL else None
+            )
+        if task_type is not None:
+            self._notify_terminal(task_id, task_type, new)
+        return bool(changed)
 
     def claim_task(self, task_id: int, worker_id: str, *, lease_seconds: int = 120) -> bool:
         """Take cross-process ownership of one task, or return False.
@@ -216,13 +339,24 @@ class TaskStore:
                 Task.id == task_id, Task.worker_id == worker_id,
             ).update({"worker_id": None}, synchronize_session=False)
 
-    def set_task_progress(self, task_id: int, progress: int, total: int) -> None:
+    def set_task_progress(
+        self, task_id: int, progress: int, total: int, *, heartbeat: bool = False,
+    ) -> None:
         with self._sf() as s:
             t = s.get(Task, task_id)
             if t is None:
                 return
             t.progress = progress
             t.total = total
+            if heartbeat:
+                t.last_heartbeat = datetime.now()
+
+    def update_result(self, task_id: int, result: dict) -> None:
+        """Write result_json only; status and completion time are untouched."""
+        with self._sf() as s:
+            t = s.get(Task, task_id)
+            if t is not None:
+                t.result_json = result
 
     def set_task_result(self, task_id: int, result: dict) -> None:
         with self._sf() as s:
@@ -448,6 +582,36 @@ class TaskStore:
         level: str = "info",
         event_type: str = "stage.log",
         stage: Optional[str] = None,
+    ) -> None:
+        """Record one log line of a task. It is the only write that may be lost: while another
+        connection holds SQLite's write lock the insert is retried for ``event_retry_window_s``,
+        then dropped with a warning (the backend log keeps the line), so a log line can never
+        fail the stage that wrote it. Status, subtask and progress writes stay fatal."""
+        started = time.monotonic()
+        while True:
+            try:
+                self._write_event(task_id, key, message, level=level, event_type=event_type, stage=stage)
+                return
+            except OperationalError as exc:
+                if not _is_lock_contention(exc):
+                    raise
+                waited = time.monotonic() - started
+                if waited >= self.event_retry_window_s:
+                    logger.warning(
+                        f"task={task_id} stage={key or '-'}: task event dropped, database locked for "
+                        f"{waited:.0f}s: [{level}] {message}")
+                    return
+                time.sleep(min(EVENT_RETRY_BACKOFF_S, self.event_retry_window_s - waited))
+
+    def _write_event(
+        self,
+        task_id: int,
+        key: Optional[str],
+        message: str,
+        *,
+        level: str,
+        event_type: str,
+        stage: Optional[str],
     ) -> None:
         with self._sf() as s:
             subtask_id = None

@@ -109,7 +109,15 @@ def extract_one_batch(pdf: Path, part_out: Path, page_range: str) -> int:
     return 0
 
 
+def _retired() -> None:
+    """RETIRED: Marker loads torch / surya models into this process; PDF->Markdown is the registered PaddleOCR-VL worker now."""
+    from core.inference_retired import EXTRACTOR_INSTEAD, RetiredInferencePath
+
+    raise RetiredInferencePath("marker_extract_book.py (in-process torch / surya Marker)", EXTRACTOR_INSTEAD)
+
+
 def main() -> int:
+    _retired()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--pdf", required=True)
     ap.add_argument("--out", help="merged markdown (parent mode)")

@@ -27,10 +27,18 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, SparseVector
 
 from config import settings  # noqa: E402
+from core.storage.corpus_layout import (  # noqa: E402
+    CorpusLayout,
+    check_paper_point,
+    collection_for_payload,
+    current_layout,
+    paper_collections,
+)
 from core.storage.papers_payload import (  # noqa: E402
     PAPER_PROFILE_KEYS,
     project_papers_payload,
 )
+from core.storage.qdrant_operations import retry_qdrant_operation  # noqa: E402
 
 # Alias kept for backward-compat callers/tests. The executable whitelist is
 # now owned by core.storage.papers_payload (papers_payload_contract_plan.md
@@ -110,44 +118,60 @@ def _upsert_with_retry(
     kills the worker. We retry the same batch with `wait=True` so retried
     writes are guaranteed idempotent (Qdrant upsert is point_id-keyed).
     """
-    for attempt in range(max_retries):
-        try:
-            client.upsert(collection, points=points, wait=True)
-            return
-        except Exception as e:  # noqa: BLE001 - includes ResponseHandlingException
-            if attempt == max_retries - 1:
-                raise
-            wait = 2 ** attempt  # 1, 2, 4, 8, 16
-            print(
-                f"    [retry {attempt + 1}/{max_retries}] "
-                f"{type(e).__name__}: sleep {wait}s",
-                flush=True,
-            )
-            time.sleep(wait)
+    retry_qdrant_operation(
+        f"upsert(collection={collection} points={len(points)})",
+        lambda: client.upsert(collection, points=points, wait=True),
+        max_attempts=max_retries,
+    )
+
+
+AUTO = "auto"
 
 
 def upsert_shard(client: QdrantClient, collection: str, path: Path,
                  batch_size: int, dry_run: bool = False,
                  start_offset: int = 0,
                  max_points: int = 0,
-                 progress_callback=None) -> int:
+                 progress_callback=None,
+                 pause_s: float = 0.0,
+                 layout: CorpusLayout | None = None) -> int:
     """Stream parquet via iter_batches → bounded RAM (~25 MB / batch).
 
     `start_offset`: skip first N rows (resume after kill).
     `max_points`: stop after upserting N points from this shard (0 = no cap).
     `progress_callback(rows_done)`: invoked after each upsert flush so caller
     can persist resume checkpoint.
+    `pause_s`: sleep after each flush. Qdrant, swap and SQLite share one SATA
+    SSD on .88; back-to-back wait=True upserts starve live search reads until
+    gRPC hits DEADLINE_EXCEEDED (503). The gap lets search reads through.
 
     Reliability: every batch is upserted with wait=True so the worker only
     progresses after Qdrant ACKs the write. This is what D3 got wrong
     (wait=False → 56% silently dropped under write pressure).
+
+    `collection="auto"` sends each point to the paper collection its payload
+    belongs to under `layout` (default: the runtime corpus layout) — all of them to
+    `papers` under the mixed layout. Every point passes the pre-write guard, so an
+    explicit target refuses a batch holding a point that belongs elsewhere before
+    that batch is written.
     """
+    layout = layout or current_layout()
     pf = pq.ParquetFile(path)
     n = pf.metadata.num_rows
-    points: list[PointStruct] = []
+    pending: dict[str, list[PointStruct]] = {}
+    buffered = 0
     sent = 0
     seen = 0
     tag = "[dry]" if dry_run else "    "
+
+    def flush() -> None:
+        nonlocal buffered, sent
+        for target, batch in pending.items():
+            if batch and not dry_run:
+                _upsert_with_retry(client, target, batch)
+        sent += buffered
+        pending.clear()
+        buffered = 0
 
     cols_needed = ["point_id", "dense", "sparse_indices", "sparse_values", "payload_json"]
     for rb in pf.iter_batches(batch_size=batch_size, columns=cols_needed):
@@ -157,7 +181,11 @@ def upsert_shard(client: QdrantClient, collection: str, path: Path,
             seen += 1
             if seen <= start_offset:
                 continue
-            points.append(PointStruct(
+            payload = canonicalize_payload(json.loads(cols["payload_json"][i]))
+            target = (collection_for_payload(payload, layout) if collection == AUTO
+                      else collection)
+            check_paper_point(target, payload, layout)
+            pending.setdefault(target, []).append(PointStruct(
                 id=int(cols["point_id"][i]),
                 vector={
                     "dense": [float(x) for x in cols["dense"][i]],
@@ -166,24 +194,22 @@ def upsert_shard(client: QdrantClient, collection: str, path: Path,
                         values=list(cols["sparse_values"][i]),
                     ),
                 },
-                payload=canonicalize_payload(json.loads(cols["payload_json"][i])),
+                payload=payload,
             ))
-            if len(points) >= batch_size:
-                if not dry_run:
-                    _upsert_with_retry(client, collection, points)
-                sent += len(points)
+            buffered += 1
+            if buffered >= batch_size:
+                flush()
                 print(f"{tag} upserted {start_offset + sent:,}/{n:,}", flush=True)
                 if progress_callback:
                     progress_callback(start_offset + sent)
-                points = []
+                if pause_s and not dry_run:
+                    time.sleep(pause_s)
                 if max_points and sent >= max_points:
                     del cols
                     return sent
         del cols
-    if points:
-        if not dry_run:
-            _upsert_with_retry(client, collection, points)
-        sent += len(points)
+    if buffered:
+        flush()
         print(f"{tag} upserted {start_offset + sent:,}/{n:,}", flush=True)
         if progress_callback:
             progress_callback(start_offset + sent)
@@ -194,8 +220,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--vectors", default="data/remote_embed/vectors")
     parser.add_argument("--url", default=os.environ.get("QDRANT_URL", "http://localhost:6333"))
-    parser.add_argument("--collection", default="papers")
+    parser.add_argument("--collection", default=AUTO,
+                        help="auto (default) routes each point by the corpus layout; "
+                             "an explicit name must match every point")
     parser.add_argument("--batch", type=int, default=1000)
+    parser.add_argument("--pause-ms", type=int, default=250,
+                        help="Sleep between upsert batches so live search keeps disk time (0 = none)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate parquet → PointStruct construction, skip writes")
     parser.add_argument("--max-shards", type=int, default=0,
@@ -219,7 +249,19 @@ def main():
     )
 
     client = QdrantClient(url=args.url, timeout=180)
-    before = client.get_collection(args.collection).points_count
+    layout = current_layout()  # one layout for the whole run
+    if args.collection == AUTO:
+        targets = [name for name in paper_collections().values()
+                   if client.collection_exists(name)]
+    else:
+        targets = [args.collection]
+
+    def _points() -> int:
+        return sum(client.get_collection(name).points_count for name in targets)
+
+    before = _points()
+    layout_name = "split" if layout.split else "mixed"
+    print(f"corpus layout: {layout_name}; targets={targets}", flush=True)
     mode_tag = "DRY-RUN (read-only)" if args.dry_run else "EXECUTE"
     print(f"[{mode_tag}] qdrant {args.collection} before = {before:,}", flush=True)
 
@@ -251,6 +293,8 @@ def main():
             start_offset=start_offset,
             max_points=shard_cap,
             progress_callback=_save_progress if not args.dry_run else None,
+            pause_s=args.pause_ms / 1000,
+            layout=layout,
         )
         total += n
         # Only mark shard "done" if we ingested it fully (no smoke-test cap hit)
@@ -268,7 +312,7 @@ def main():
             print(f"[stop] hit --max-shards {args.max_shards}", flush=True)
             break
 
-    after = client.get_collection(args.collection).points_count
+    after = _points()
     print(f"[{mode_tag}] DONE processed_chunks={total:,}  after={after:,}  delta={after - before:,}", flush=True)
 
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer } from 'react';
+import { useCallback, useEffect, useId, useReducer } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion';
@@ -49,6 +49,14 @@ export default function MorphGrid<T>({
     initialMorphState<string>,
   );
   const reduceMotion = useReducedMotion();
+  // framer-motion's layoutId is global unless a LayoutGroup with an `id` namespaces it. Every
+  // grid on a page gets its own, so only this grid's compact card and its expanded copy share
+  // an id. Without it the Tasks page, one grid per lifecycle column with a stack of the same
+  // subject in several columns (a running attempt beside completed and failed ones), had
+  // several mounted cards per layoutId: framer keeps only the newest visible and projects the
+  // others onto it at opacity 0 (blank slots until a reload re-mounted them), and a new
+  // attempt flew in from another column (2026-11-21: 58 of 400 samples over 40 s on .88).
+  const layoutGroupId = useId();
   const close = useCallback(() => dispatch({ type: 'close' }), []);
 
   useEffect(() => {
@@ -94,7 +102,7 @@ export default function MorphGrid<T>({
     // coexist as separate layers — whichever is current occupies this one
     // box, and `layout` on the wrapper lets the box itself resize to fit.
     return (
-      <LayoutGroup>
+      <LayoutGroup id={layoutGroupId}>
         <motion.div layout transition={{ duration: reduceMotion ? 0 : 0.2 }}>
           {expandedItem ? (
             <motion.div layoutId={layoutId(state.expandedKey as string)} style={{ position: 'relative' }}>
@@ -110,7 +118,7 @@ export default function MorphGrid<T>({
   }
 
   return (
-    <LayoutGroup>
+    <LayoutGroup id={layoutGroupId}>
       {grid}
 
       {/* Portaled to document.body: a `position: fixed` element confined to

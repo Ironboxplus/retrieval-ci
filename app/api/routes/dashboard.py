@@ -1,7 +1,7 @@
 """Operations dashboard endpoints — multi-dimensional system observability.
 
 Each endpoint focuses on one slice of the system so the frontend can poll them
-at different cadences (e.g. qdrant/overview at 10s, distribution at 60s).
+at different cadences (e.g. qdrant/overview at 10s, distribution at 10 min).
 """
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ from pathlib import Path
 
 import requests
 from fastapi import APIRouter, HTTPException
+
+from core.cache import DISTRIBUTION_TTL_SECONDS, TOTAL_COUNT_TTL_SECONDS, stats_cache
+from core.timestamps import local_naive_iso, utc_naive_iso
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -77,6 +80,31 @@ def _dir_size_bytes(p: Path) -> int:
     return total
 
 
+def _sql_totals() -> dict:
+    with _open_sqlite() as conn:
+        c = conn.cursor()
+        return {
+            "papers": c.execute("SELECT COUNT(*) FROM papers").fetchone()[0],
+            "documents": c.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
+            "chunks": c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+        }
+
+
+def _table_row_counts() -> list[dict]:
+    with _open_sqlite() as conn:
+        c = conn.cursor()
+        tables = [
+            r[0]
+            for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+        ]
+        return [
+            {"name": t, "rows": c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]}
+            for t in tables
+        ]
+
+
 # ---------- overview (high-level KPIs) ----------
 @router.get("/overview")
 def overview() -> dict:
@@ -85,26 +113,32 @@ def overview() -> dict:
         "ts": time.time(),
         "uptime_s": round(time.time() - _PROCESS_START, 1),
     }
-    # SQL counts (fast, indexed)
-    with _open_sqlite() as conn:
-        c = conn.cursor()
-        out["sql"] = {
-            "papers": c.execute("SELECT COUNT(*) FROM papers").fetchone()[0],
-            "documents": c.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
-            "chunks": c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
-        }
-    # Qdrant collection meta (1 call)
+    # COUNT(*) over the multi-million-row chunks table is a 1-14 s scan: served from the
+    # shared stale-while-revalidate cache, never recomputed on the request path.
+    out["sql"] = stats_cache.get(
+        ("dashboard.sql_totals", DB_PATH), _sql_totals, ttl=TOTAL_COUNT_TTL_SECONDS
+    )
+    # Qdrant collection meta (1 call) + corpus point counts. SQL chunks cover
+    # papers, arXiv and reviews, so `points` is the distinct total over the
+    # papers/arxiv/reviews collections (just `papers` before the split).
     try:
+        from core.storage.corpus_store import paper_store
+
         r = _qdrant("GET", f"/collections/{QDRANT_COLLECTION}")["result"]
+        counts = paper_store().point_counts()
+        legacy = counts.pop("legacy_copies")
+        points = sum(counts.values()) - legacy
         out["qdrant"] = {
             "status": r["status"],
-            "points": r["points_count"],
+            "points": points,
+            "collections": counts,
+            "legacy_copies": legacy,
             "indexed_vectors": r["indexed_vectors_count"],
             "segments": r["segments_count"],
             "optimizer_status": r.get("optimizer_status"),
         }
         out["coverage"] = (
-            round(r["points_count"] / out["sql"]["chunks"], 4)
+            round(points / out["sql"]["chunks"], 4)
             if out["sql"]["chunks"]
             else 0.0
         )
@@ -112,7 +146,7 @@ def overview() -> dict:
         # this number directly (e.g. "+1,337") instead of making the reader do
         # points/chunks math in their head. `coverage` stays for compatibility;
         # the frontend no longer renders it.
-        out["vector_delta"] = r["points_count"] - out["sql"]["chunks"]
+        out["vector_delta"] = points - out["sql"]["chunks"]
     except Exception as e:  # noqa: BLE001 — surface Qdrant outage in payload
         out["qdrant"] = {"error": str(e)}
         out["coverage"] = None
@@ -198,19 +232,11 @@ def sqlite_detail() -> dict:
         if side.exists():
             out[key] = side.stat().st_size
 
+    out["tables"] = stats_cache.get(
+        ("dashboard.table_rows", DB_PATH), _table_row_counts, ttl=DISTRIBUTION_TTL_SECONDS
+    )
     with _open_sqlite() as conn:
         c = conn.cursor()
-        # all user tables
-        tables = [
-            r[0]
-            for r in c.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-            ).fetchall()
-        ]
-        out["tables"] = [
-            {"name": t, "rows": c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]}
-            for t in tables
-        ]
         # index list
         indexes = c.execute(
             "SELECT name, tbl_name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY tbl_name, name"
@@ -227,9 +253,7 @@ def sqlite_detail() -> dict:
 
 
 # ---------- distribution charts ----------
-@router.get("/distribution")
-def distribution() -> dict:
-    """Aggregations for charts: chunks-by-level, papers-by-venue, papers-by-year."""
+def _compute_distribution() -> dict:
     with _open_sqlite() as conn:
         c = conn.cursor()
         chunk_levels = {
@@ -269,6 +293,18 @@ def distribution() -> dict:
         "venue_year": venue_year,
         "data_sources": data_sources,
     }
+
+
+@router.get("/distribution")
+def distribution() -> dict:
+    """Aggregations for charts: chunks-by-level, papers-by-venue, papers-by-year.
+
+    The GROUP BY scans take 2-19 s on the production tables, so the result is served from
+    the shared stale-while-revalidate cache (10 min TTL, background refresh).
+    """
+    return stats_cache.get(
+        ("dashboard.distribution", DB_PATH), _compute_distribution, ttl=DISTRIBUTION_TTL_SECONDS
+    )
 
 
 # ---------- system health (service / disk) ----------
@@ -347,12 +383,17 @@ def activity(limit: int = 20) -> dict:
         ).fetchone()[0]
         # Schema: id, task_type, status, ..., created_at, started_at, completed_at, ..., last_heartbeat
         # "Recent activity" ranks by COALESCE(completed_at, started_at, created_at)
+        # The raw columns are naive strings in two conventions (core/timestamps.py):
+        # created_at is UTC, the rest are server-local. They leave here with offsets.
         recent = [
-            dict(zip(
-                ["id", "task_type", "status", "progress", "total",
-                 "created_at", "started_at", "completed_at", "last_heartbeat"],
-                row,
-            ))
+            {
+                **dict(zip(["id", "task_type", "status", "progress", "total"], row[:5])),
+                "created_at": utc_naive_iso(row[5]),
+                **{
+                    name: local_naive_iso(value)
+                    for name, value in zip(["started_at", "completed_at", "last_heartbeat"], row[6:])
+                },
+            }
             for row in c.execute(
                 """SELECT id, task_type, status, progress, total,
                           created_at, started_at, completed_at, last_heartbeat
