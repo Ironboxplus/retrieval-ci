@@ -10,6 +10,7 @@ from app.services.scope_paths import (
     normalize_relative_path,
     path_matches,
     scope_looks_like_path,
+    scopes_share_files,
 )
 
 
@@ -156,3 +157,61 @@ def test_is_scope_ancestor_only_at_path_boundary():
     assert not is_scope_ancestor("/erp", "/erp-backup/x")
     # Reversed (child, parent) is not an ancestor.
     assert not is_scope_ancestor("/erp/results", "/erp")
+
+
+# --- scopes_share_files: which scopes can hold the SAME physical file ---
+
+def test_scopes_share_files_equal_ancestor_and_descendant():
+    assert scopes_share_files("/erp", "/erp")
+    assert scopes_share_files("/erp", "/erp/results/t")
+    assert scopes_share_files("/erp/results/t", "/erp")
+    assert scopes_share_files("C:/w/erp", "C:/w/erp/sub")
+    assert scopes_share_files("C:/w/erp/sub", "C:/w/erp")
+
+
+def test_scopes_share_files_windows_case_and_separator_variants_are_the_same_scope():
+    assert scopes_share_files("C:/w/erp", "c:\W\ERP")
+    assert scopes_share_files("c:\W\ERP\\", "C:/w/erp/sub")
+    assert scopes_share_files("C:/w/erp/SUB", "c:/W/ERP")
+
+
+def test_scopes_share_files_posix_case_is_significant():
+    assert not scopes_share_files("/repo/Foo", "/repo/foo")
+    assert not scopes_share_files("/Repo", "/repo/x")
+
+
+def test_scopes_share_files_rejects_siblings_and_unrelated_scopes():
+    # Shared string prefix is not a shared directory.
+    assert not scopes_share_files("/erp", "/erp-backup")
+    assert not scopes_share_files("/erp-backup/x", "/erp")
+    assert not scopes_share_files("C:/w/erp", "C:/w/erp-backup")
+    assert not scopes_share_files("/a/b", "/a/c")
+    assert not scopes_share_files("C:/w/erp", "D:/w/erp")
+
+
+def test_scopes_share_files_relative_names_compare_lexically():
+    assert scopes_share_files("proj", "proj")
+    assert scopes_share_files("proj", "proj/sub")
+    assert not scopes_share_files("proj", "proj-2")
+    assert not scopes_share_files("proj", "other")
+
+
+def test_scopes_share_files_agrees_with_file_abspath_identity():
+    # The invariant the fan-out relies on: every pair that resolves to one absolute path
+    # is reported as related.
+    pairs = [
+        (("C:/w/erp", "sub/a.py"), ("C:/w/erp/sub", "a.py")),
+        (("c:/W/ERP", "a.py"), ("C:\w\erp", "a.py")),
+        (("/erp", "x/y/a.py"), ("/erp/x", "y/a.py")),
+    ]
+    for (scope_a, rel_a), (scope_b, rel_b) in pairs:
+        assert file_abspath(scope_a, rel_a) == file_abspath(scope_b, rel_b)
+        assert scopes_share_files(scope_a, scope_b)
+
+
+def test_scopes_share_files_malformed_scope_is_unrelated_not_an_error():
+    # file_abspath/canonicalize raise ValueError on these, so such a scope can never
+    # resolve a file to an absolute path; it cannot share one with anything.
+    assert not scopes_share_files("E:repo", "E:repo")
+    assert not scopes_share_files("E:repo", "E:/repo")
+    assert not scopes_share_files("//?/C:/repo", "C:/repo")

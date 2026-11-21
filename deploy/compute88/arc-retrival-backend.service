@@ -1,7 +1,7 @@
 [Unit]
 Description=Arc Retrieval backend low-memory service on compute .88
-After=network-online.target arc-retrival-qdrant.service
-Wants=network-online.target
+After=network-online.target arc-retrival-qdrant.service arc-vllm-embed.service arc-vllm-rerank.service
+Wants=network-online.target arc-vllm-embed.service arc-vllm-rerank.service
 Requires=arc-retrival-qdrant.service
 RequiresMountsFor=/mnt/lsb/retrival
 StartLimitIntervalSec=120
@@ -19,16 +19,35 @@ Environment=QDRANT_COLLECTION_ON_DISK=true
 Environment=QDRANT_COLLECTION_MEMMAP_THRESHOLD=5000
 Environment=QDRANT_COLLECTION_MAX_OPTIMIZATION_THREADS=1
 Environment=QDRANT_UPSERT_BATCH=128
+# papers dense queries rescore 2x oversampled candidates against the originals
+# (2-bit TurboQuant since 2026-10-14); 0 restores Qdrant's per-method default.
+Environment=QDRANT_PAPERS_DENSE_OVERSAMPLING=2.0
 Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
 Environment=CUDA_VISIBLE_DEVICES=0
-# The cap applies to the whole Retrieval CUDA allocator before BGE-M3 loads.
-# Keep this synchronized with verify_reranker_cuda_canary.py's frozen .88 gate.
-Environment=RERANKER__CUDA_MEMORY_FRACTION=0.35
-Environment=RERANKER__BATCH_SIZE=128
+# Every model runs as a vLLM user service (arc-vllm-embed.service, arc-vllm-rerank.service); the backend
+# holds no model and is their client. Wants, not Requires: the backend still starts, and answers what needs
+# no model, while a service restarts. At start-up it waits up to EMBEDDING__SERVICE_WAIT_S (180 s) for the
+# embedding service and refuses to start if that service serves another revision or length limit.
+Environment=EMBEDDING__SERVICE_URL=http://127.0.0.1:18200
+Environment=RERANKER__SERVICE_URL=http://127.0.0.1:18201
+# CUDA allocator cap REMOVED 2026-09-21 by operator decision.
+# It was a self-imposed ceiling, not a real limit: the OOMs it caused on
+# 2026-09-14, 09-15 (cap 0.25 = 2.90 GiB) and 09-21 (cap 0.35 = 4.06 GiB) all
+# reported 7.6-8.5 GiB still FREE on the card. Nothing else runs on GPU 0.
+# config.py defaults reranker.cuda_memory_fraction to None, and
+# configure_cuda_memory_fraction() then returns without calling
+# set_per_process_memory_fraction at all -- so omitting the variable is the
+# documented "no cap" state, not an unset-to-zero hazard.
+# NOTE: verify_reranker_cuda_canary.py still hard-refuses any value but its
+# frozen 0.25, so that gate can no longer validate this deployment.
 Environment=RERANKER__IDLE_CACHE_LIMIT_MIB=0
 Environment=PIPELINE_LOCAL_GPU_IDS=0
-Environment=PIPELINE_LOCAL_MIN_FREE_RATIO=0
-Environment=PIPELINE_LOCAL_MIN_FREE_MB=8704
+# The local extract stage runs PaddleOCR-VL (scripts/remote_pvl/pvl_worker.py) instead of Marker; unset = Marker.
+Environment=PIPELINE_LOCAL_EXTRACTOR=/home/arc/retrival-4090-migration/retrival/deploy/compute88/local_extractor.json
+# download_from=volume / arXiv source=volume read the 115 volumes through this host's OpenList node as its read-only user.
+Environment=OPENLIST_URL=http://127.0.0.1:5244
+Environment=OPENLIST_READER_USER=retrival-reader
+Environment=OPENLIST_READER_PASS_FILE=/home/arc/openlist/reader.pass
 Environment=BGE_M3_PATH=/home/arc/retrival-4090-migration/.cache/modelscope/BAAI/bge-m3
 Environment=BGE_RERANKER_PATH=/home/arc/retrival-4090-migration/.cache/modelscope/BAAI/bge-reranker-v2-m3
 Environment=HF_HUB_OFFLINE=1
@@ -50,6 +69,16 @@ Restart=always
 RestartSec=5
 TimeoutStartSec=480
 TimeoutStopSec=60
+# SIGTERM to the backend only; what is left of the unit gets SIGKILL after it exits. The backend
+# stops its stage workers itself and leaves their tasks running for the next start
+# (orchestrator.request_shutdown). With control-group, a restart signalled the extract worker
+# directly and the stage gated its partial Markdown: TPAMI 2026 (task 2577) failed on 2026-11-21.
+KillMode=mixed
+# The default soft limit of 1024 descriptors was the whole budget for sockets,
+# SQLite handles and GPU devices; on 2026-10-07 896 silent forwarded connections
+# exhausted it and the backend answered nothing for an hour. Silent connections
+# are now closed by app/api/idle_connections.py; this is headroom, not the fix.
+LimitNOFILE=65536
 
 [Install]
 WantedBy=default.target

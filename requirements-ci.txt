@@ -1,0 +1,33 @@
+# Test-only dependencies for .github/workflows/tests.yml, installed on top of
+# requirements.txt.  Product dependencies stay in requirements.txt.
+
+# Sharding and runaway protection.  pytest-split balances by recorded duration
+# (.test_durations); pytest-timeout keeps one hung test from burning a whole shard.
+pytest-split>=0.10
+pytest-timeout>=2.4
+pytest-asyncio>=1.4                     # tests use @pytest.mark.asyncio
+
+# Held to what the dev gate and the .88 server run: transformers 5.x is a major jump past the
+# 4.56 the suite was developed on, and qdrant-client must stay within one minor of the
+# v1.18 server the tests talk to.
+transformers<5
+qdrant-client<1.19
+
+# The dev gate runs fastapi 0.135.3.  Newer fastapi (0.162) puts _IncludedRouter objects in
+# app.routes, which tests/test_async_routes_no_sync_db.py does not expect: a test
+# assumption, not a product break, so the pin stays here and not in requirements.txt.
+# (starlette<1.4 and mcp<2 are product pins and live in requirements.txt.)
+fastapi==0.135.3
+
+# Imported by tests but absent from requirements.txt (the dev venv has them
+# through the gateway and mcp_plugin installs).
+# The range mcp_plugin/pyproject.toml publishes (mcp>=1.29,<1.30) cannot share an
+# environment with browser-use, so the plugin's own dependencies are warmed separately.
+tree-sitter>=0.23,<0.26                 # mcp_plugin runtime deps, imported by plugin tests
+tree-sitter-language-pack>=1.8,<1.13
+PyJWT[crypto]==2.12.1                   # gateway OIDC tests
+cryptography==46.0.7
+itsdangerous>=2.2
+packaging>=25.0
+build>=1.2                              # test_mcp_package_artifact builds the plugin wheel
+hatchling>=1.27,<1.28                   # mcp_plugin build backend; the test builds with --no-isolation

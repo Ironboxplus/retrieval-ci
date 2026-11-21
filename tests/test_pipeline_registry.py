@@ -1,6 +1,6 @@
 """TDD: registry — assemble the ordered ingest pipeline from stage factories.
 
-build_ingest_pipeline(ctx) must return the 5 stages in canonical order, each a
+build_ingest_pipeline(ctx) must return the 6 stages in canonical order, each a
 StageSpec, generic for ANY (venue, year). No real I/O — just construction.
 """
 from __future__ import annotations
@@ -49,12 +49,12 @@ def ctx(store, tmp_path):
 
 
 def test_stage_keys_constant():
-    assert STAGE_KEYS == ["download", "extract", "preindex", "embed", "ingest"]
+    assert STAGE_KEYS == ["download", "extract", "preindex", "embed", "ingest", "cleanup"]
 
 
-def test_build_returns_five_specs_in_order(ctx):
+def test_build_returns_six_specs_in_order(ctx):
     specs = build_ingest_pipeline(ctx)
-    assert len(specs) == 5
+    assert len(specs) == 6
     assert [s.key for s in specs] == STAGE_KEYS
     for s in specs:
         assert isinstance(s, StageSpec)
@@ -86,12 +86,21 @@ def test_pipeline_is_generic_for_any_venue(store, tmp_path):
 
 
 # ============================================= W106 execution_mode branch
-def test_default_mode_is_remote_extract_embed(ctx):
-    """Default execution_mode='remote' → KSS-style extract/embed (resource_key
-    keyed by ssh_target, not 'gpu-local')."""
+def test_default_mode_is_local_extract_embed(ctx):
+    """No execution_mode → local extract/embed. The retired kss/SMB remote
+    topology runs only when a caller asks for it by name."""
     by_key = {s.key: s for s in build_ingest_pipeline(ctx)}
-    assert by_key["extract"].resource_key == f"gpu-{ctx.ssh_target}"
-    assert by_key["embed"].resource_key == f"gpu-{ctx.ssh_target}"
+    assert by_key["extract"].resource_key == "gpu-local"
+    assert by_key["embed"].resource_key == "embed-service"   # a client of the vLLM service, no card
+
+
+def test_remote_mode_still_selectable_by_name(store, tmp_path):
+    task_id = store.create_task(task_type="ingest_pipeline")
+    remote = StageContext(venue="CVPR", year=2026, store=store, task_id=task_id,
+                          corpus_root=tmp_path, execution_mode="remote")
+    by_key = {s.key: s for s in build_ingest_pipeline(remote)}
+    assert by_key["extract"].resource_key == f"gpu-{remote.ssh_target}"
+    assert by_key["embed"].resource_key == f"gpu-{remote.ssh_target}"
 
 
 def test_local_mode_uses_local_extract_embed(store, tmp_path):
@@ -104,21 +113,24 @@ def test_local_mode_uses_local_extract_embed(store, tmp_path):
     # same canonical order + keys
     assert [s.key for s in specs] == STAGE_KEYS
     by_key = {s.key: s for s in specs}
-    # extract + embed swapped to the local variants (gpu-local resource key)
+    # extract + embed swapped to the local variants: extract holds the card, embed the service
     assert by_key["extract"].resource_key == "gpu-local"
-    assert by_key["embed"].resource_key == "gpu-local"
+    assert by_key["embed"].resource_key == "embed-service"
     assert by_key["extract"].preflight is st.extract_local_preflight
-    assert by_key["embed"].preflight is st.embed_local_preflight
-    # download / preindex / ingest unchanged (local in both modes)
+    # embed's own checks sit behind the nothing-to-embed short-circuit (stages.embeds_only_new_chunks)
+    assert by_key["embed"].preflight is not None
+    # download / preindex / ingest / cleanup unchanged (local in both modes)
     assert by_key["download"].resource_key == "net"
     assert by_key["preindex"].resource_key == "sql"
     assert by_key["ingest"].resource_key == "qdrant"
+    assert by_key["cleanup"].resource_key == "qdrant"
 
 
 def test_local_vs_remote_pick_different_makers(store, tmp_path):
     """Sanity: remote ctx → remote extract preflight; local ctx → local one."""
     tid_r = store.create_task(task_type="ingest_pipeline")
-    remote = StageContext(venue="CVPR", year=2026, store=store, task_id=tid_r, corpus_root=tmp_path)
+    remote = StageContext(venue="CVPR", year=2026, store=store, task_id=tid_r, corpus_root=tmp_path,
+                          execution_mode="remote")
     tid_l = store.create_task(task_type="ingest_pipeline")
     local = StageContext(venue="CVPR", year=2026, store=store, task_id=tid_l,
                          corpus_root=tmp_path, execution_mode="local")

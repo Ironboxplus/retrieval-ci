@@ -1,8 +1,14 @@
 """Application service for the index-inventory catalog."""
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+from app.services.code_kb.analysis_store import CodeAnalysisStore
 from app.services.index_catalog.repository import IndexCatalogRepository
 from app.services.index_catalog.schemas import (
+    AUTO_INDEX_MIN_INTERVAL_S,
     IndexOwnerSummary,
     IndexReportRequest,
     IndexReportResponse,
@@ -22,13 +28,28 @@ from app.services.scope_paths import (
     is_scope_ancestor,
     is_windows_scope,
     normalize_scope,
+    scope_ancestors,
     scope_looks_like_path,
+    sql_foldable,
 )
 
 
 def _dir_of(rel_path: str) -> str:
     norm = rel_path.replace("\\", "/")
     return norm.rsplit("/", 1)[0] if "/" in norm else "."
+
+
+@dataclass(frozen=True)
+class ResolvedScope:
+    """An unindexed directory mapped onto the indexed ancestor that covers it.
+
+    ``scope`` is the ancestor (canonical spelling); ``path_prefix`` is the requested
+    directory relative to it, forward-slashed and without a trailing slash; ``aliases``
+    is ``scope`` plus legacy case-variant spellings, shaped like
+    ``IndexCatalogService.equivalent_project_scopes``."""
+    scope: str
+    path_prefix: str
+    aliases: list[str]
 
 
 class IndexCatalogService:
@@ -58,7 +79,8 @@ class IndexCatalogService:
             auto_refresh=bool(row.auto_refresh),
             respect_gitignore=bool(row.respect_gitignore),
             exclude_globs=list(row.exclude_globs_json or []),
-            min_check_interval_s=row.min_check_interval_s,
+            # a row written before the floor existed must not fail validation
+            min_check_interval_s=max(row.min_check_interval_s, AUTO_INDEX_MIN_INTERVAL_S),
         )
 
     def upsert_policy(
@@ -86,6 +108,8 @@ class IndexCatalogService:
         kind: str | None = None,
         detail: bool = True,
         code_scope_states: dict[tuple[str, str, str], dict[str, object]] | None = None,
+        lean: bool = False,
+        project_contains: str | None = None,
     ) -> InventoryResponse:
         """Build the user → host → project → dir → file tree from flat rows.
 
@@ -94,7 +118,16 @@ class IndexCatalogService:
         per-file tree carries a 64-char content_hash on every file and ballooned to ~10MB for
         a heavy indexer — big enough to truncate over the wire and break the inventory tool,
         which only ever renders project-level counts + freshness. Detail (default) is kept for
-        the admin console and any consumer that genuinely wants the file list."""
+        the admin console and any consumer that genuinely wants the file list.
+
+        ``lean`` (with ``detail``) loads only the columns an incremental diff compares —
+        rel_path, kind, language, chunk_count, content_hash, size_bytes — as bare columns
+        instead of whole ORM rows, so ``indexed_at``/``collection``/``metadata`` come back
+        empty. ``project_contains`` keeps only project NODES whose name contains the
+        fragment (case-insensitive, backslash read as slash); users, hosts and ``totals`` still
+        describe the whole inventory, so a filtered call renders exactly what filtering
+        the unfiltered response would."""
+        needle = (project_contains or "").replace("\\", "/").lower()
         runtime_code_scope_states = code_scope_states or {}
         # Queue state disappears on a backend restart, but an in-place Qdrant mutation
         # must remain fail-closed until the job records a complete snapshot. A runtime
@@ -166,7 +199,9 @@ class IndexCatalogService:
         if detail:
             # Per-file tree: needs every row (content_hash included) to build the
             # dir/file breakdown the admin console renders.
-            rows = self.repository.list_inventory(
+            list_rows = (self.repository.list_inventory_baseline if lean
+                         else self.repository.list_inventory)
+            rows = list_rows(
                 owner_user_id=owner_user_id, host=host, project=project, kind=kind,
             )
             for row in rows:
@@ -192,6 +227,7 @@ class IndexCatalogService:
             # file row just to re-sum them in Python (A.2/A.3 of the plan doc).
             agg_rows = self.repository.aggregate_inventory(
                 owner_user_id=owner_user_id, host=host, project=project, kind=kind,
+                winners_project_contains=needle or None,
             )
             for agg in agg_rows:
                 p = ensure_project(
@@ -334,6 +370,10 @@ class IndexCatalogService:
                         code_active_index_job_id = None
                         code_previous_completed_snapshot_available = None
                         code_recovery_required = None
+                    h_files += p_files
+                    h_chunks += p_chunks
+                    if needle and needle not in project_name.replace("\\", "/").lower():
+                        continue  # counted above, not rendered
                     project_nodes.append(InventoryProjectNode(
                         project=project_name, host=host_name, root_dir=p["root_dir"],
                         file_count=p_files, chunk_count=p_chunks,
@@ -345,8 +385,6 @@ class IndexCatalogService:
                         code_recovery_required=code_recovery_required,
                         dirs=dir_nodes,
                     ))
-                    h_files += p_files
-                    h_chunks += p_chunks
                 host_nodes.append(InventoryHostNode(
                     host=host_name, file_count=h_files, chunk_count=h_chunks,
                     projects=project_nodes,
@@ -531,6 +569,34 @@ class IndexCatalogService:
             ancestor_blocks=ancestor_blocks, child_warnings=child_warnings,
             ancestor_widenings=ancestor_widenings)
 
+    def _windows_scope_spellings(
+        self, *, owner_user_id: str, kind: str, canonicals: Sequence[str],
+    ) -> dict[str, list[str]]:
+        """Stored spellings of each canonical Windows scope (the canonical one included
+        when stored), read from the rows of those scopes alone.
+
+        SQL finds candidates by ``lower(project)``; the canonical check stays in Python.
+        A scope ``lower()`` cannot fold (non-ASCII letters with case) has no SQL key, so
+        that case alone reads the owner's compact project list."""
+        wanted = set(canonicals)
+        foldable = [scope for scope in canonicals if sql_foldable(scope)]
+        stored: list[str] = []
+        if foldable:
+            stored += self.repository.project_spellings(
+                owner_user_id=owner_user_id, kind=kind, folded_scopes=foldable)
+        if len(foldable) < len(wanted):
+            stored += [row["project"] for row in self.repository.list_projects(
+                owner_user_id=owner_user_id, kind=kind)]
+        spellings: dict[str, list[str]] = defaultdict(list)
+        for spelling in dict.fromkeys(stored):
+            try:
+                canonical = canonicalize_scope_path(spelling or "")
+            except ValueError:
+                continue  # a stored spelling that cannot be canonicalised covers nothing
+            if canonical in wanted:
+                spellings[canonical].append(spelling)
+        return spellings
+
     def equivalent_project_scopes(
         self,
         *,
@@ -543,19 +609,68 @@ class IndexCatalogService:
         New clients write canonical case-folded Windows scope names. Older inventory rows
         can still contain the same NTFS directory with different component casing; search
         includes them until the owner re-indexes instead of claiming the canonical spelling
-        is absent. This reads the compact project list only, never a per-file inventory or
-        Qdrant path enumeration. POSIX scopes intentionally remain case-sensitive.
+        is absent. This reads only the catalog rows of that scope's spellings (an index
+        range on ``lower(project)``), never the owner's other scopes, a per-file inventory
+        or a Qdrant path enumeration. POSIX scopes intentionally remain case-sensitive.
         """
         canonical = canonicalize_scope_path(project)
         if not is_windows_scope(canonical):
             return [canonical]
-        variants = {
-            row["project"]
-            for row in self.repository.list_projects(
-                owner_user_id=owner_user_id, kind=kind)
-            if canonicalize_scope_path(row["project"] or "") == canonical
-        }
-        return [canonical, *sorted(variant for variant in variants if variant != canonical)]
+        variants = self._windows_scope_spellings(
+            owner_user_id=owner_user_id, kind=kind, canonicals=[canonical]
+        ).get(canonical, [])
+        return [canonical, *sorted(variant for variant in set(variants) if variant != canonical)]
+
+    def resolve_indexed_scope(
+        self,
+        *,
+        owner_user_id: str,
+        kind: str,
+        scope: str,
+        known_scopes: Sequence[str] | None = None,
+    ) -> ResolvedScope | None:
+        """Map a scope nobody indexed onto its nearest indexed ancestor, else None.
+
+        Search is keyed by exact scope, but a directory inside an indexed one is already
+        covered by it (the nested-scope guard refuses to index it separately). None means
+        "search ``scope`` as given": it has live rows of its own (``known_scopes`` is its
+        spelling plus legacy case variants when the caller already resolved them), it is
+        not an absolute path, or no ancestor is indexed.
+
+        Cost is one index probe per path level (``first_scope_with_live_rows`` stops at the
+        first row), never a read of any scope's files. A Windows scope whose only indexed
+        ancestors carry legacy casing is found by one ``lower(project)`` lookup per level,
+        which reads only the spellings of those ancestors.
+        """
+        ancestors = scope_ancestors(scope)
+        if not ancestors:
+            return None
+        own = list(known_scopes) if known_scopes else [canonicalize_scope_path(scope)]
+        # The scope's own spellings come first: if one of them has rows, nothing is rewritten.
+        nearest = self.repository.first_scope_with_live_rows(
+            owner_user_id=owner_user_id, kind=kind,
+            candidates=[*own, *(ancestor for ancestor, _ in ancestors)])
+        windows = is_windows_scope(scope)
+        if nearest is not None:
+            if nearest in own:
+                return None
+            remainder = dict(ancestors)[nearest]
+            aliases = (
+                self.equivalent_project_scopes(
+                    owner_user_id=owner_user_id, project=nearest, kind=kind)
+                if windows else [nearest])
+            return ResolvedScope(scope=nearest, path_prefix=remainder, aliases=aliases)
+        if not windows:
+            return None
+        spellings = self._windows_scope_spellings(
+            owner_user_id=owner_user_id, kind=kind,
+            canonicals=[ancestor for ancestor, _ in ancestors])
+        for ancestor, remainder in ancestors:
+            if ancestor in spellings:
+                variants = sorted(set(spellings[ancestor]) - {ancestor})
+                return ResolvedScope(
+                    scope=ancestor, path_prefix=remainder, aliases=[ancestor, *variants])
+        return None
 
     def delete_project(self, *, owner_user_id: str, project: str,
                        host: str | None = None, kind: str | None = None) -> int:
@@ -568,6 +683,9 @@ class IndexCatalogService:
         if kind in (None, "code"):
             self.repository.clear_code_scope_visibility(
                 owner_user_id=owner_user_id, project=project)
+            # Standing duplicate pairs of a scope that no longer exists would be reported
+            # as findings about files nobody can search any more.
+            CodeAnalysisStore(self.repository.session_factory).clear(owner_user_id, project)
         return removed
 
     def delete_files(self, *, owner_user_id: str, project: str, host: str | None,

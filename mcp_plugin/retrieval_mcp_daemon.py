@@ -224,7 +224,7 @@ def _first_tool_surface_diff_path(actual_surface: Sequence[dict[str, Any]]) -> s
 # 4k-line FastMCP registration module merely to decide whether reuse is safe.
 # Descriptions are normalized with ``inspect.cleandoc`` before hashing, so a
 # Pydantic renderer's shared docstring margin cannot fence an equivalent daemon.
-TOOL_SURFACE_DIGEST = 'bd84c4a7feba3a79a722cc2b9c255675bef23fb6faad2f652685dd3b191b8d02'
+TOOL_SURFACE_DIGEST = 'a5c8d1662e5de3b2f1bd12e2d7421f653ed25b5a0f0c2550ceb65db0b33d1a46'
 
 # This mirrors the normalized 34-tool public contract at field granularity. It
 # stores only SHA-256 values, so a startup failure can name the first incompatible
@@ -244,11 +244,11 @@ TOOL_SURFACE_FIELD_DIGESTS: dict[str, dict[str, str]] = {
     "download_papers": {"description": "55835aa00e8c560eee24e32c261f2fa8a5a9fae161b347807f3593de3750f773", "inputSchema": "dfdfa44598021be750138b17c1594d0747e35c589f7b506d8ab6f51b65c2df4c"},
     "find_duplicate_code": {"description": "627e84fb9f79487d91f1dc5b58948a4f69d918e46e4c67e8374f9aaee49eca86", "inputSchema": "c2e57a820aa05c16803f7c7a8ea0fe176677b805712d8f958be4af40be3d09e5"},
     "get_paper_markdown": {"description": "6037380e2cc37f140704a6ff32e367f6be9697adf17a25f7cd9824a63616690a", "inputSchema": "3c04520c801780f33bbed6abf81c9150dec6abd22f73dfae724d074fda929ce1"},
-    "index_code": {"description": "2fa02ebcf34983f374aca8ae2a5e58dfbca29213ec320b4b5eed9f7c3286d6cf", "inputSchema": "7b23667ad1ab4b2e0bdbea2a308b1510854427f738b782d92a1e106cdfeb0a2b"},
+    "index_code": {"description": "03600f332a09e89fab1e2834d4546e5dd0ebf2691fe2d9dc341ba2414e9724d8", "inputSchema": "ee6ae415bbdf74a4eef82a9a11c2c160d917569053d076352f15f5c5ca3e794b"},
     "index_code_status": {"description": "f9e60e4e4251a739f05db66c02eff0ec1c24bafe3eaf36b037e331a8701277ac", "inputSchema": "bc114578d48a2a24e83ffcddea52e26c928129f4b666cac1635072bc6e9c767d"},
     "index_inventory": {"description": "25ffae51c918d5c9e8febb4b345058c4684725007739e3229ba21cab04bcd247", "inputSchema": "527a6ba8df21b10b6ae4f3464ff66c3c6ee6701fb9790136211e35a1b786b122"},
     "index_public_code_sources": {"description": "c61b8a835e64e1871295d9dae77e822ad6b631a627c18511c96d36c196f4bbee", "inputSchema": "d2a24eec796f7c59a73782b1cfa63e2a46b874e97cf71ca8a76561bfe0b8a85e"},
-    "journal_index_dir": {"description": "49d197c402faeee2ee3eae21c8df68da239051c90865e2db09a1810194c174ec", "inputSchema": "9ed52c3d871c0885211751331433045be5ec287fd2ec0016c2b6145e63945c16"},
+    "journal_index_dir": {"description": "ec3f8687a09b1dd6f453b787bf6e38cac61336ff25dc81c9eec78abbf0202044", "inputSchema": "9ed52c3d871c0885211751331433045be5ec287fd2ec0016c2b6145e63945c16"},
     "journal_index_status": {"description": "7c60b6a474792f11f95cd1355b68ebbe5238e6c779becca5398dd972ed6c694e", "inputSchema": "205ba4d6e177fd73ee0decc8643292df7e1a9c9a4acef7bca686a2725141ff3c"},
     "journal_recent": {"description": "36104dc6c8647e59ffd65f983d3fa4f53eb46a7064344807768cbce041296874", "inputSchema": "1e43234390b5678884e769026673a5c5c37437d8b5455bafe5db854cdb397242"},
     "journal_record": {"description": "fe2e1659bb794868cb1c94d62e27f6d537be5d06564f330eb612786e9d4e1052", "inputSchema": "cc6eb675cd5b73903e7a639a7a0c744a7ff7582ce55b9c21ea190f38ef91301d"},
@@ -261,7 +261,7 @@ TOOL_SURFACE_FIELD_DIGESTS: dict[str, dict[str, str]] = {
     "import_public_code_repo": {"description": "2110cfe2425f7122a4411019596d4953b212a6ad091bd8e1e80aafe14f15b197", "inputSchema": "f6264d6b6d1f2f4ef9a8c922de197ad6a601ecf168931ca57ee8b9782e64c93e"},
     "public_code_job_status": {"description": "2aa90fcae95bac19fc22667cd025be259d597f2dc15bc2b65325bdf962209bfb", "inputSchema": "4e1efe6585eae2a3e4f1c116db5693cb3d556c20c2c9fad79ab39878d6301676"},
     "search_code": {"description": "98bbd8a4561e9fdca80123860b9bcd8095612e5c61df0c1232e2a3fb991e7617", "inputSchema": "732257043079481d69ef710c55e7976231c43fa636170d19d898a2119a600b11"},
-    "search_arxiv": {"description": "9b8e34771380de50ade592d6b2fe4dfb2d3d4e0c8722ae3d36507f4fc552b1ce", "inputSchema": "798dd9433de5f4e03c2eb713da0747f26c117c3fd1561b61b9019269fce2c55d"},
+    "search_arxiv": {"description": "055b01afc2d6c9310cfe8cc189972a2c77778db8fce882f4ddba585947974e8f", "inputSchema": "1b6355012cee080e5bc062cd978f076224eba35372fce53d1edd8e8fbe0f2097"},
     "search_papers": {"description": "f85d30462faaa0b4885296f027aea42b6bc9e0bb041a7ae39f8ac7ffe1dd7ad8", "inputSchema": "13d70dca40b2d1f28bb5c6fb7e4e0cb401b163fd2606e7c31518f778af7fd76b"},
     "search_within_paper": {"description": "15ba2eeef040521b7d65591c751dc58be07f7c2a09cc11fc198f55db1e030006", "inputSchema": "19ff2d44d3035a7dc77310806928e04a1cc66503827c5cf16aa20da90ff37c8d"},
     "set_public_code_update_policy": {"description": "1b30096b5383d8af64491d497a3445cc065190b5c442b0aac170c35913e01c14", "inputSchema": "0f8bd3c5f9646f03b65adde61483ab1fc8a5ef64c92fe4b18f47e4df04e614b6"},
@@ -891,13 +891,18 @@ def _pid_exists(pid: int) -> bool:
     if pid <= 0:
         return False
     if os.name != "nt":
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        # os.kill(pid, 0) also succeeds for a zombie: the daemon is a child of the shim
+        # that started it, and until that shim reaps it an exited daemon still has a PID.
+        import psutil  # lazy: only the control paths that ask about a PID need it
+
+        if not psutil.pid_exists(pid):
             return False
-        except PermissionError:
+        try:
+            return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+        except psutil.AccessDenied:
             return True
-        return True
 
     kernel32 = ctypes.windll.kernel32
     handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
@@ -1477,6 +1482,15 @@ def _launch_windows_wmi_daemon(
     return _WmiLaunchedDaemon(process_id)
 
 
+def _reap_in_background(process: subprocess.Popen) -> None:
+    """Collect the daemon's exit status whenever it comes.
+
+    The daemon outlives the shim that started it by design, so that shim usually keeps
+    running long after the daemon is told to stop; without a wait() the exited daemon
+    would sit as a zombie for as long as the shim lives."""
+    threading.Thread(target=process.wait, name="daemon-reaper", daemon=True).start()
+
+
 def _launch_daemon(runtime_dir: Path, serve_command: Sequence[str], token: str) -> Any:
     runtime_dir = _ensure_private_runtime_dir(runtime_dir)
     log_path = runtime_dir / "daemon.log"
@@ -1510,7 +1524,7 @@ def _launch_daemon(runtime_dir: Path, serve_command: Sequence[str], token: str) 
     else:
         kwargs["start_new_session"] = True
     with _open_private_log(log_path) as log_handle:
-        return subprocess.Popen(
+        process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
@@ -1518,6 +1532,8 @@ def _launch_daemon(runtime_dir: Path, serve_command: Sequence[str], token: str) 
             cwd=os.getcwd(),
             **kwargs,
         )
+    _reap_in_background(process)
+    return process
 
 
 def _ensure_daemon(

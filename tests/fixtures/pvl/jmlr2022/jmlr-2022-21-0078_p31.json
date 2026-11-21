@@ -1,0 +1,193 @@
+{
+ "paper": "jmlr-2022-21-0078",
+ "page": 31,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.013000000000000012,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     288,
+     78,
+     927,
+     102
+    ],
+    "block_content": "BOULEVARD: REGULARIZED STOCHASTIC GRADIENT BOOSTED TREES"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     183,
+     496,
+     212
+    ],
+    "block_content": "First,  $ \\|Z_0\\| = \\|Y^*\\| \\leq \\infty $. Notice"
+   },
+   {
+    "block_id": 2,
+    "block_label": "display_formula",
+    "block_bbox": [
+     215,
+     230,
+     1010,
+     460
+    ],
+    "block_content": " $$ \\begin{align*}\\|\\mathbb{E}[Z_{b}|\\mathcal{F}_{b-1}]\\|&=\\left\\|\\mathbb{E}\\left[\\frac{b-1}{b}\\hat{Y}_{b-1}+\\frac{\\lambda}{b}S_{n}(Y-\\Gamma_{M}(\\hat{Y}_{b-1}))-Y^{*}\\bigg|\\mathcal{F}_{b-1}\\right]\\right\\|\\\\&=\\left\\|\\frac{b-1}{b}(\\hat{Y}_{b-1}-Y^{*})+\\frac{\\lambda}{b}\\mathbb{E}[S_{n}](Y-\\Gamma_{M}(\\hat{Y}_{b-1}))-\\frac{1}{b}Y^{*}\\right\\|\\\\&\\leq\\frac{b-1}{b}\\left\\|\\hat{Y}_{b-1}-Y^{*}\\right\\|+\\left\\|\\frac{\\lambda}{b}\\mathbb{E}[S_{n}](Y-\\Gamma_{M}(\\hat{Y}_{b-1}))-\\frac{\\lambda}{b}\\mathbb{E}[S_{n}](Y-Y^{*})\\right\\|\\\\&\\leq\\frac{b-1+\\lambda}{b}\\left\\|\\hat{Y}_{b-1}-Y^{*}\\right\\|\\triangleq k_{b}\\left\\|Z_{b-1}\\right\\|,\\end{align*} $$ "
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     482,
+     856,
+     510
+    ],
+    "block_content": "where  $ \\sum_{b=1}^{\\infty}(1-k_b)=\\infty $. Since entries and row sums of are both  $ \\leq1 $,"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     414,
+     534,
+     808,
+     576
+    ],
+    "block_content": " $$ \\|S_{n}\\|\\leq\\sqrt{\\|S_{n}\\|_{\\infty}\\|S_{n}\\|_{1}}\\leq\\sqrt{1\\times n}=\\sqrt{n}. $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     596,
+     276,
+     620
+    ],
+    "block_content": "Therefore"
+   },
+   {
+    "block_id": 6,
+    "block_label": "display_formula",
+    "block_bbox": [
+     213,
+     636,
+     1009,
+     693
+    ],
+    "block_content": " $$ \\|\\epsilon_{b}\\|=\\|Z_{b}-\\mathbb{E}[Z_{b}|\\mathcal{F}_{b-1}]\\|=\\left\\|\\frac{\\lambda}{b}(\\mathbb{E}[S_{n}]-S_{n})(Y-\\Gamma_{M}(\\hat{Y}_{b-1}))\\right\\|\\leq\\frac{\\lambda}{b}(1+\\sqrt{n})2\\sqrt{n}M. $$ "
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     714,
+     242,
+     737
+    ],
+    "block_content": "Hence"
+   },
+   {
+    "block_id": 8,
+    "block_label": "display_formula",
+    "block_bbox": [
+     370,
+     733,
+     850,
+     803
+    ],
+    "block_content": " $$ \\sum_{b=1}^{\\infty}\\mathbb{E}[\\|\\epsilon_{b}\\|^{2}]\\leq\\left(\\sum_{b=1}^{\\infty}\\frac{1}{b^{2}}\\right)\\cdot\\lambda^{2}(1+\\sqrt{n})^{2}4nM<\\infty. $$ "
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     176,
+     818,
+     605,
+     847
+    ],
+    "block_content": "We conclude that  $ Z_b \\xrightarrow{a.s.} 0 $, i.e.  $ \\hat{Y}_b \\xrightarrow{a.s.} Y^* $."
+   },
+   {
+    "block_id": 10,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     177,
+     916,
+     457,
+     941
+    ],
+    "block_content": "A.5 Proof of Corollary 5"
+   },
+   {
+    "block_id": 11,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     954,
+     467,
+     982
+    ],
+    "block_content": "Proof Expanding  $ \\hat{f}(x) $ gives"
+   },
+   {
+    "block_id": 12,
+    "block_label": "display_formula",
+    "block_bbox": [
+     309,
+     1004,
+     916,
+     1327
+    ],
+    "block_content": " $$ \\begin{aligned}\\hat{f}(x)&=\\lim_{B\\to\\infty}\\frac{1}{B}\\sum_{b=1}^{B}s_{b}(x)(Y-\\hat{Y}_{b})\\\\&=\\lim_{B\\to\\infty}\\frac{1}{B}\\sum_{b=1}^{B}s_{b}(x)(Y-Y^{*}+Y^{*}-\\hat{Y}_{b})\\\\&=\\lim_{B\\to\\infty}\\frac{1}{B}\\sum_{b=1}^{B}s_{b}(x)(Y-Y^{*})+\\lim_{B\\to\\infty}\\frac{1}{B}\\sum_{b=1}^{B}s_{b}(x)(Y^{*}-\\hat{Y}_{b})\\\\&=\\mathbb{E}[s_{b}(x)](Y-Y^{*})+0\\\\&=\\mathbb{E}[s_{n}(x)]\\left[\\frac{1}{\\lambda}I+\\mathbb{E}[S_{n}]\\right]^{-1}Y.\\\\ \\end{aligned} $$ "
+   },
+   {
+    "block_id": 13,
+    "block_label": "number",
+    "block_bbox": [
+     599,
+     1450,
+     623,
+     1470
+    ],
+    "block_content": "31"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['4']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 11,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.89,
+   "numbers_unknown": 1,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.946,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

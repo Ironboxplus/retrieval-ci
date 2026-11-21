@@ -141,6 +141,7 @@ class JournalBulkIndexRequest(BaseModel):
     patterns: list[str] | None = None
     max_depth: int | None = Field(default=None, ge=0)
     client_job_id: str | None = Field(default=None, min_length=1, max_length=100)
+    client: str = Field(default="mcp", min_length=1, max_length=100)
 
     @field_validator("project_slug", "root_dir")
     @classmethod
@@ -152,7 +153,7 @@ class JournalBulkIndexJobOut(BaseModel):
     job_id: str
     project_slug: str
     host: str
-    status: Literal["queued", "running", "completed", "failed"]
+    status: Literal["queued", "running", "completed", "failed", "cancelled"]
     files_total: int
     files_done: int = 0
     chunks_total: int = 0
@@ -164,6 +165,7 @@ class JournalBulkIndexJobOut(BaseModel):
     created_at: float
     started_at: float | None = None
     finished_at: float | None = None
+    skipped_binary: list[str] = Field(default_factory=list)
 
 
 class JournalBulkIndexJobList(BaseModel):
@@ -313,4 +315,22 @@ class JournalSearchResponse(BaseModel):
         description="Set only on an empty result that needs explaining — e.g. a path_glob "
                     "that matched 0 docs while the scope DOES have docs (tells the user the "
                     "glob is scope-relative and their depth is wrong).",
+    )
+    resolved_scope: str | None = Field(
+        default=None,
+        description="Set when the requested directory had no index of its own and the search "
+                    "ran in this indexed ancestor scope instead. Null when the requested "
+                    "scope itself was searched.",
+    )
+    resolved_path_prefix: str | None = Field(
+        default=None,
+        description="With resolved_scope: the requested directory relative to that ancestor. "
+                    "Only docs below it were searched (and path_glob is relative to it); the "
+                    "ancestor's memory entries and .conversations/ segments still take part.",
+    )
+    scope_notice: str | None = Field(
+        default=None,
+        description="Server-decided, deliver-once message about this scope (e.g. duplicate "
+                    "code found after its last index). Present on exactly one response per "
+                    "result; clients show it verbatim above their output and keep no state.",
     )
