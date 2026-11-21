@@ -20,8 +20,9 @@ scripts/remote_embed/
 
 | Side  | Path |
 |-------|------|
-| LOCAL | `data/remote_embed/chunks/chunks_NNNN.jsonl.gz` (in) |
-| LOCAL | `data/remote_embed/vectors/vectors_NNNN.parquet` (out) |
+| LOCAL | `data/remote_embed/tasks/<task_id>/chunks/chunks_NNNN.jsonl.gz` (in; a pipeline task's own dump, removed by its cleanup stage after ingest) |
+| LOCAL | `data/remote_embed/tasks/<task_id>/vectors/vectors_NNNN.parquet` (out; `ingest_done.txt` beside them) |
+| LOCAL | `data/remote_embed/{chunks,vectors}/` (manual runs and the retired KSS `ship.sh` mode only; the pipeline does not read them) |
 | KSS   | `/mnt/lsb/retrival/chunks/` |
 | KSS   | `/mnt/lsb/retrival/vectors/` |
 | KSS   | `/mnt/nvme-disk/.cache/modelscope/BAAI/bge-m3` (model) |

@@ -1,4 +1,9 @@
-"""Bounded background jobs for public-code checks and GPU indexing."""
+"""Bounded background jobs for public-code checks and GPU indexing.
+
+Each job is also mirrored onto a ``public_code_job`` Task row
+(app/services/pipeline/queue_tasks.py) so the Tasks page shows it; ``public_code_jobs``
+stays this service's own durable record.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +15,15 @@ import time
 import uuid
 from typing import Any, Callable, Protocol, Sequence
 
+from app.services.pipeline.queue_tasks import QueueTaskRunner, QueueTasks
+from app.services.pipeline.runner_registry import TaskNotCancellable, register_runner
+from app.services.pipeline.store import TaskStore
 from app.services.public_code.index_service import PublicCodeIndexProgress
 from app.services.public_code.source_catalog import PublicCodeSourceSelector
+
+TASK_TYPE = "public_code_job"
+# Task rows count whole percent: a job's progress is a fraction of its sources.
+TASK_PROGRESS_TOTAL = 100
 
 
 class PublicCodeJobStatus(str, Enum):
@@ -99,6 +111,7 @@ class PublicCodeJobService:
         max_retained_jobs: int = 200,
         job_store: PublicCodeJobStore | None = None,
         persistence_interval_seconds: float = 1.0,
+        tasks: QueueTasks | None = None,
     ):
         if check_workers < 1:
             raise ValueError("check_workers must be at least 1")
@@ -115,6 +128,10 @@ class PublicCodeJobService:
         self._job_store = job_store
         self._persistence_interval_seconds = persistence_interval_seconds
         self._last_persisted_at: dict[str, float] = {}
+        # Mirrors jobs onto Task rows; the process singleton passes one, direct
+        # constructions (tests) record nothing unless they ask.
+        self._tasks = tasks
+        self._task_ids: dict[str, int | None] = {}
         if self._job_store is not None:
             self._job_store.fail_incomplete_jobs(
                 reason="backend restarted before the public-code job completed"
@@ -166,7 +183,7 @@ class PublicCodeJobService:
 
         Shares the single index worker, so an import never overlaps GPU indexing."""
 
-        job = self._create_job("import", (source_id,))
+        job = self._create_job("import", (source_id,), owner_user_id=private_owner_user_id)
         self._index_executor.submit(
             self._run_import, job.job_id, prepare, private_owner_user_id, private_project)
         return job
@@ -216,7 +233,9 @@ class PublicCodeJobService:
             for source in self._source_registry.select(source_ids=source_ids, domains=domains)
         )
 
-    def _create_job(self, operation: str, source_ids: tuple[str, ...]) -> PublicCodeJob:
+    def _create_job(
+        self, operation: str, source_ids: tuple[str, ...], *, owner_user_id: str | None = None,
+    ) -> PublicCodeJob:
         job = PublicCodeJob(
             job_id=uuid.uuid4().hex[:16],
             operation=operation,
@@ -227,6 +246,13 @@ class PublicCodeJobService:
             self._jobs[job.job_id] = job
             self._prune_completed_locked()
             self._persist_locked(job, force=True)
+        if self._tasks is not None:
+            # Before the caller submits to an executor, so a worker always finds its id.
+            self._task_ids[job.job_id] = self._tasks.open(
+                TASK_TYPE,
+                {"job_id": job.job_id, "operation": operation,
+                 "source_ids": list(source_ids), "total_sources": len(source_ids)},
+                TASK_PROGRESS_TOTAL, owner_user_id)
         return replace(job)
 
     def _run_update_check(self, job_id: str) -> None:
@@ -326,6 +352,8 @@ class PublicCodeJobService:
             job.phase = "running"
             job.started_at = time.time()
             self._persist_locked(job, force=True)
+        if self._tasks is not None:
+            self._tasks.started(self._task_ids.get(job_id))
 
     def _record_check_progress(self, job_id: str, *, check: Any, completed: int, total: int) -> None:
         with self._lock:
@@ -401,6 +429,12 @@ class PublicCodeJobService:
             job.current_path = None
             self._persist_locked(job, force=True)
             self._prune_completed_locked()
+            status = job.status.value
+            summary = {"completed_sources": job.completed_sources, "errors": dict(job.errors)}
+            error = _error_summary(job.errors) if job.errors else None
+        if self._tasks is not None:
+            self._tasks.finished(
+                self._task_ids.pop(job_id, None), status, result=summary, error=error)
 
     def _prune_completed_locked(self) -> None:
         completed_jobs = sorted(
@@ -417,6 +451,11 @@ class PublicCodeJobService:
             self._last_persisted_at.pop(job.job_id, None)
 
     def _persist_locked(self, job: PublicCodeJob, *, force: bool = False) -> None:
+        if self._tasks is not None and job.status is PublicCodeJobStatus.RUNNING:
+            # The recorder throttles per task, so every progress tick may call it.
+            self._tasks.progress(
+                self._task_ids.get(job.job_id),
+                round(job.progress * TASK_PROGRESS_TOTAL), TASK_PROGRESS_TOTAL)
         if self._job_store is None:
             return
         now = time.time()
@@ -427,6 +466,34 @@ class PublicCodeJobService:
             max_retained_jobs=self._max_retained_jobs,
         )
         self._last_persisted_at[job.job_id] = now
+
+
+def _error_summary(errors: dict[str, str]) -> str:
+    shown = "; ".join(f"{source}: {message}" for source, message in list(errors.items())[:3])
+    hidden = len(errors) - 3
+    return f"{shown} (+{hidden} more)" if hidden > 0 else shown
+
+
+def _cancel_task_job(job_id: str, owner_user_id: str | None) -> bool:
+    raise TaskNotCancellable(
+        "公开代码任务不支持取消：检查更新和索引由后台线程池执行，没有中断点")
+
+
+def build_task_runner(store: TaskStore | None = None) -> QueueTaskRunner:
+    return QueueTaskRunner(TASK_TYPE, _cancel_task_job, store=store)
+
+
+_TASK_RUNNER: QueueTaskRunner | None = None
+
+
+def get_task_runner() -> QueueTaskRunner:
+    global _TASK_RUNNER
+    if _TASK_RUNNER is None:
+        _TASK_RUNNER = build_task_runner()
+    return _TASK_RUNNER
+
+
+register_runner(TASK_TYPE, get_task_runner)
 
 
 def _copy_job(job: PublicCodeJob) -> PublicCodeJob:

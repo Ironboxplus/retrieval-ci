@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  taskSubject, taskTypeLabel, paperVenueYearFallback, taskDocId, taskGroupKey, type TaskLike,
+  taskSubject, taskTypeLabel, taskDisplayLabel, taskCanRetry, taskCanCancel, paperVenueYearFallback, taskDocId, taskGroupKey,
+  type TaskLike,
 } from './taskBody';
 
 describe('taskTypeLabel', () => {
@@ -162,5 +163,114 @@ describe('taskGroupKey', () => {
     const a: TaskLike = { task_type: 'crawl_urls', params: { urls: ['https://x.com'] } };
     const b: TaskLike = { task_type: 'crawl_urls', params: { urls: ['https://x.com'] } };
     expect(taskGroupKey(a)).toBe(taskGroupKey(b));
+  });
+});
+
+describe('queue-backed task types', () => {
+  const journal: TaskLike = {
+    task_type: 'journal_index',
+    params: { job_id: 'j1', project: 'C:\work\ddlm', host: 'pc', files_total: 12 },
+  };
+  const code: TaskLike = {
+    task_type: 'code_index',
+    params: { job_id: 'c1', project: '/home/u/proj', host: 'pc', files_total: 3, chunks_total: 40, removed_total: 1 },
+  };
+  const duplicates: TaskLike = {
+    task_type: 'code_duplicates',
+    params: { job_id: 'd1', project: '/home/u/proj', changed_files: 3, removed_files: 0 },
+  };
+  const publicJob = (operation: string, source_ids: string[]): TaskLike => ({
+    task_type: 'public_code_job',
+    params: { job_id: 'p1', operation, source_ids, total_sources: source_ids.length },
+  });
+
+  it('taskDisplayLabel names journal_index and code_index', () => {
+    expect(taskDisplayLabel(journal)).toBe('Journal 索引');
+    expect(taskDisplayLabel(code)).toBe('代码索引');
+  });
+
+  it('taskDisplayLabel names the server-side duplicate-code analysis', () => {
+    expect(taskDisplayLabel(duplicates)).toBe('重复代码检测');
+    expect(taskDisplayLabel({ task_type: 'code_duplicates', params: null })).toBe('重复代码检测');
+  });
+
+  it('taskDisplayLabel picks the public_code_job label by operation', () => {
+    expect(taskDisplayLabel(publicJob('check_updates', ['a']))).toBe('公开代码检查更新');
+    expect(taskDisplayLabel(publicJob('index', ['a']))).toBe('公开代码索引');
+    expect(taskDisplayLabel(publicJob('import', ['a']))).toBe('公开代码导入');
+    expect(taskDisplayLabel(publicJob('something_new', ['a']))).toBe('公开代码');
+    expect(taskDisplayLabel({ task_type: 'public_code_job', params: null })).toBe('公开代码');
+  });
+
+  it('taskDisplayLabel keeps taskTypeLabel behaviour for other types', () => {
+    expect(taskDisplayLabel({ task_type: 'match_paper', params: {} })).toBe('论文匹配');
+    expect(taskDisplayLabel({ task_type: 'some_future_task' })).toBe('some_future_task');
+  });
+
+  it('taskSubject: journal/code show the full project path', () => {
+    expect(taskSubject(journal)).toBe('C:\work\ddlm');
+    expect(taskSubject(code)).toBe('/home/u/proj');
+    expect(taskSubject({ task_type: 'code_index', params: {} })).toBe('');
+  });
+
+  it('taskSubject: duplicate analysis shows the scope it checked', () => {
+    expect(taskSubject(duplicates)).toBe('/home/u/proj');
+    expect(taskSubject({ task_type: 'code_duplicates', params: {} })).toBe('');
+  });
+
+  it('taskSubject: public_code_job shows the single source id or a source count', () => {
+    expect(taskSubject(publicJob('index', ['owner/repo']))).toBe('owner/repo');
+    expect(taskSubject(publicJob('check_updates', ['a', 'b', 'c']))).toBe('3 个来源');
+    expect(taskSubject(publicJob('index', []))).toBe('');
+  });
+
+  it('taskGroupKey: journal/code group by type and project', () => {
+    expect(taskGroupKey(journal)).toBe('journal_index:C:\work\ddlm');
+    expect(taskGroupKey(code)).toBe('code_index:/home/u/proj');
+    const other: TaskLike = { task_type: 'code_index', params: { project: '/home/u/other' } };
+    expect(taskGroupKey(code)).not.toBe(taskGroupKey(other));
+  });
+
+  it('taskGroupKey: duplicate analyses group per scope, apart from the index runs of that scope', () => {
+    expect(taskGroupKey(duplicates)).toBe('code_duplicates:/home/u/proj');
+    expect(taskGroupKey(duplicates)).not.toBe(taskGroupKey(code));
+    const other: TaskLike = { task_type: 'code_duplicates', params: { project: '/home/u/other' } };
+    expect(taskGroupKey(duplicates)).not.toBe(taskGroupKey(other));
+  });
+
+  it('taskGroupKey: public_code_job groups by operation and source ids', () => {
+    expect(taskGroupKey(publicJob('index', ['a', 'b']))).toBe('public_code_job:index:a,b');
+    expect(taskGroupKey(publicJob('index', ['a', 'b']))).not.toBe(taskGroupKey(publicJob('import', ['a', 'b'])));
+    expect(taskGroupKey(publicJob('index', ['a']))).not.toBe(taskGroupKey(publicJob('index', ['b'])));
+  });
+});
+
+describe('taskCanRetry', () => {
+  it('is false for the queue-backed types, whose runners cannot restart them', () => {
+    expect(taskCanRetry({ task_type: 'journal_index' })).toBe(false);
+    expect(taskCanRetry({ task_type: 'code_index' })).toBe(false);
+    expect(taskCanRetry({ task_type: 'code_duplicates' })).toBe(false);
+    expect(taskCanRetry({ task_type: 'public_code_job' })).toBe(false);
+  });
+
+  it('is true for every other type', () => {
+    expect(taskCanRetry({ task_type: 'ingest_pipeline' })).toBe(true);
+    expect(taskCanRetry({ task_type: 'match_paper' })).toBe(true);
+    expect(taskCanRetry({ task_type: 'some_future_task' })).toBe(true);
+  });
+});
+
+describe('taskCanCancel', () => {
+  it('is false for public_code_job, whose cancel always answers 409', () => {
+    expect(taskCanCancel({ task_type: 'public_code_job' })).toBe(false);
+  });
+
+  it('is true for every other type', () => {
+    expect(taskCanCancel({ task_type: 'journal_index' })).toBe(true);
+    expect(taskCanCancel({ task_type: 'code_index' })).toBe(true);
+    // Cancellable until it starts; a running one answers 409 like a committing code_index.
+    expect(taskCanCancel({ task_type: 'code_duplicates' })).toBe(true);
+    expect(taskCanCancel({ task_type: 'ingest_pipeline' })).toBe(true);
+    expect(taskCanCancel({ task_type: 'some_future_task' })).toBe(true);
   });
 });

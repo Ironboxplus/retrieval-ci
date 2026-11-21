@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -42,7 +43,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from pipeline.paper_crawler.ccf_a_main_corpus import sanitize_file_component  # type: ignore  # noqa: E402
+from pipeline.paper_crawler.ccf_a_main_corpus import (  # type: ignore  # noqa: E402
+    PROVENANCE_KEYS,
+    identity_rejection_summary,
+    read_full_text_provenance,
+    read_identity_rejections,
+    sanitize_file_component,
+)
+from pipeline.paper_crawler.runtime_files import write_text_atomic  # noqa: E402
 
 CORPUS_ROOT = ROOT / "data" / "papers" / "ccf_a_main_conference_corpus"
 DEFAULT_MANIFEST = CORPUS_ROOT / "manifests" / "paper_manifest.json"
@@ -99,6 +107,7 @@ def sync_slice(
     the slice are never read or written."""
     conf_lower = conf.lower()
     pdf_filled = md_filled = pdf_already = md_already = pdf_missing = md_missing = 0
+    provenance_applied = identity_rejected = changed = 0
     touched = 0
 
     for r in data:
@@ -109,6 +118,7 @@ def sync_slice(
         if not pid:
             continue
         touched += 1
+        before = dict(r)
 
         cur_pdf = r.get("pdf_path")
         if _path_alive(cur_pdf):
@@ -120,6 +130,25 @@ def sync_slice(
                 pdf_filled += 1
             else:
                 pdf_missing += 1  # leave as-is; do NOT NULL
+        # What the downloader actually used (an alternate copy, a pinned arXiv
+        # version) wins over what collection planned.
+        pdf_now = r.get("pdf_path")
+        provenance = read_full_text_provenance(Path(pdf_now)) if _path_alive(pdf_now) else None
+        if provenance and provenance.get("paper_id") == pid:
+            for key in PROVENANCE_KEYS:
+                value = provenance.get(key)
+                if value is not None:
+                    r[key] = value
+                elif key in ("arxiv_id", "source_version") and key in provenance:
+                    r.pop(key, None)  # a publisher or repository copy has neither
+            provenance_applied += 1
+            r.pop("pdf_rejected_identity", None)
+        elif not _path_alive(pdf_now):
+            # Every copy tried so far failed the content check: no full text.
+            rejected = identity_rejection_summary(read_identity_rejections(corpus_root, rconf, year, pid))
+            if rejected:
+                r["pdf_rejected_identity"] = rejected
+                identity_rejected += 1
 
         cur_md = r.get("markdown_path")
         if _path_alive(cur_md):
@@ -134,11 +163,14 @@ def sync_slice(
                 md_filled += 1
             else:
                 md_missing += 1  # leave as-is; do NOT NULL
+        changed += r != before
 
     return {
         "slice_records": touched,
         "pdf_filled": pdf_filled, "pdf_already": pdf_already, "pdf_missing": pdf_missing,
         "md_filled": md_filled, "md_already": md_already, "md_missing": md_missing,
+        "provenance_applied": provenance_applied, "identity_rejected": identity_rejected,
+        "records_changed": changed,
     }
 
 
@@ -168,22 +200,21 @@ def main() -> int:
     print(
         f"  slice_records={counts['slice_records']}  "
         f"pdf(filled={counts['pdf_filled']} already={counts['pdf_already']} missing={counts['pdf_missing']})  "
-        f"md(filled={counts['md_filled']} already={counts['md_already']} missing={counts['md_missing']})"
+        f"md(filled={counts['md_filled']} already={counts['md_already']} missing={counts['md_missing']})  "
+        f"provenance={counts['provenance_applied']} identity_rejected={counts['identity_rejected']}"
     )
 
     if args.dry_run:
         print("[dry-run] manifest not written")
         return 0
 
-    if not (counts["pdf_filled"] or counts["md_filled"]):
+    if not counts["records_changed"]:
         print("[done] nothing to fill — slice already in sync")
         return 0
 
     bak = mp.with_suffix(f".json.bak.local.{int(time.time())}")
-    tmp = mp.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    mp.rename(bak)
-    tmp.rename(mp)
+    shutil.copy2(mp, bak)
+    write_text_atomic(mp, json.dumps(data, ensure_ascii=False, indent=2))
     print(f"[execute] wrote {mp}  (backup: {bak.name})")
     return 0
 

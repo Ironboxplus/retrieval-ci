@@ -48,7 +48,7 @@ class AdminJournalSearchRequest(BaseModel):
 
 
 @router.get("/overview")
-async def overview(request: Request, user_id: str | None = _UserId, tier: str | None = _Tier) -> dict[str, Any]:
+def overview(request: Request, user_id: str | None = _UserId, tier: str | None = _Tier) -> dict[str, Any]:
     _guard(request, user_id, tier)
     return {
         "journal": get_journal_service().stats(),
@@ -57,7 +57,7 @@ async def overview(request: Request, user_id: str | None = _UserId, tier: str | 
 
 
 @router.get("/users")
-async def users(request: Request, user_id: str | None = _UserId, tier: str | None = _Tier) -> dict[str, Any]:
+def users(request: Request, user_id: str | None = _UserId, tier: str | None = _Tier) -> dict[str, Any]:
     """Distinct owners across journal + index, with per-owner counts."""
     _guard(request, user_id, tier)
     index_owners = {o.owner_user_id: o for o in get_index_catalog_service().owners()}
@@ -77,7 +77,7 @@ async def users(request: Request, user_id: str | None = _UserId, tier: str | Non
 
 
 @router.get("/journal/entries", response_model=JournalEntryListResponse)
-async def list_entries(
+def list_entries(
     request: Request,
     owner_user_id: str | None = Query(default=None),
     project_slug: str | None = Query(default=None),
@@ -96,7 +96,7 @@ async def list_entries(
 
 
 @router.post("/journal/search", response_model=JournalSearchResponse)
-async def search_entries(
+def search_entries(
     body: AdminJournalSearchRequest,
     request: Request,
     user_id: str | None = _UserId,
@@ -112,7 +112,7 @@ async def search_entries(
 
 
 @router.get("/journal/entries/{entry_id}", response_model=JournalEntryResponse)
-async def get_entry(
+def get_entry(
     entry_id: str,
     request: Request,
     user_id: str | None = _UserId,
@@ -126,7 +126,7 @@ async def get_entry(
 
 
 @router.delete("/journal/entries/{entry_id}", response_model=JournalDeleteResponse)
-async def delete_entry(
+def delete_entry(
     entry_id: str,
     request: Request,
     reason: str | None = Query(default=None, max_length=500),
@@ -141,7 +141,7 @@ async def delete_entry(
 
 
 @router.get("/journal/pending", response_model=JournalEntryListResponse)
-async def journal_pending(
+def journal_pending(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     user_id: str | None = _UserId,
@@ -154,7 +154,7 @@ async def journal_pending(
 
 
 @router.post("/journal/reindex")
-async def journal_reindex(
+def journal_reindex(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     user_id: str | None = _UserId,
@@ -167,7 +167,7 @@ async def journal_reindex(
 
 
 @router.get("/playbook/bullets", response_model=PlaybookListResponse)
-async def playbook_bullets(
+def playbook_bullets(
     request: Request,
     owner_user_id: str | None = Query(default=None),
     project_slug: str | None = Query(default=None),
@@ -183,7 +183,7 @@ async def playbook_bullets(
 
 
 @router.delete("/playbook/bullets/{bullet_id}", response_model=PlaybookDeleteResponse)
-async def delete_playbook_bullet(
+def delete_playbook_bullet(
     bullet_id: int,
     request: Request,
     owner_user_id: str = Query(..., description="owner of the bullet to delete"),

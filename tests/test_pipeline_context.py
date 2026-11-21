@@ -197,22 +197,16 @@ def test_md_count_missing_dir_tolerated(corpus, store, tmp_path):
 
 
 # ----------------------------------------------- W106 local (self-hosted) paths
-def test_execution_mode_defaults_remote(corpus, store):
+def test_execution_mode_defaults_local(corpus, store):
+    # The kss/SMB remote topology is retired: a caller that names no mode
+    # runs the GPU stages on the box that hosts the orchestrator.
     ctx = _ctx(corpus, store)
-    assert ctx.execution_mode == "remote"
+    assert ctx.execution_mode == "local"
 
 
 def test_local_md_dir_mirrors_corpus_layout(corpus, store):
     ctx = _ctx(corpus, store, venue="CVPR", year=2026)
     assert ctx.local_md_dir == corpus / "markdown" / "cvpr" / "2026"
-
-
-def test_local_vectors_dir_is_remote_embed_vectors(corpus, store, tmp_path):
-    ctx = StageContext(
-        venue="CVPR", year=2026, store=store, task_id=1,
-        corpus_root=corpus, project_root=tmp_path / "proj",
-    )
-    assert ctx.local_vectors_dir == tmp_path / "proj" / "data" / "remote_embed" / "vectors"
 
 
 def test_md_count_local_globs_local_md_dir(corpus, store):
@@ -244,3 +238,15 @@ def test_state_proxy_round_trips(corpus, store):
     ctx.state_set(shard_start=7)
     assert ctx.state_get("chunk_id_before") == 12345
     assert ctx.state_get("shard_start") == 7
+
+
+def test_list_completed_only_returns_finished_tasks(store):
+    """start_arxiv_batches skips batches whose ingest already completed."""
+    done = store.create_task(task_type="ingest_pipeline", params={"venue": "arXiv", "year": 20260608})
+    store.set_task_status(done, "completed")
+    running = store.create_task(task_type="ingest_pipeline", params={"venue": "arXiv", "year": 20260607})
+    store.set_task_status(running, "running")
+    other = store.create_task(task_type="match_paper", params={"venue": "arXiv", "year": 20260606})
+    store.set_task_status(other, "completed")
+    assert store.list_completed("ingest_pipeline") == [
+        {"id": done, "params": {"venue": "arXiv", "year": 20260608}}]

@@ -11,6 +11,9 @@ runner avoids touching that path. The ONE thing they must share is the process
 StageLockSet — so an upload's `index` stage (resource_key="qdrant") serializes
 with a venue `ingest` on the same Qdrant lock (W58/W60 commit-charge safety).
 get_upload_runner() wires that shared lock set from the venue singleton.
+
+Cancellation and registry registration are shared with PipelineRunner
+(runner_registry.CancellableRunner).
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ from loguru import logger
 
 from app.services.pipeline.orchestrator import PipelineOrchestrator
 from app.services.pipeline.registry import UPLOAD_STAGE_KEYS, build_upload_pipeline
+from app.services.pipeline.runner_registry import CancellableRunner, register_runner
 from app.services.pipeline.stage_lock import StageLockSet
 from app.services.pipeline.store import TaskStore
 from app.services.pipeline.upload_context import UploadStageContext
@@ -28,7 +32,9 @@ from app.services.pipeline.upload_context import UploadStageContext
 UPLOAD_PIPELINE = "upload_pipeline"
 
 
-class UploadPipelineRunner:
+class UploadPipelineRunner(CancellableRunner):
+    task_type = UPLOAD_PIPELINE
+
     def __init__(
         self,
         *,
@@ -41,6 +47,7 @@ class UploadPipelineRunner:
         self._build = pipeline_builder
         self._ctx_factory = context_factory or self._default_ctx
         self._active: set[int] = set()
+        self._aborts: dict[int, threading.Event] = {}
         self._lock = threading.Lock()
         self.stage_locks = stage_locks or StageLockSet()
 
@@ -74,6 +81,13 @@ class UploadPipelineRunner:
         self._launch(task_id, doc_id, str(file_path), wait=wait)
         return {"status": "started", "task_id": task_id}
 
+    def start(self, params: dict) -> dict:
+        """TaskRunner entry: `params` = {doc_id, file_path}."""
+        return self.start_upload(params["doc_id"], params["file_path"])
+
+    def retry(self, task_id: int) -> dict:
+        raise NotImplementedError("upload pipelines are re-submitted, not retried")
+
     def resume_running(self, *, wait: bool = False) -> List[int]:
         """Relaunch orchestrators for running upload pipelines (startup hook, W61)."""
         resumed: List[int] = []
@@ -99,6 +113,8 @@ class UploadPipelineRunner:
         return resumed
 
     def _launch(self, task_id: int, doc_id: int, file_path: str, *, wait: bool = False) -> None:
+        abort = self._register_abort(task_id)
+
         def target():
             with self._lock:
                 self._active.add(task_id)
@@ -107,16 +123,16 @@ class UploadPipelineRunner:
                     doc_id=doc_id, file_path=file_path, store=self.store, task_id=task_id,
                 )
                 specs = self._build(ctx)
-                PipelineOrchestrator(task_id, specs, ctx, self.store, locks=self.stage_locks).run()
+                PipelineOrchestrator(
+                    task_id, specs, ctx, self.store, abort=abort, locks=self.stage_locks,
+                ).run()
             except Exception as e:
                 logger.exception(f"upload.crash task={task_id}: {e}")
-                try:
-                    self.store.set_task_status(task_id, "failed", error=f"orchestrator crash: {e}")
-                except Exception:
-                    logger.exception("upload.crash.status_write_failed")
+                self._fail_crashed(task_id, e)
             finally:
                 with self._lock:
                     self._active.discard(task_id)
+                self._drop_abort(task_id)
 
         if wait:
             target()
@@ -139,3 +155,6 @@ def get_upload_runner() -> UploadPipelineRunner:
                 from app.services.pipeline.service import get_pipeline_runner
                 _runner = UploadPipelineRunner(stage_locks=get_pipeline_runner().stage_locks)
     return _runner
+
+
+register_runner(UPLOAD_PIPELINE, get_upload_runner)

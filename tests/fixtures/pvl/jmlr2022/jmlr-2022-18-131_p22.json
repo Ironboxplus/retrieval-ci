@@ -1,0 +1,260 @@
+{
+ "paper": "jmlr-2022-18-131",
+ "page": 22,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0010000000000000009,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     470,
+     78,
+     746,
+     102
+    ],
+    "block_content": "MAJUMDAR AND MICHAILIDIS"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     206,
+     184,
+     974,
+     212
+    ],
+    "block_content": "• Set  $ \\pi_x = \\pi = 30/p, \\pi_y = 30/q $, and  $ (p, q, n) \\in \\{(200, 200, 100), (200, 200, 200)\\} $."
+   },
+   {
+    "block_id": 2,
+    "block_label": "text",
+    "block_bbox": [
+     208,
+     236,
+     960,
+     262
+    ],
+    "block_content": "We use the following scaled arrays of tuning parameters to train Algorithm 1."
+   },
+   {
+    "block_id": 3,
+    "block_label": "display_formula",
+    "block_bbox": [
+     319,
+     281,
+     901,
+     340
+    ],
+    "block_content": " $$ \\gamma_{n}\\in\\{0.3,0.4,...,1\\}\\sqrt{\\frac{\\log q}{n}};\\quad\\lambda_{n}\\in\\{0.4,0.6,...,1.8\\}\\sqrt{\\frac{\\log p}{n}}, $$ "
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     358,
+     958,
+     383
+    ],
+    "block_content": "using a one-step version of the algorithm (Section 4.3) to save computation time."
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     208,
+     384,
+     965,
+     411
+    ],
+    "block_content": "We use the following performance metrics to evaluate our estimates  $ \\hat{\\boldsymbol{\\beta}} = \\{\\hat{\\mathbf{B}}^{k}\\} $:"
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     208,
+     436,
+     423,
+     461
+    ],
+    "block_content": "• True positive Rate"
+   },
+   {
+    "block_id": 7,
+    "block_label": "display_formula",
+    "block_bbox": [
+     318,
+     484,
+     957,
+     551
+    ],
+    "block_content": " $$ \\mathrm{T P R}(\\widehat{\\mathbf{B}}_{k})=\\frac{|\\operatorname{s u p p}(\\widehat{\\mathbf{B}}^{k})\\cap\\operatorname{s u p p}(\\mathbf{B}_{0}^{k})|}{|\\operatorname{s u p p}(\\mathbf{B}_{0}^{k})|};\\quad\\mathrm{T P R}(\\widehat{\\mathcal{B}})=\\frac{1}{K}\\sum_{k=1}^{K}\\mathrm{T P}(\\widehat{\\mathbf{B}}_{k}). $$ "
+   },
+   {
+    "block_id": 8,
+    "block_label": "text",
+    "block_bbox": [
+     208,
+     582,
+     428,
+     607
+    ],
+    "block_content": "• True negative Rate"
+   },
+   {
+    "block_id": 9,
+    "block_label": "display_formula",
+    "block_bbox": [
+     301,
+     629,
+     973,
+     697
+    ],
+    "block_content": " $$ \\mathrm{T N R}(\\widehat{\\mathbf{B}}_{k})=\\frac{|\\mathrm{s u p p}^{c}(\\widehat{\\mathbf{B}}^{k})\\cap\\mathrm{s u p p}^{c}(\\mathbf{B}_{0}^{k})|}{|\\mathrm{s u p p}^{c}(\\mathbf{B}_{0}^{k})|};\\quad\\mathrm{T N R}(\\widehat{\\mathcal{B}})=\\frac{1}{K}\\sum_{k=1}^{K}\\mathrm{T N R}(\\widehat{\\mathbf{B}}_{k}). $$ "
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     208,
+     727,
+     562,
+     752
+    ],
+    "block_content": "• Matthews Correlation Coefficient"
+   },
+   {
+    "block_id": 11,
+    "block_label": "display_formula",
+    "block_bbox": [
+     282,
+     772,
+     992,
+     806
+    ],
+    "block_content": " $$ \\mathrm{T P}(\\widehat{\\mathbf{B}}_{k})=|\\mathrm{s u p p}(\\hat{\\mathbf{B}}^{k})\\cap\\mathrm{s u p p}(\\mathbf{B}_{0}^{k})|;\\quad\\mathrm{T N}(\\widehat{\\mathbf{B}}_{k})=|\\mathrm{s u p p}^{c}(\\hat{\\mathbf{B}}^{k})\\cap\\mathrm{s u p p}^{c}(\\mathbf{B}_{0}^{k})|, $$ "
+   },
+   {
+    "block_id": 12,
+    "block_label": "display_formula",
+    "block_bbox": [
+     299,
+     820,
+     976,
+     855
+    ],
+    "block_content": " $$ \\mathrm{FP}(\\widehat{\\mathbf{B}}_{k})=|\\mathrm{supp}^{c}(\\mathbf{B}_{0}^{k})|-\\mathrm{TN}(\\widehat{\\mathbf{B}}_{k});\\quad\\mathrm{FN}(\\widehat{\\mathbf{B}}_{k})=|\\mathrm{supp}(\\mathbf{B}_{0}^{k})|-\\mathrm{TP}(\\widehat{\\mathbf{B}}_{k}), $$ "
+   },
+   {
+    "block_id": 13,
+    "block_label": "display_formula",
+    "block_bbox": [
+     229,
+     884,
+     358,
+     915
+    ],
+    "block_content": " $$ \\mathrm{MCC}(\\widehat{\\mathbf{B}}_{k})= $$ "
+   },
+   {
+    "block_id": 14,
+    "block_label": "display_formula",
+    "block_bbox": [
+     228,
+     923,
+     1046,
+     1074
+    ],
+    "block_content": " $$ \\begin{aligned}&\\frac{TP(\\widehat{\\mathbf{B}}_{k})TN(\\widehat{\\mathbf{B}}_{k})-FP(\\widehat{\\mathbf{B}}_{k})FN(\\widehat{\\mathbf{B}}_{k})}{\\sqrt{(TP(\\widehat{\\mathbf{B}}_{k})+FP(\\widehat{\\mathbf{B}}_{k}))(TP(\\widehat{\\mathbf{B}}_{k})+FN(\\widehat{\\mathbf{B}}_{k}))(TN(\\widehat{\\mathbf{B}}_{k})+FP(\\widehat{\\mathbf{B}}_{k}))(TN(\\widehat{\\mathbf{B}}_{k})+FN(\\widehat{\\mathbf{B}}_{k}))}},\\\\&MCC(\\widehat{\\boldsymbol{B}})=\\frac{1}{K}\\sum_{k=1}^{K}MCC(\\widehat{\\mathbf{B}}_{k}).\\\\ \\end{aligned} $$ "
+   },
+   {
+    "block_id": 15,
+    "block_label": "text",
+    "block_bbox": [
+     209,
+     1105,
+     559,
+     1129
+    ],
+    "block_content": "• Relative error in Frobenius norm"
+   },
+   {
+    "block_id": 16,
+    "block_label": "display_formula",
+    "block_bbox": [
+     490,
+     1146,
+     784,
+     1215
+    ],
+    "block_content": " $$ \\mathrm{R F}(\\widehat{\\mathcal{B}})=\\frac{1}{K}\\sum_{k=1}^{K}\\frac{\\|\\hat{\\mathbf{B}}^{k}-\\mathbf{B}_{0}^{k}\\|_{F}}{\\|\\mathbf{B}_{0}^{k}\\|_{F}}. $$ "
+   },
+   {
+    "block_id": 17,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1249,
+     1047,
+     1303
+    ],
+    "block_content": "We use the same metrics to evaluate the precision matrix estimates  $ \\widehat{\\Omega}_{y}^{k} $ as well, with TPR and TNR calculations confined to off-diagonal entries."
+   },
+   {
+    "block_id": 18,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1306,
+     1049,
+     1414
+    ],
+    "block_content": "Tables 1 and 2 summarize the results. For estimation of  $ \\mathcal{B} $, we compare our results to the method in Lin et al. (2016a) that estimates parameters in each of the  $ K $ two-layer structure separately, while for estimation of  $ \\Omega_y $, we compare them with the results in Lin et al. (2016a) and using the single-layer JSEM (Ma and Michailidis, 2016) that estimates"
+   },
+   {
+    "block_id": 19,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1450,
+     625,
+     1469
+    ],
+    "block_content": "22"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "omission: page text 'estimatesbbbbktruepositiveratetprbbktpbbktruenegativeratetnr' is 45% in the Markdown (< 50%)",
+   "formula_symbol: display formula '\\\\begin{aligned}&\\\\frac{TP(\\\\widehat{\\\\mathbf{B}}_{k})' lacks characters the page has there (coverage 0.82 < 0.9)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 15,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.45,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.958,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 0.667,
+   "soft_issues": 1
+  }
+ }
+}

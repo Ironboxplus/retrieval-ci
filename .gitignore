@@ -88,3 +88,6 @@ medical-predeploy-*.tar.gz
 # transient rollout staging (evidence lives in .release-artifacts/)
 .deploy-manifest*.txt
 .deploy-payload*
+
+# Local scratch: probes, smoke scripts, backups (never tracked)
+.handfree-output/

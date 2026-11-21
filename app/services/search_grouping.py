@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.models.schemas import PaperGroup, SearchRequest, SearchResult
+from app.models.schemas import PREPRINT_TIER, PaperGroup, SearchRequest, SearchResult
 
 
 def normalize_year_filter(year: Any) -> Any:
@@ -70,6 +70,13 @@ def build_qdrant_filters(request: SearchRequest) -> dict[str, Any]:
     if doc_ids:
         filters["doc_id"] = [str(d) for d in doc_ids]
     return filters
+
+
+def arxiv_scope(request: SearchRequest) -> SearchRequest:
+    """The same request scoped to arXiv preprints (/api/arxiv/search). Any
+    venue / venue_tier the caller passed is replaced, so the scope cannot be
+    widened back to conference papers."""
+    return request.model_copy(update={"venue_tier": PREPRINT_TIER, "venue": None})
 
 
 def attach_chunk_positions(
