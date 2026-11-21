@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.services.journal.repository import new_chunk_id
+from core.indexing.embedding_profile import ascii_within_limit, count_tokens, get_profile
+from core.indexing.token_budget import SPECIAL_TOKENS, segment_text, split_to_budget, token_offsets
 
 
 @dataclass
@@ -24,8 +26,8 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _FENCE_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
 
 
-def _tokens(text: str) -> list[str]:
-    return [t for t in re.split(r"\s+", text.strip()) if t]
+# How far a window edge may move to land on a word boundary instead of inside a word.
+_SNAP_TOKENS = 16
 
 
 def _clip(text: str, limit: int = 3000) -> str:
@@ -34,7 +36,12 @@ def _clip(text: str, limit: int = 3000) -> str:
 
 
 class JournalChunker:
-    """Markdown-aware chunker that preserves short journal notes."""
+    """Markdown-aware chunker that preserves short journal notes.
+
+    Sizes are model tokens (the embedding profile's tokenizer): ``target_tokens`` is the
+    window size, ``overlap_tokens`` the overlap, and no chunk leaves here longer than the
+    profile's ``chunk_max_tokens``.
+    """
 
     def __init__(self, target_tokens: int = 520, overlap_tokens: int = 80):
         self.target_tokens = target_tokens
@@ -59,17 +66,26 @@ class JournalChunker:
             f"client: {client}",
             "tags: " + ", ".join(tags) if tags else "",
         ] if p.strip()).strip()
-        chunks.append(self._make(entry_id, 0, 1, summary_content, heading="summary"))
-        for idx, item in enumerate(self._chunk_body(body), start=1):
-            chunks.append(self._make(
-                entry_id,
-                idx,
-                item["level"],
-                item["content"],
-                heading=item.get("heading"),
-                metadata=item.get("metadata") or {},
-            ))
+        items = [{"level": 1, "content": summary_content, "heading": "summary"}, *self._chunk_body(body)]
+        for item in items:
+            # The final guarantee: whatever a window rule above produced, a piece never
+            # exceeds the embedding profile's chunk budget.
+            for piece in self._fit_budget(item["content"]):
+                chunks.append(self._make(
+                    entry_id,
+                    len(chunks),
+                    item["level"],
+                    piece,
+                    heading=item.get("heading"),
+                    metadata=item.get("metadata") or {},
+                ))
         return chunks
+
+    @staticmethod
+    def _fit_budget(content: str) -> list[str]:
+        clean = content.strip()
+        spans = split_to_budget(clean, max_tokens=get_profile().chunk_max_tokens, prefer="line")
+        return [piece for piece in (clean[start:end] for start, end in spans) if piece.strip()]
 
     def _make(
         self,
@@ -89,7 +105,7 @@ class JournalChunker:
             level=level,
             heading=heading,
             content=clean,
-            token_count=len(_tokens(clean)),
+            token_count=count_tokens([clean], get_profile())[0],
             metadata=metadata or {},
         )
 
@@ -164,17 +180,48 @@ class JournalChunker:
         return sections or [(None, text.strip())]
 
     def _window_text(self, text: str) -> list[str]:
-        words = _tokens(text)
-        if not words:
+        """Windows of ``target_tokens`` model tokens overlapping by ``overlap_tokens``.
+
+        Each window is a slice of the original text. Its edges move up to ``_SNAP_TOKENS``
+        tokens to land between words when the text has any, and fall on a token boundary
+        otherwise (CJK, base64).
+
+        A section longer than ``SEGMENT_CHARS`` (a conversation log or a dump with no
+        headings is one section) is windowed one segment at a time, so no tokenizer call
+        sees an unbounded text. Windows do not overlap across a segment edge; a section
+        within the bound is one segment and is windowed exactly as a whole.
+        """
+        text = text.strip()
+        if not text:
             return []
-        if len(words) <= self.target_tokens:
-            return [text.strip()]
         windows: list[str] = []
-        step = max(1, self.target_tokens - self.overlap_tokens)
-        start = 0
-        while start < len(words):
-            windows.append(" ".join(words[start:start + self.target_tokens]))
-            if start + self.target_tokens >= len(words):
-                break
-            start += step
+        for start, end in segment_text(text):
+            windows.extend(self._window_segment(text[start:end].strip()))
         return windows
+
+    def _window_segment(self, text: str) -> list[str]:
+        """``_window_text`` of one segment: the text is already stripped and bounded."""
+        if not text:
+            return []
+        # A short ASCII text needs no tokenizer (the target counts content tokens only).
+        if ascii_within_limit(text, self.target_tokens + SPECIAL_TOKENS):
+            return [text]
+        tokens = token_offsets(text, get_profile())
+        if len(tokens) <= self.target_tokens:
+            return [text]
+
+        def starts_word(index: int) -> bool:
+            return index == 0 or text[tokens[index][0] - 1].isspace()
+
+        windows: list[str] = []
+        start = 0
+        while True:
+            end = min(start + self.target_tokens, len(tokens))
+            if end < len(tokens):
+                end = next((i for i in range(end, max(start, end - _SNAP_TOKENS), -1) if starts_word(i)), end)
+            windows.append(text[tokens[start][0]:tokens[end - 1][1]])
+            if end >= len(tokens):
+                return windows
+            next_start = max(start + 1, end - self.overlap_tokens)
+            start = next((i for i in range(next_start, max(start, next_start - _SNAP_TOKENS), -1) if starts_word(i)),
+                         next_start)

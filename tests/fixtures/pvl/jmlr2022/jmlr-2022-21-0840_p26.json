@@ -1,0 +1,157 @@
+{
+ "paper": "jmlr-2022-21-0840",
+ "page": 26,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0020000000000000018,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     525,
+     78,
+     692,
+     102
+    ],
+    "block_content": "GAO AND HASTIE"
+   },
+   {
+    "block_id": 1,
+    "block_label": "chart",
+    "block_bbox": [
+     219,
+     184,
+     603,
+     581
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 2,
+    "block_label": "chart",
+    "block_bbox": [
+     618,
+     185,
+     1004,
+     580
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 3,
+    "block_label": "figure_title",
+    "block_bbox": [
+     173,
+     601,
+     1046,
+     684
+    ],
+    "block_content": "Figure 10: Box plots of AAE (26) in the LGD (left panel) and LGGMD (right panel) settings. AAE is a metric naturally defined for conditional CDF estimates (Friedman, 2019), and a smaller value indicates a better estimate."
+   },
+   {
+    "block_id": 4,
+    "block_label": "table",
+    "block_bbox": [
+     178,
+     753,
+     1046,
+     1141
+    ],
+    "block_content": "<table><tr><td rowspan=\"2\">data</td><td rowspan=\"2\">method</td><td colspan=\"5\">quantile loss</td><td rowspan=\"2\">coverage 90% PI</td><td rowspan=\"2\">width 90% PI</td></tr><tr><td>5 %</td><td>25 %</td><td>50 %</td><td>75 %</td><td>95 %</td></tr><tr><td rowspan=\"3\">LGD</td><td>QRF</td><td>0.058\\n(0.001)</td><td>0.174\\n(0.02)</td><td>0.218\\n(0.002)</td><td>0.174\\n(0.02)</td><td>0.056\\n(0.001)</td><td>93.3%\\n(0.9%)</td><td>2.02\\n(0.048)</td></tr><tr><td>DB</td><td>0.058\\n(0.001)</td><td>0.176\\n(0.03)</td><td>0.218\\n(0.003)</td><td>0.174\\n(0.03)</td><td>0.057\\n(0.002)</td><td>92.5%\\n(1.2%)</td><td>1.95\\n(0.051)</td></tr><tr><td>LinCDE</td><td>0.055\\n(0.001)</td><td>0.168\\n(0.01)</td><td>0.212\\n(0.001)</td><td>0.169\\n(0.02)</td><td>0.054\\n(0.001)</td><td>91.9%\\n(1.0%)</td><td>1.84\\n(0.045)</td></tr><tr><td rowspan=\"3\">LGGMD</td><td>QRF</td><td>0.054\\n(0.001)</td><td>0.180\\n(0.001)</td><td>0.246\\n(0.002)</td><td>0.181\\n(0.001)</td><td>0.055\\n(0.001)</td><td>89.5%\\n(0.7%)</td><td>1.76\\n(0.034)</td></tr><tr><td>DB</td><td>0.054\\n(0.001)</td><td>0.182\\n(0.002)</td><td>0.246\\n(0.001)</td><td>0.182\\n(0.002)</td><td>0.055\\n(0.001)</td><td>91.2%\\n(0.9%)</td><td>1.88\\n(0.038)</td></tr><tr><td>LinCDE</td><td>0.053\\n(0.001)</td><td>0.181\\n(0.001)</td><td>0.246\\n(0.001)</td><td>0.181\\n(0.001)</td><td>0.055\\n(0.001)</td><td>90.5%\\n(0.7%)</td><td>1.78\\n(0.032)</td></tr></table>"
+   },
+   {
+    "block_id": 5,
+    "block_label": "figure_title",
+    "block_bbox": [
+     176,
+     1162,
+     1048,
+     1274
+    ],
+    "block_content": "Table 1: Table of quantile losses (the smaller the better) at  $ \\{5\\%, 25\\%, 50\\%, 75\\%, 95\\%\\} $ levels and 90% prediction interval coverages (ideally 90%), interval widths (the narrower the better) in the LGD and LGGMD settings. Standard deviations are in the parentheses. PI stands for prediction interval."
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1359,
+     1047,
+     1414
+    ],
+    "block_content": "fairly good coverages. Results of 50% prediction intervals are consistent and can be found in Appendix G."
+   },
+   {
+    "block_id": 7,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1450,
+     625,
+     1470
+    ],
+    "block_content": "26"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "table: cell '058n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '174n02': 0% of its words are in the table region (< 90%)",
+   "table: cell '218n002': 0% of its words are in the table region (< 90%)",
+   "table: cell '056n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '933n9': 0% of its words are in the table region (< 90%)",
+   "table: cell '202n048': 0% of its words are in the table region (< 90%)",
+   "table: cell '176n03': 0% of its words are in the table region (< 90%)",
+   "table: cell '218n003': 0% of its words are in the table region (< 90%)",
+   "table: cell '174n03': 0% of its words are in the table region (< 90%)",
+   "table: cell '057n002': 0% of its words are in the table region (< 90%)",
+   "table: cell '925n12': 0% of its words are in the table region (< 90%)",
+   "table: cell '195n051': 0% of its words are in the table region (< 90%)",
+   "table: cell '055n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '168n01': 0% of its words are in the table region (< 90%)",
+   "table: cell '212n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '169n02': 0% of its words are in the table region (< 90%)",
+   "table: cell '054n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '919n10': 0% of its words are in the table region (< 90%)",
+   "table: cell '184n045': 0% of its words are in the table region (< 90%)",
+   "table: cell '180n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '246n002': 0% of its words are in the table region (< 90%)",
+   "table: cell '181n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '895n7': 0% of its words are in the table region (< 90%)",
+   "table: cell '176n034': 0% of its words are in the table region (< 90%)",
+   "table: cell '182n002': 0% of its words are in the table region (< 90%)",
+   "table: cell '246n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '912n9': 0% of its words are in the table region (< 90%)",
+   "table: cell '188n038': 0% of its words are in the table region (< 90%)",
+   "table: cell '053n001': 0% of its words are in the table region (< 90%)",
+   "table: cell '905n7': 0% of its words are in the table region (< 90%)",
+   "table: cell '178n032': 0% of its words are in the table region (< 90%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 1,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 1.0,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.079,
+   "table_cell_min_found": 0.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

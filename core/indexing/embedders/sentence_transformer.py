@@ -11,6 +11,8 @@ from core.indexing.embedders import (
     EmbeddingResult,
     embedding_slot,
 )
+from core.indexing.embedding_profile import DEFAULT_ENCODE_BATCH_SIZE
+from core.inference_retired import EMBEDDER_INSTEAD, RetiredInferencePath
 from core.gpu_memory import (
     gpu_model_activity,
     is_cuda_device,
@@ -20,8 +22,15 @@ from core.gpu_memory import (
 
 
 class SentenceTransformerEmbedder(BaseEmbedder):
+    """RETIRED: a sentence-transformers model loaded into this process.
+
+    Kept for reference only; constructing it raises. The only embedding model the backend
+    serves is BGE-M3, through the vLLM service (``core.indexing.embedders.get_embedder()``).
+    """
 
     def __init__(self, model_name: str | None = None, device: str | None = None):
+        raise RetiredInferencePath("SentenceTransformerEmbedder (in-process sentence-transformers)",
+                                   EMBEDDER_INSTEAD)
         self._model_name = model_name or settings.embedding.model_name
         self._device = device or settings.embedding.device
         info = EMBEDDING_MODELS.get(self._model_name, {})
@@ -45,12 +54,14 @@ class SentenceTransformerEmbedder(BaseEmbedder):
     def embed_texts(
         self, texts: list[str], *, priority: EmbeddingPriority = "interactive",
     ) -> EmbeddingResult:
+        # These models have no embedding profile; sentence-transformers follows the
+        # model's own max_seq_length.
         try:
             with embedding_slot(priority):
                 with gpu_model_activity(self._device):
                     vectors = self._model.encode(
                         texts,
-                        batch_size=settings.embedding.batch_size,
+                        batch_size=DEFAULT_ENCODE_BATCH_SIZE,
                         show_progress_bar=False,
                         normalize_embeddings=True,
                     )

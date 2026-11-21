@@ -9,7 +9,9 @@ from typing import Any, Iterator, Optional
 from urllib.parse import urlencode
 
 import httpx
+from tenacity import RetryCallState, RetryError, Retrying, stop_after_attempt
 
+from pipeline.http_retry import DOWNLOAD_BACKOFF
 from pipeline.medical_corpus.models import (
     MedicalPaperRecord,
     MedicalSourceKind,
@@ -33,6 +35,32 @@ DEFAULT_RECENT_QUERY = (
 DEFAULT_UA = (
     "retrieval-medical/0.1 (mailto:arc-retrieval@example.com; research corpus prep)"
 )
+
+
+class _RetryableShield(Exception):
+    """A response the shield classifier says to retry; carries its own delay hint."""
+
+    def __init__(self, decision) -> None:
+        super().__init__(decision.message)
+        self.decision = decision
+
+
+def _shield_aware_wait(state: RetryCallState) -> float:
+    exc = state.outcome.exception() if state.outcome else None
+    if isinstance(exc, _RetryableShield):
+        return retry_delay_seconds(exc.decision, state.attempt_number)
+    return DOWNLOAD_BACKOFF(state)
+
+
+def _log_retry(state: RetryCallState) -> None:
+    exc = state.outcome.exception() if state.outcome else None
+    if isinstance(exc, _RetryableShield):
+        logger.warning(
+            "europe_pmc retryable shield=%s attempt=%s delay=%.1fs",
+            exc.decision.kind.value, state.attempt_number, state.next_action.sleep,
+        )
+    else:
+        logger.warning("europe_pmc search failed attempt=%s err=%s", state.attempt_number, exc)
 
 
 @dataclass(slots=True)
@@ -201,43 +229,41 @@ class EuropePMCClient:
             "cursorMark": cursor_mark,
         }
         url = f"{EUROPE_PMC_SEARCH}?{urlencode(params)}"
-        last_error: Exception | None = None
-        for attempt in range(1, self.max_retries + 1):
+
+        def fetch_page() -> EuropePMCSearchPage:
             self._throttle()
-            try:
-                resp = self._http().get(url)
-                decision = classify_http_shield(
-                    status_code=resp.status_code,
-                    content_type=resp.headers.get("content-type"),
-                    body=resp.content[:4000],
-                    headers=resp.headers,
-                )
-                if decision.kind.value != "none" and decision.retryable:
-                    delay = retry_delay_seconds(decision, attempt)
-                    logger.warning(
-                        "europe_pmc retryable shield=%s attempt=%s delay=%.1fs",
-                        decision.kind.value, attempt, delay,
-                    )
-                    time.sleep(delay)
-                    continue
-                if resp.status_code >= 400:
-                    resp.raise_for_status()
-                payload = resp.json()
-                results = (payload.get("resultList") or {}).get("result") or []
-                if isinstance(results, dict):
-                    results = [results]
-                return EuropePMCSearchPage(
-                    hit_count=int(payload.get("hitCount") or 0),
-                    next_cursor_mark=payload.get("nextCursorMark"),
-                    results=list(results),
-                    raw=payload,
-                )
-            except Exception as exc:
-                last_error = exc
-                delay = min(30.0, 1.5 * (2 ** (attempt - 1)))
-                logger.warning("europe_pmc search failed attempt=%s err=%s", attempt, exc)
-                time.sleep(delay)
-        raise RuntimeError(f"EuropePMC search failed after retries: {last_error}")
+            resp = self._http().get(url)
+            decision = classify_http_shield(
+                status_code=resp.status_code,
+                content_type=resp.headers.get("content-type"),
+                body=resp.content[:4000],
+                headers=resp.headers,
+            )
+            if decision.kind.value != "none" and decision.retryable:
+                raise _RetryableShield(decision)
+            if resp.status_code >= 400:
+                resp.raise_for_status()
+            payload = resp.json()
+            results = (payload.get("resultList") or {}).get("result") or []
+            if isinstance(results, dict):
+                results = [results]
+            return EuropePMCSearchPage(
+                hit_count=int(payload.get("hitCount") or 0),
+                next_cursor_mark=payload.get("nextCursorMark"),
+                results=list(results),
+                raw=payload,
+            )
+
+        try:
+            return Retrying(
+                stop=stop_after_attempt(self.max_retries),
+                wait=_shield_aware_wait,
+                before_sleep=_log_retry,
+            )(fetch_page)
+        except RetryError as exc:
+            raise RuntimeError(
+                f"EuropePMC search failed after retries: {exc.last_attempt.exception()}"
+            ) from exc
 
     def iter_results(
         self,

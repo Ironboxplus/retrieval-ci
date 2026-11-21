@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from pypdf import PdfReader
 
+from pipeline.paper_crawler.runtime_files import write_json_atomic, write_text_atomic
+
 CORPUS_ROOT = Path("data/papers/ccf_a_main_conference_corpus")
 MANIFEST_PATH = CORPUS_ROOT / "manifests" / "paper_manifest.json"
 MARKDOWN_ROOT = CORPUS_ROOT / "markdown"
@@ -115,9 +117,7 @@ def _extract_one(job: _Job) -> tuple[str, Optional[str], float]:
 
         md_text = _build_markdown(job.frontmatter, page_sections)
         md_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = md_path.with_suffix(md_path.suffix + ".tmp")
-        tmp.write_text(md_text, encoding="utf-8")
-        tmp.replace(md_path)
+        write_text_atomic(md_path, md_text)
         return job.paper_id, None, perf_counter() - t0
     except Exception as exc:
         return job.paper_id, f"{type(exc).__name__}: {exc}", perf_counter() - t0
@@ -211,9 +211,7 @@ def main() -> int:
             else:
                 p["markdown_path"] = None
                 p["extract_error"] = results.get(p["paper_id"], "not processed")
-        tmp = MANIFEST_PATH.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(MANIFEST_PATH)
+        write_json_atomic(MANIFEST_PATH, manifest)
         log.info("manifest updated: %s", MANIFEST_PATH)
 
     return 0 if fail == 0 else 1

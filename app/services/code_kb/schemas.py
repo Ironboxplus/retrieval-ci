@@ -79,6 +79,14 @@ class CodeIndexRequest(BaseModel):
         description="Incremental only: exact repo-relative paths known to have been "
                     "deleted. Filesystem watchers use this without enumerating a full "
                     "manifest. Changed files in `files` take precedence over this list.")
+    removed_paths_complete: bool = Field(
+        default=False,
+        description="Incremental only: `removed_paths` lists EVERY file to delete, computed "
+                    "by the client against this scope's catalog inventory. The server then "
+                    "does not enumerate the project's paths in Qdrant to find removals; the "
+                    "delete-safety valve compares `manifest` with the catalog instead. "
+                    "Servers that predate the flag ignore it and reconcile `manifest` "
+                    "against Qdrant as before, so a client sends both.")
     report: CodeIndexReport | None = Field(
         default=None,
         description="Catalog inventory records to write to the index catalog once the job "
@@ -212,6 +220,15 @@ class CodeSearchResponse(BaseModel):
     scope_aliases: list[str] = Field(
         default_factory=list,
         description="Legacy case-variant Windows scope spellings included for compatibility.")
+    resolved_scope: str | None = Field(
+        default=None,
+        description="Set when the requested directory had no index of its own and the search "
+                    "ran in this indexed ancestor scope instead. Null when the requested "
+                    "scope itself was searched.")
+    resolved_path_prefix: str | None = Field(
+        default=None,
+        description="With resolved_scope: the requested directory relative to that ancestor. "
+                    "Only files below it were searched, and path_glob is relative to it.")
     scope_snapshot_state: CodeScopeSnapshotState = Field(
         default="completed",
         description="completed = results came from a stable scope snapshot; preparing = an active "
@@ -230,6 +247,11 @@ class CodeSearchResponse(BaseModel):
     previous_completed_snapshot_available: bool | None = Field(
         default=None,
         description="During preparation, whether a previous completed snapshot is known to exist.")
+    scope_notice: str | None = Field(
+        default=None,
+        description="Server-decided, deliver-once message about this scope (e.g. duplicate "
+                    "code found after its last index). Present on exactly one response per "
+                    "result; clients show it verbatim above their output and keep no state.")
     timings_ms: CodeSearchTimingsMs = Field(default_factory=CodeSearchTimingsMs)
 
 
@@ -276,6 +298,11 @@ class CodeIndexJobOut(BaseModel):
     created_at: float
     started_at: float | None = None
     finished_at: float | None = None
+    scope_notice: str | None = Field(
+        default=None,
+        description="Server-decided, deliver-once message about this scope (e.g. duplicate "
+                    "code found after its last index). Present on exactly one response per "
+                    "result; clients show it verbatim above their output and keep no state.")
 
 
 class CodeIndexJobList(BaseModel):

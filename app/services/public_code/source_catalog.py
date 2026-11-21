@@ -9,6 +9,8 @@ import re
 from typing import Iterable, Mapping, Protocol
 from urllib.parse import urlsplit
 
+from core.paths import safe_relative_path
+
 
 class PublicSourceCatalogError(ValueError):
     """Raised when a public-code source catalog is structurally invalid."""
@@ -180,15 +182,9 @@ class PublicCodeSourceCatalog:
 
 
 def _normalize_relative_path(path: str) -> str:
-    normalized_input = path.replace("\\", "/")
-    if not normalized_input or normalized_input.startswith("/") or len(normalized_input) >= 2 and normalized_input[1] == ":":
-        raise PublicSourceCatalogError("relative_path must be a non-empty relative path")
-    parts = normalized_input.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
-        raise PublicSourceCatalogError("relative_path must be normalized and remain within the mirror root")
-    normalized_path = str(PurePosixPath(normalized_input))
-    if normalized_path == ".":
-        raise PublicSourceCatalogError("relative_path must be a non-empty relative path")
+    normalized_path = safe_relative_path(
+        path, what="relative_path", root="mirror", error_cls=PublicSourceCatalogError
+    )
     if PurePosixPath(normalized_path).name.lower().endswith(".git"):
         raise PublicSourceCatalogError("relative_path must omit the .git storage suffix")
     return normalized_path

@@ -1,0 +1,25 @@
+[Unit]
+Description=Arc Retrieval OpenList node on compute .88 (read side of the 115 Cfs volumes)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=/home/arc/openlist
+# The binary comes out of the same image digest as the paper-download workflow
+# (OPENLIST_IMAGE), so this node speaks the cluster protocol the writers speak.
+# It joins sync group 4d25ac44 as member /115 and only ever reads the Cfs volumes:
+# a Cfs volume stays a reader until its first change (cfs core/lease_reader_test.go),
+# so a node that never writes never takes the writer's lease. Listens on 127.0.0.1
+# only (data/config.json scheme.address); the backend reads through a read-only user.
+ExecStart=/home/arc/openlist/bin/openlist server --data /home/arc/openlist/data --log-std
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+MemoryHigh=768M
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target
