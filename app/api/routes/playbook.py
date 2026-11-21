@@ -20,7 +20,7 @@ _UserId = Header(default=None, alias="X-Retrival-User-Id")
 
 
 @router.post("/bullets", response_model=PlaybookBulletResponse)
-async def record_bullet(body: PlaybookRecordRequest, request: Request, user_id: str | None = _UserId):
+def record_bullet(body: PlaybookRecordRequest, request: Request, user_id: str | None = _UserId):
     """Curate a lesson into the caller's playbook (grow-and-refine dedup)."""
     owner = resolve_owner(request, user_id)
     try:
@@ -30,7 +30,7 @@ async def record_bullet(body: PlaybookRecordRequest, request: Request, user_id: 
 
 
 @router.get("/bullets", response_model=PlaybookListResponse)
-async def list_bullets(
+def list_bullets(
     request: Request,
     project_slug: str | None = Query(default=None),
     domain: str | None = Query(default=None),
@@ -44,13 +44,13 @@ async def list_bullets(
 
 
 @router.post("/search", response_model=PlaybookListResponse)
-async def search_bullets(body: PlaybookSearchRequest, request: Request, user_id: str | None = _UserId):
+def search_bullets(body: PlaybookSearchRequest, request: Request, user_id: str | None = _UserId):
     owner = resolve_owner(request, user_id)
     return get_playbook_service().search(body, owner_user_id=owner)
 
 
 @router.post("/bullets/{bullet_id}/mark", response_model=PlaybookBulletResponse)
-async def mark_bullet(bullet_id: int, body: PlaybookMarkRequest, request: Request, user_id: str | None = _UserId):
+def mark_bullet(bullet_id: int, body: PlaybookMarkRequest, request: Request, user_id: str | None = _UserId):
     owner = resolve_owner(request, user_id)
     result = get_playbook_service().mark(bullet_id, helpful=body.helpful, owner_user_id=owner)
     if result is None:
@@ -59,7 +59,7 @@ async def mark_bullet(bullet_id: int, body: PlaybookMarkRequest, request: Reques
 
 
 @router.delete("/bullets/{bullet_id}", response_model=PlaybookDeleteResponse)
-async def delete_bullet(bullet_id: int, request: Request, user_id: str | None = _UserId):
+def delete_bullet(bullet_id: int, request: Request, user_id: str | None = _UserId):
     owner = resolve_owner(request, user_id)
     result = get_playbook_service().delete(bullet_id, owner_user_id=owner)
     if not result.deleted:

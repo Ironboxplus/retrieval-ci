@@ -1,0 +1,27 @@
+[Unit]
+Description=Arc Retrieval bge-reranker-v2-m3 reranking service (vLLM) on compute .88
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=/home/arc/retrival-4090-migration/retrival
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=NO_PROXY=localhost,127.0.0.1
+Environment=TOKENIZERS_PARALLELISM=false
+# Same venv as the embedding service (vLLM 0.33.0); the keys are deploy/compute88/vllm_reranker.yaml, only the
+# model directory, the port and the share of the card are this host's.
+ExecStart=/home/arc/.venvs/retrival-vllm/bin/vllm serve /home/arc/retrival-4090-migration/.cache/modelscope/BAAI/bge-reranker-v2-m3 --config /home/arc/retrival-4090-migration/retrival/deploy/compute88/vllm_reranker.yaml --port 18201 --gpu-memory-utilization 0.2
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=60
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

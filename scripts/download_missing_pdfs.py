@@ -20,6 +20,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pipeline.http_retry import retry_after_from
 from pipeline.paper_crawler.ccf_a_main_corpus import (
     MainConferenceCorpusBuilder,
     CorpusPaper,
@@ -170,12 +171,7 @@ async def download_one(
                     except Exception:
                         pass
                 if code == 429:
-                    retry_after_hdr = exc.response.headers.get("Retry-After")
-                    try:
-                        wait_s = int(retry_after_hdr) if retry_after_hdr else 20
-                    except ValueError:
-                        wait_s = 20
-                    wait_s = max(wait_s, 15)
+                    wait_s = max(retry_after_from(exc.response, default=20.0), 15.0)
                     # Set GLOBAL cooldown so all workers pause
                     cooldown_until[0] = max(cooldown_until[0], time.monotonic() + wait_s)
                     if attempt < retries:

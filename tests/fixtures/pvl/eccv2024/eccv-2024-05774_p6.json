@@ -1,0 +1,240 @@
+{
+ "paper": "eccv-2024-05774",
+ "page": 6,
+ "attempt": 0,
+ "scale": 2.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "number",
+    "block_bbox": [
+     267,
+     186,
+     282,
+     203
+    ],
+    "block_content": "6"
+   },
+   {
+    "block_id": 1,
+    "block_label": "header",
+    "block_bbox": [
+     332,
+     184,
+     451,
+     205
+    ],
+    "block_content": "Y. Chen et al."
+   },
+   {
+    "block_id": 2,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     235,
+     964,
+     281
+    ],
+    "block_content": "the pose transition computation of the Objaverse dataset coordinate [15,16] can be found in the appendix."
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     283,
+     965,
+     329
+    ],
+    "block_content": "Using a latent diffusion model with an encoder  $ f_{\\phi} $, a denoiser U-Net  $ \\epsilon_{\\theta} $ and a decoder  $ \\mathcal{D} $, the denoising process can be defined as follows:"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     415,
+     335,
+     806,
+     429
+    ],
+    "block_content": " $$ \\begin{align*}p\\left(x^{t-1}\\mid x^{t},c\\left(x_{c},\\Delta R^{ct},\\Delta T^{ct}\\right)\\right)\\\\=\\mathcal{N}\\left(\\begin{array}{c}x^{t-1};\\mu_{\\theta}\\left(x^{t},t,c\\left(x_{c},\\Delta R^{ct},\\Delta T^{ct}\\right)\\right),\\\\\\Sigma_{\\theta}\\left(x^{t},t,c\\left(x_{c},\\Delta R^{ct},\\Delta T^{ct}\\right)\\right)\\end{array}\\right).\\end{align*} $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "formula_number",
+    "block_bbox": [
+     935,
+     372,
+     961,
+     395
+    ],
+    "block_content": "(3)"
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     438,
+     963,
+     510
+    ],
+    "block_content": "where  $ c(x_c, \\Delta R^{ct}, \\Delta T^{ct}) $ represents the embedding encoded from the condition image and relative camera pose and the mean distribution  $ \\mu_\\theta $ and variance function  $ \\Sigma_\\theta $ is modeled by the denoising U-Net."
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     511,
+     964,
+     580
+    ],
+    "block_content": "At the diffusion time step $t$, Zero-1-to-3 encodes the embedding of the input view and relative camera pose as $c(x_{c},\\Delta R^{ct},\\Delta T^{ct})$ and set the objective loss function as:"
+   },
+   {
+    "block_id": 8,
+    "block_label": "display_formula",
+    "block_bbox": [
+     327,
+     585,
+     901,
+     620
+    ],
+    "block_content": " $$ \\begin{array}{r}{L(\\theta)=\\underset{\\theta}{\\mathrm{m i n}}\\mathbb{E}_{z\\sim\\mathcal{E}(x),t,\\epsilon\\sim\\mathcal{N}(0,1)}\\left\\|\\epsilon-\\epsilon_{\\theta}\\left(z_{t},t,c\\left(x_{c},\\Delta R^{c t},\\Delta T^{c t}\\right)\\right)\\right\\|_{2}^{2},}\\end{array} $$ "
+   },
+   {
+    "block_id": 9,
+    "block_label": "formula_number",
+    "block_bbox": [
+     935,
+     592,
+     961,
+     615
+    ],
+    "block_content": "(4)"
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     264,
+     631,
+     964,
+     703
+    ],
+    "block_content": "where $\\epsilon$ is the noise prediction corresponding to the distribution. With the model $\\epsilon_\\theta$ trained, the inference model $f_\\phi$ can generate an image by denoising the Gaussian noise conditioned on the embedding of $c(x_c, \\Delta R^{ct}, \\Delta T^{ct})$."
+   },
+   {
+    "block_id": 11,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     264,
+     731,
+     614,
+     753
+    ],
+    "block_content": "3.2 Cascade-Zero123 Framework"
+   },
+   {
+    "block_id": 12,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     763,
+     964,
+     858
+    ],
+    "block_content": "Suffering from the information sparsity of a single image, it is highly challenging for Zero-1-to-3 [43] to generate geometry and appearance consistent novel views with a single source image. We ease this task with a cascade structure, which progressively moves the camera pose with slight changes."
+   },
+   {
+    "block_id": 13,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     858,
+     965,
+     1120
+    ],
+    "block_content": "As shown in Fig. 3. Cascade-Zero123 consists of two cascade Zero-1-to-3 models. The first Zero-1-to-3 is referred to as Base-0123, and the second one is referred to as Refiner-0123. In terms of the structure, Base-0123 is responsible for generating multi-view images. These images serve as rough condition inputs, which, along with their corresponding camera poses, are fed into the network of the Refiner-0123 model. The Refiner-0123 is aware of the multi-view input and it will compute the rotation and translation of different viewpoints to the final target view. Supplying more condition images from different views to Refiner-0123 can ease the difficulty of generating novel views. After that, the training framework incorporates the model parameters of the second Refiner-0123 model back into the Base-0123 through exponential moving average (EMA)."
+   },
+   {
+    "block_id": 14,
+    "block_label": "text",
+    "block_bbox": [
+     294,
+     1121,
+     953,
+     1144
+    ],
+    "block_content": "Compared with Eq. 2, we can formulate the proposed Cascade-Zero123 as:"
+   },
+   {
+    "block_id": 15,
+    "block_label": "display_formula",
+    "block_bbox": [
+     323,
+     1152,
+     884,
+     1183
+    ],
+    "block_content": " $$ x_{T}=f_{\\phi_{r}}((x_{c}^{0},f_{\\phi_{b}}(x,\\Delta R_{b}^{c\\{1:P\\}},\\Delta T_{b}^{c\\{1:P\\}})),\\Delta R_{r}^{\\{1:P\\}t},\\Delta T_{r}^{\\{1:P\\}t}), $$ "
+   },
+   {
+    "block_id": 16,
+    "block_label": "formula_number",
+    "block_bbox": [
+     935,
+     1155,
+     961,
+     1178
+    ],
+    "block_content": "(5)"
+   },
+   {
+    "block_id": 17,
+    "block_label": "text",
+    "block_bbox": [
+     262,
+     1188,
+     965,
+     1334
+    ],
+    "block_content": "where  $ f_{\\phi_b} $ and  $ f_{\\phi_r} $ are the Base-0123 and Refiner-0123 respectively, and the parameters of  $ f_{\\phi_b} $ can be denoted as  $ \\phi_b $ and those parameters of  $ f_{\\phi_r} $ can be denoted as  $ \\phi_r $.  $ x_T $ is the final target image. P is the number of the prompt views,  $ \\Delta R_{r}^{it} $,  $ \\Delta T_{r}^{it} $ is the prompted views camera pose of Refiner-0123. For easy understanding, we include Table 1 to list some symbols mentioned in the paper along with their meanings."
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "omission: page text 'lowsbeginaignedplefxtidrihtlefttcleftxcdeltactdeltarightrigh' is 9% in the Markdown (< 50%)",
+   "formula_symbol: '\\\\begin{array}{r}{L(\\\\theta)=\\\\underset{\\\\theta}{\\\\math' has letters ['c', 'delta', 'r', 'x', 'z'] that are not on the page there (coverage 0.62 < 0.95)",
+   "formula_symbol: display formula '\\\\begin{array}{r}{L(\\\\theta)=\\\\underset{\\\\theta}{\\\\math' lacks characters the page has there (coverage 0.87 < 0.9)",
+   "formula_symbol: display formula 'x_{T}=f_{\\\\phi_{r}}((x_{c}^{0},f_{\\\\phi_{b}}(x,\\\\Delt' lacks characters the page has there (coverage 0.88 < 0.9)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 22,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.094,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.914,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "table_digits_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 0.615,
+   "soft_issues": 1
+  }
+ }
+}

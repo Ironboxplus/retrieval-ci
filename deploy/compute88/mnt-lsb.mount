@@ -1,12 +1,11 @@
 [Unit]
-Description=Retrieval paper artifact CIFS mount on compute .88
-After=network-online.target
-Wants=network-online.target
+Description=Retrieval local artifact compatibility mount on compute .88
+RequiresMountsFor=/home/arc/retrieval-storage
 
 [Mount]
-What=//10.100.100.9/lsb
+What=/home/arc/retrieval-storage
 Where=/mnt/lsb
-Type=cifs
-Options=credentials=/etc/smbcredentials224,vers=3.1.1,iocharset=utf8,gid=arc,dir_mode=02775,file_mode=0664,soft,nounix,serverino,rsize=4194304,wsize=4194304,actimeo=1
+Type=none
+Options=bind
 TimeoutSec=30
 

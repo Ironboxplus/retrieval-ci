@@ -660,3 +660,41 @@ def test_index_inventory_client_forwards_detail_param():
 
 def test_format_inventory_empty():
     assert "No indexed files" in format_inventory({"users": [], "totals": {}})
+
+
+def test_search_papers_client_sends_include_withdrawn_only_when_true():
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"papers": [], "results": []})
+
+    client = _make_client(handler)
+    asyncio.run(client.search_papers("q", venue_tier="preprint"))
+    asyncio.run(client.search_papers("q", venue_tier="preprint", include_withdrawn=True))
+    assert "include_withdrawn" not in bodies[0]
+    assert bodies[1]["include_withdrawn"] is True
+
+
+def test_repository_search_arxiv_forwards_include_withdrawn_and_marks_hits():
+    from mcp_server import server
+
+    seen = {}
+
+    class _Client:
+        async def search_papers(self, **kwargs):
+            seen.update(kwargs)
+            return {"papers": [{
+                "paper_id": "arxiv-2611.00002", "doc_title": "Gone", "max_score": 0.9,
+                "metadata": {"venue": "arXiv", "year": 2026, "withdrawn": True},
+                "chunks": [{"content": "text"}],
+            }]}
+
+    original = server._client
+    server._client = _Client()
+    try:
+        out = asyncio.run(server.search_arxiv(query="q", include_withdrawn=True))
+    finally:
+        server._client = original
+    assert seen["include_withdrawn"] is True and seen["venue_tier"] == "preprint"
+    assert "Gone  [arXiv 2026]  score=0.900  [WITHDRAWN]" in out

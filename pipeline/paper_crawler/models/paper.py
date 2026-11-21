@@ -52,11 +52,22 @@ class Conference(str, Enum):
     DAC = "DAC"
     FAST = "FAST"
     USENIX_ATC = "USENIX ATC"
+    # Tier-1 expansion. A venue missing here becomes Conference.OTHER and its
+    # SQL `venue` is written as "Other", so every registry title needs a member.
+    TPAMI = "TPAMI"
+    JMLR = "JMLR"
+    IJCV = "IJCV"
+    IEEE_SP = "IEEE S&P"
+    OSDI = "OSDI"
+    SOSP = "SOSP"
     COLT = "COLT"
     AISTATS = "AISTATS"
     UAI = "UAI"
     ICRA = "ICRA"
     CORL = "CoRL"
+    # Preprints from arXiv (HTML harvest). Not a conference: rows carry
+    # venue_tier/track_type "preprint" so they stay distinguishable (AGENTS 2.2).
+    ARXIV = "arXiv"
     OTHER = "Other"
 
 
@@ -223,6 +234,9 @@ class Paper(BaseModel):
     impact_level: Optional[str] = Field(default=None, description="oral|spotlight|poster|regular")
     venue_tier: Optional[str] = Field(default=None, description="CCF-A|CCF-B|CCF-C|other")
     venue_source: Optional[str] = Field(default=None, description="proceedings source identifier")
+    full_text_source: Optional[str] = Field(
+        default=None, description="publisher|arxiv|oa_repo: origin of the indexed full text"
+    )
 
     # External identifiers
     arxiv_id: Optional[str] = Field(default=None, description="arXiv identifier (e.g., 2301.00001)")

@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -85,7 +85,7 @@ def test_code_scope_policy_roundtrips_auto_refresh_and_non_git_excludes():
     policy = svc.upsert_policy(IndexScopePolicyUpsert(
         host="desktop", project="C:/plain", root_dir="C:/plain", kind="code",
         auto_refresh=True, respect_gitignore=True,
-        exclude_globs=["generated/**", "private/**"], min_check_interval_s=7,
+        exclude_globs=["generated/**", "private/**"], min_check_interval_s=600,
     ), owner_user_id="user-1")
     assert policy.auto_refresh is True
     assert policy.exclude_globs == ["generated/**", "private/**"]
@@ -95,9 +95,70 @@ def test_code_scope_policy_roundtrips_auto_refresh_and_non_git_excludes():
     assert loaded is not None
     assert loaded.root_dir == "C:/plain"
     assert loaded.respect_gitignore is True
-    assert loaded.min_check_interval_s == 7
+    assert loaded.min_check_interval_s == 600
     assert svc.get_policy(
         owner_user_id="other", host="desktop", project="C:/plain", kind="code") is None
+
+
+def test_policy_interval_defaults_to_five_minutes_and_rejects_anything_shorter():
+    # 2026-11-15 user rule: automatic indexing runs at most once per 5 minutes per scope.
+    from pydantic import ValidationError
+
+    scope = dict(host="desktop", project="C:/plain", root_dir="C:/plain")
+    assert IndexScopePolicyUpsert(**scope).min_check_interval_s == 300
+    for too_short in (0, 10, 299):
+        with pytest.raises(ValidationError):
+            IndexScopePolicyUpsert(**scope, min_check_interval_s=too_short)
+    for allowed in (300, 3600):
+        assert IndexScopePolicyUpsert(
+            **scope, min_check_interval_s=allowed).min_check_interval_s == allowed
+    with pytest.raises(ValidationError):
+        IndexScopePolicyUpsert(**scope, min_check_interval_s=3601)
+
+
+def test_stored_policy_below_the_floor_is_reported_at_the_floor_never_fails():
+    svc = _service()
+    for project, stored in (("C:/legacy", 10), ("C:/custom", 600)):
+        # the repository stores what it is given: this is a row written before the floor
+        svc.repository.upsert_policy(
+            owner_user_id="user-1", host="desktop", project=project, kind="code",
+            root_dir=project, auto_refresh=True, respect_gitignore=True,
+            exclude_globs=[], min_check_interval_s=stored)
+
+    legacy = svc.get_policy(
+        owner_user_id="user-1", host="desktop", project="C:/legacy", kind="code")
+    custom = svc.get_policy(
+        owner_user_id="user-1", host="desktop", project="C:/custom", kind="code")
+    assert legacy is not None and legacy.min_check_interval_s == 300
+    assert custom is not None and custom.min_check_interval_s == 600
+
+
+def test_migration_raises_stored_policy_intervals_to_the_floor_and_is_rerunnable(
+        tmp_path, monkeypatch):
+    from core.db import database
+
+    engine = create_engine(f"sqlite:///{(tmp_path / 'policies.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        for project, stored in (("C:/ten", 10), ("C:/six-hundred", 600),
+                                ("C:/just-below", 299), ("C:/floor", 300)):
+            conn.execute(text(
+                "INSERT INTO index_scope_policies (owner_user_id, host, project, kind, "
+                "root_dir, auto_refresh, respect_gitignore, min_check_interval_s) "
+                "VALUES ('user-1', 'desktop', :project, 'code', :project, 1, 1, :stored)"),
+                {"project": project, "stored": stored})
+
+    def stored_intervals() -> dict[str, int]:
+        with engine.connect() as conn:
+            return {row[0]: row[1] for row in conn.execute(text(
+                "SELECT project, min_check_interval_s FROM index_scope_policies"))}
+
+    monkeypatch.setattr(database, "engine", engine)
+    database._apply_idempotent_migrations()
+    expected = {"C:/ten": 300, "C:/six-hundred": 600, "C:/just-below": 300, "C:/floor": 300}
+    assert stored_intervals() == expected
+    database._apply_idempotent_migrations()  # a second start changes nothing
+    assert stored_intervals() == expected
 
 
 def test_inventory_shows_registered_code_scope_before_any_completed_snapshot():
