@@ -1,0 +1,19 @@
+# Grafana datasources (auto-provisioned on start). Prometheus = metrics,
+# Loki = per-user access logs (Phase 2). Both local on the 4090.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:9090
+    isDefault: true
+    editable: false
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://127.0.0.1:3100
+    editable: false

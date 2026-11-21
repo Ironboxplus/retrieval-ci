@@ -1,0 +1,28 @@
+# Exact delta payload for the `.88` GPU allocator release.
+# This intentionally excludes main.py and every unrelated dirty-worktree file.
+config.py
+core/gpu_memory.py
+core/indexing/embedders/__init__.py
+core/indexing/embedders/bge_m3.py
+core/indexing/embedders/sentence_transformer.py
+core/retrieval/reranker.py
+deploy/compute88/arc-retrival-backend.service
+deploy/compute88/README.md
+deploy/compute88/gpu_allocator_release_files.txt
+scripts/benchmark_retrieval_release_api.py
+scripts/build_gpu_allocator_release_bundle.py
+scripts/capture_retrieval_release_baseline.py
+scripts/verify_reranker_cuda_canary.py
+tests/test_compute88_units.py
+tests/test_embedder_abstraction.py
+tests/test_gpu_memory.py
+tests/test_reranker.py
+tests/test_reranker_cuda_canary.py
+tests/test_reranker_settings.py
+tests/test_retrieval_release_baseline.py
+tests/test_retrieval_release_performance.py
+env.md
+overview.md
+INDEX.md
+plan.md
+journal.md
