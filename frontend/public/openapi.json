@@ -1,0 +1,3749 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Retrieval 公开检索 API",
+    "description": "学术论文检索系统",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/search": {
+      "post": {
+        "summary": "Search",
+        "description": "执行检索（统一走 SearchPipeline：BGE-M3 dense+sparse 混合 RRF + cross-encoder 精排）。\n\n- method: vector（纯语义）/ hybrid（默认，dense+sparse RRF）/ sparse（纯词法）\n- source_type: 按来源筛选 (webpage|paper|upload)\n- data_source: 按数据来源筛选 (system|user)\n\n大模型调用建议：本系统是向量检索，查询文本越详细、具体，效果越好（用完整问题/方法\n描述，而非单个关键词）。两个可选开关可组合使用：\n- title_only=True：只匹配标题与 L1 块，聚焦标题/摘要、不被附录等次要内容带偏，用于\n  论文初步调研、圈定候选论文。\n- dedup_by_paper=False（原始 chunk 模式）：同篇不只取最高分 chunk，返回原始 top-k\n  段落，用于小范围精搜、定位论文内具体段落。\n建议对同一检索文本组合不同选项分别调用（先 title_only 找范围，再用原始 chunk 模式\n精搜目标），合并结果以获得最全面的内容。",
+        "operationId": "search_api_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with a different request."
+          },
+          "425": {
+            "description": "Another request with this idempotency key is still running."
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stable logical request key for retry-safe billing. Reuse only for the exact same request. A concurrent duplicate returns 425 until the first request finishes; a different request with the same key returns 409."
+          }
+        ]
+      }
+    },
+    "/api/search/stream": {
+      "post": {
+        "summary": "Search Stream",
+        "description": "NDJSON streaming search: yields per-stage events as embed/retrieve/rerank/enrich\neach complete, so the UI can show real-time progress instead of one terminal blob.\n\nStream contract — one JSON object per line:\n  {\"stage\":\"embed\",\"embed_ms\":N}\n  {\"stage\":\"retrieve\",\"retrieve_ms\":N,\"candidates\":N,\"mode\":\"hybrid\"}\n  {\"stage\":\"rerank\",\"rerank_ms\":N,\"candidates_before\":N,\"candidates_after\":N}\n  {\"stage\":\"enrich\",\"enriched_count\":N}\n  {\"stage\":\"complete\",\"response\": <SearchResponse>}\n\n大模型调用建议（同 /api/search）：向量检索，查询越详细越好；title_only=True 聚焦\n标题/L1（初步调研、不被附录带偏），dedup_by_paper=False 为原始 chunk 模式（同篇多段、\n小范围精搜）。建议对同一文本组合不同选项分别调用并合并结果。",
+        "operationId": "search_stream_api_search_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with a different request."
+          },
+          "425": {
+            "description": "Another request with this idempotency key is still running."
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stable logical request key for retry-safe billing. Reuse only for the exact same request. A concurrent duplicate returns 425 until the first request finishes; a different request with the same key returns 409."
+          }
+        ]
+      }
+    },
+    "/api/match-doc": {
+      "post": {
+        "summary": "Match Doc",
+        "description": "给一篇查询文档，找语料库里内容最相近的论文（doc → paper 匹配，功能2）。\n\n三种输入二选一：\n- input_type=text：直接粘贴文本（text 字段）；\n- input_type=pdf：先 POST /api/upload 拿 task_id，extract 完成后用 upload_task_id；\n- input_type=paper_id：已入库论文，找它的内容邻居（自动排除自身）。\n\n打分（agg）：coverage（默认，整篇重合度高者胜）/ maxsim（单段最强命中胜）。\n查询文档切成多块，每块独立走混合检索（BGE-M3 dense+sparse + 精排），再按论文聚合。",
+        "operationId": "match_doc_api_match_doc_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MatchDocRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchDocResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with a different request."
+          },
+          "425": {
+            "description": "Another request with this idempotency key is still running."
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stable logical request key for retry-safe billing. Reuse only for the exact same request. A concurrent duplicate returns 425 until the first request finishes; a different request with the same key returns 409."
+          }
+        ]
+      }
+    },
+    "/api/conferences": {
+      "get": {
+        "summary": "Get Conferences",
+        "operationId": "get_conferences_api_conferences_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stats": {
+      "get": {
+        "summary": "Get Stats",
+        "description": "获取索引统计信息",
+        "operationId": "get_stats_api_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/distribution": {
+      "get": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Distribution",
+        "description": "Aggregations for charts: chunks-by-level, papers-by-venue, papers-by-year.",
+        "operationId": "distribution_api_dashboard_distribution_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Distribution Api Dashboard Distribution Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/papers/": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "List Indexed Papers",
+        "description": "列出所有已索引的论文 ID",
+        "operationId": "list_indexed_papers_api_papers__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response List Indexed Papers Api Papers  Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/papers/browse": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Browse Papers",
+        "description": "按标签组合 + 关键词浏览论文（SQL 全集合筛选，非向量检索）",
+        "operationId": "browse_papers_api_papers_browse_get",
+        "parameters": [
+          {
+            "name": "venue",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by venue(s) — repeat (?venue=A&venue=B) or comma-separated (?venue=A,B)",
+              "title": "Venue"
+            },
+            "description": "Filter by venue(s) — repeat (?venue=A&venue=B) or comma-separated (?venue=A,B)"
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by year(s) — repeat or comma-separated; values must be int-castable",
+              "title": "Year"
+            },
+            "description": "Filter by year(s) — repeat or comma-separated; values must be int-castable"
+          },
+          {
+            "name": "venue_tier",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by tier (e.g. CCF-A)",
+              "title": "Venue Tier"
+            },
+            "description": "Filter by tier (e.g. CCF-A)"
+          },
+          {
+            "name": "track_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by track (e.g. oral, poster, main)",
+              "title": "Track Type"
+            },
+            "description": "Filter by track (e.g. oral, poster, main)"
+          },
+          {
+            "name": "impact_level",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by impact (e.g. best_paper)",
+              "title": "Impact Level"
+            },
+            "description": "Filter by impact (e.g. best_paper)"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keyword — matched against title + abstract (case-insensitive substring)",
+              "title": "Q"
+            },
+            "description": "Keyword — matched against title + abstract (case-insensitive substring)"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Page number",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "Page number"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "description": "Results per page",
+              "default": 20,
+              "title": "Page Size"
+            },
+            "description": "Results per page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/papers/tags": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Get Tags",
+        "description": "获取所有可用标签（会议/年份/tier/track/impact）用于筛选",
+        "operationId": "get_tags_api_papers_tags_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/papers/stats": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Get Stats",
+        "description": "获取论文索引统计信息\n\nStage C 等大型 ingest 期间 vector store count 可能 60s 阻塞 (W8)。\n`_cached_vector_count` 内部 2s probe timeout + 30s 缓存 + stale 兜底，\nendpoint 整体在 to_thread 中跑避免阻塞 FastAPI event loop。",
+        "operationId": "get_stats_api_papers_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperStatsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/papers/search": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Search Papers Get",
+        "description": "GET 方式搜索论文（便捷接口）",
+        "operationId": "search_papers_get_api_papers_search_get",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "搜索查询",
+              "title": "Query"
+            },
+            "description": "搜索查询"
+          },
+          {
+            "name": "top_k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Top K"
+            }
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "hybrid",
+              "title": "Method"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按年份过滤",
+              "title": "Year"
+            },
+            "description": "按年份过滤"
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按来源过滤",
+              "title": "Source"
+            },
+            "description": "按来源过滤"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/papers/{paper_id}": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Get Paper",
+        "description": "获取论文详情（paper_id 是 PK string，直接精确查找）",
+        "operationId": "get_paper_api_papers__paper_id__get",
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stable logical request key for retry-safe billing. Reuse only for the exact same request. A concurrent duplicate returns 425 until the first request finishes; a different request with the same key returns 409."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key conflicts with a different request."
+          },
+          "425": {
+            "description": "Another request with this idempotency key is still running."
+          }
+        }
+      }
+    },
+    "/api/papers/{paper_id}/fulltext": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Get Paper Fulltext",
+        "description": "Return the full markdown text of a paper.",
+        "operationId": "get_paper_fulltext_api_papers__paper_id__fulltext_get",
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stable logical request key for retry-safe billing. Reuse only for the exact same request. A concurrent duplicate returns 425 until the first request finishes; a different request with the same key returns 409."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient credits for a paying user's Markdown view."
+          },
+          "409": {
+            "description": "Idempotency key conflicts with a different request."
+          },
+          "425": {
+            "description": "Another request with this idempotency key is still running."
+          }
+        }
+      }
+    },
+    "/api/papers/{paper_id}/markdown": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Get Paper Markdown File",
+        "description": "Stream the original extracted Markdown file with HTTP Range support.",
+        "operationId": "get_paper_markdown_file_api_papers__paper_id__markdown_get",
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stable logical request key for retry-safe billing. Reuse only for the exact same request. A concurrent duplicate returns 425 until the first request finishes; a different request with the same key returns 409."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Original extracted Markdown file.",
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Paper or Markdown artifact not found."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient credits for a paying user's Markdown view."
+          },
+          "409": {
+            "description": "Idempotency key conflicts with a different request."
+          },
+          "425": {
+            "description": "Another request with this idempotency key is still running."
+          }
+        }
+      }
+    },
+    "/api/papers/{paper_id}/pdf": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Get Paper Pdf",
+        "description": "Serve paper PDF for inline preview (paper_id is the PK string)",
+        "operationId": "get_paper_pdf_api_papers__paper_id__pdf_get",
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Original PDF access requires member/internal/admin tier."
+          }
+        }
+      }
+    },
+    "/api/papers/{paper_id}/bibtex": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Get Paper Bibtex",
+        "description": "Generate BibTeX citation for a paper.",
+        "operationId": "get_paper_bibtex_api_papers__paper_id__bibtex_get",
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/papers/download-batch": {
+      "post": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Download Papers Batch",
+        "description": "Build one ZIP containing the requested original paper artifacts.",
+        "operationId": "download_papers_batch_api_papers_download_batch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaperBatchDownloadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "ZIP archive containing the requested artifacts.",
+            "headers": {
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Retrieval-Artifact-Count": {
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-Retrieval-Error-Count": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Requested source artifacts exceed 1 GiB."
+          },
+          "416": {
+            "description": "Range is unsupported for generated archives.",
+            "headers": {
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "All archive build/stream slots are busy.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Insufficient credits for a paying user's Markdown batch."
+          },
+          "403": {
+            "description": "PDF or mixed batch access requires member/internal/admin tier."
+          },
+          "409": {
+            "description": "Idempotency key conflicts with a different request."
+          },
+          "425": {
+            "description": "Another request with this idempotency key is still running."
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stable logical request key for retry-safe billing. Reuse only for the exact same request. A concurrent duplicate returns 425 until the first request finishes; a different request with the same key returns 409."
+          }
+        ]
+      }
+    },
+    "/api/public-code/sources": {
+      "get": {
+        "tags": [
+          "Public Code KB"
+        ],
+        "summary": "List Public Code Sources",
+        "description": "Public gateway access is restricted to the admin tier. List source state for internal callers and public gateway admins.",
+        "operationId": "list_public_code_sources_api_public_code_sources_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublicCodeSourceResponse"
+                  },
+                  "title": "Response List Public Code Sources Api Public Code Sources Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Public Code requires admin tier on the public gateway."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Public Code KB"
+        ],
+        "summary": "Register Public Code Source",
+        "description": "Public gateway access is restricted to the admin tier. Register one Git source and optionally queue its first mirror/index job.",
+        "operationId": "register_public_code_source_api_public_code_sources_post",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCodeSourceCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCodeSourceCreateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Public Code requires admin tier on the public gateway."
+          },
+          "409": {
+            "description": "Source already exists"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/public-code/sources/check-updates": {
+      "post": {
+        "tags": [
+          "Public Code KB"
+        ],
+        "summary": "Check Public Code Updates",
+        "description": "Public gateway access is restricted to the admin tier. Admin-only HEAD probes for one, many, or all configured sources.",
+        "operationId": "check_public_code_updates_api_public_code_sources_check_updates_post",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCodeSourceSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCodeJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Public Code requires admin tier on the public gateway."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/public-code/sources/index": {
+      "post": {
+        "tags": [
+          "Public Code KB"
+        ],
+        "summary": "Index Public Code Sources",
+        "description": "Public gateway access is restricted to the admin tier. Queue mirror refresh and candidate indexing for selected public sources.",
+        "operationId": "index_public_code_sources_api_public_code_sources_index_post",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCodeSourceSelection"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCodeJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Public Code requires admin tier on the public gateway."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/public-code/jobs": {
+      "get": {
+        "tags": [
+          "Public Code KB"
+        ],
+        "summary": "List Public Code Jobs",
+        "description": "Public gateway access is restricted to the admin tier. Return recent in-process jobs for management-page polling.",
+        "operationId": "list_public_code_jobs_api_public_code_jobs_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublicCodeJobResponse"
+                  },
+                  "title": "Response List Public Code Jobs Api Public Code Jobs Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Public Code requires admin tier on the public gateway."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/public-code/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "Public Code KB"
+        ],
+        "summary": "Get Public Code Job",
+        "description": "Public gateway access is restricted to the admin tier. Return a pollable source/file/chunk progress snapshot for one job.",
+        "operationId": "get_public_code_job_api_public_code_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCodeJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Public Code requires admin tier on the public gateway."
+          },
+          "404": {
+            "description": "Job not found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/public-code/sources/{source_id}/update-policy": {
+      "put": {
+        "tags": [
+          "Public Code KB"
+        ],
+        "summary": "Set Public Code Update Policy",
+        "description": "Public gateway access is restricted to the admin tier. Admin-only policy persistence for manual update jobs.",
+        "operationId": "set_public_code_update_policy_api_public_code_sources__source_id__update_policy_put",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Source Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCodeUpdatePolicyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCodeSourceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Public Code requires admin tier on the public gateway."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/public-code/search": {
+      "post": {
+        "tags": [
+          "Public Code KB"
+        ],
+        "summary": "Search Public Code",
+        "description": "Public gateway access is restricted to the admin tier. Search one source, multiple sources, or domains as an internal/admin caller.",
+        "operationId": "search_public_code_api_public_code_search_post",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicCodeSearchRequestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCodeSearchResponseBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Public Code requires admin tier on the public gateway."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/code/federated-search": {
+      "post": {
+        "tags": [
+          "Code KB"
+        ],
+        "summary": "Federated Code Search",
+        "description": "Search the caller's private Code KB and the curated Public Code corpus in one\nfused ranking (RRF by default, or cross-encoder reranked with rerank=true).\n\nThe private leg always runs (R1, operator-confirmed 2026-09-23): there is no\ninclude_private flag. ``projects`` scopes it (empty = every scope the caller\nowns); an individually-withheld scope is excluded and reported in\n``private.excluded_scopes`` rather than withholding the whole leg (decision 10).\n\nFail-closed, never a silent downgrade: include_public=true requires admin tier —\na non-admin caller gets 403 rather than a private-only result\n(docs/federated_code_search_plan.md section 1). Both legs retrieve concurrently\nwith rerank=False; this route's own fusion (app.services.code_federation) decides\nRRF vs rerank across the combined pool.",
+        "operationId": "federated_code_search_api_code_federated_search_post",
+        "parameters": [
+          {
+            "name": "X-Retrival-User-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Id"
+            }
+          },
+          {
+            "name": "X-Retrival-User-Tier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Retrival-User-Tier"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FederatedCodeSearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FederatedCodeSearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/providers": {
+      "get": {
+        "tags": [
+          "账户"
+        ],
+        "summary": "可用登录方式",
+        "description": "返回启用的登录方式 `{cdk,linuxdo,google}`，前端据此渲染登录选择器。匿名可调。",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "账户"
+        ],
+        "summary": "当前用户",
+        "description": "返回 `{username,tier,balance,identities}`。需登录（会话 Cookie 或 sk-key）。",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/auth/keys": {
+      "get": {
+        "tags": [
+          "账户"
+        ],
+        "summary": "列出 sk-key",
+        "description": "列出本人的 API 密钥（仅 prefix/last4，不返回明文）。",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "账户"
+        ],
+        "summary": "创建 sk-key",
+        "description": "签发一个新的 sk-key（明文**仅返回一次**），用于 MCP/脚本 `Authorization: Bearer sk-…`。",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/auth/keys/{key_id}": {
+      "delete": {
+        "tags": [
+          "账户"
+        ],
+        "summary": "吊销 sk-key",
+        "description": "吊销本人某个 sk-key。",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/topup": {
+      "post": {
+        "tags": [
+          "充值"
+        ],
+        "summary": "创建充值订单",
+        "description": "创建 linux.do Credit 充值订单，返回 `pay_url` 跳转支付。需登录。",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "credits": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "SessionCookie": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AggregatedResult": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "doc_title": {
+            "type": "string",
+            "title": "Doc Title"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "hit_count": {
+            "type": "integer",
+            "title": "Hit Count"
+          },
+          "total_score": {
+            "type": "number",
+            "title": "Total Score"
+          },
+          "avg_score": {
+            "type": "number",
+            "title": "Avg Score"
+          },
+          "max_score": {
+            "type": "number",
+            "title": "Max Score",
+            "default": 0.0
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "type": "array",
+            "title": "Chunks",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "doc_id",
+          "doc_title",
+          "source",
+          "hit_count",
+          "total_score",
+          "avg_score"
+        ],
+        "title": "AggregatedResult",
+        "description": "按文档聚合的结果"
+      },
+      "FederatedCodeHit": {
+        "properties": {
+          "origin": {
+            "type": "string",
+            "enum": [
+              "private",
+              "public"
+            ],
+            "title": "Origin"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "start_line": {
+            "type": "integer",
+            "title": "Start Line"
+          },
+          "end_line": {
+            "type": "integer",
+            "title": "End Line"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": ""
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "Final sort score: reranker score, else RRF score."
+          },
+          "retrieval_score": {
+            "type": "number",
+            "title": "Retrieval Score",
+            "description": "That leg's own original retrieval score."
+          },
+          "fusion_rank_score": {
+            "type": "number",
+            "title": "Fusion Rank Score",
+            "description": "Reciprocal-rank-fusion score."
+          },
+          "reranker_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Score"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code",
+            "default": ""
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          }
+        },
+        "type": "object",
+        "required": [
+          "origin",
+          "path",
+          "start_line",
+          "end_line",
+          "score",
+          "retrieval_score",
+          "fusion_rank_score"
+        ],
+        "title": "FederatedCodeHit"
+      },
+      "FederatedCodeSearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Query"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 10
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "hybrid",
+              "dense",
+              "keyword"
+            ],
+            "title": "Mode",
+            "default": "hybrid"
+          },
+          "rerank": {
+            "type": "boolean",
+            "title": "Rerank",
+            "default": false
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language",
+            "description": "Applies to both legs."
+          },
+          "include_public": {
+            "type": "boolean",
+            "title": "Include Public",
+            "description": "Off by default. True additionally requires admin tier (403 for any other tier) and never silently falls back to a private-only result.",
+            "default": false
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Projects",
+            "description": "Private only. Empty = every scope the caller owns. Non-empty scopes are searched in ONE Qdrant query (MatchAny); an individually-withheld scope is excluded and reported in private.excluded_scopes rather than withholding the whole leg."
+          },
+          "path_glob": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Glob",
+            "description": "Private only."
+          },
+          "max_per_file": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Per File",
+            "description": "Private only; same semantics as CodeSearchRequest.max_per_file."
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Source Ids",
+            "description": "Public only."
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Domains",
+            "description": "Public only."
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "FederatedCodeSearchRequest",
+        "description": "`search_code`'s superset: the private leg always runs; the public leg is opt-in\n(R1, operator-confirmed 2026-09-23) so a non-admin caller's default behaviour is\nidentical to an ordinary private search."
+      },
+      "FederatedCodeSearchResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/FederatedCodeHit"
+            },
+            "type": "array",
+            "title": "Hits"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "fusion": {
+            "type": "string",
+            "enum": [
+              "rrf",
+              "rerank"
+            ],
+            "title": "Fusion"
+          },
+          "rerank_applied": {
+            "type": "boolean",
+            "title": "Rerank Applied"
+          },
+          "private": {
+            "$ref": "#/components/schemas/FederatedLegDiagnostics"
+          },
+          "public": {
+            "$ref": "#/components/schemas/FederatedLegDiagnostics"
+          },
+          "timings_ms": {
+            "$ref": "#/components/schemas/CodeSearchTimingsMs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "hits",
+          "total",
+          "fusion",
+          "rerank_applied",
+          "private",
+          "public"
+        ],
+        "title": "FederatedCodeSearchResponse"
+      },
+      "FederatedLegDiagnostics": {
+        "properties": {
+          "included": {
+            "type": "boolean",
+            "title": "Included"
+          },
+          "candidate_count": {
+            "type": "integer",
+            "title": "Candidate Count",
+            "default": 0
+          },
+          "effective_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective Mode"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "scope_snapshot_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Snapshot State"
+          },
+          "excluded_scopes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Excluded Scopes",
+            "description": "Private only (decision 10). Each entry: {project, state, active_index_job_id} for a scope withheld from this response instead of failing the whole private leg closed."
+          },
+          "searched_projects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Searched Projects",
+            "description": "Private only. Empty means every scope the caller owns."
+          },
+          "selected_source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Selected Source Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "included"
+        ],
+        "title": "FederatedLegDiagnostics"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "MatchDocRequest": {
+        "properties": {
+          "input_type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "pdf",
+              "paper_id"
+            ],
+            "title": "Input Type"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text",
+            "description": "input_type=text：直接粘贴的文本"
+          },
+          "upload_task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Task Id",
+            "description": "input_type=pdf：异步 extract 完成后的 task_id（产物 MD）"
+          },
+          "paper_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paper Id",
+            "description": "input_type=paper_id：已入库论文，找它的内容邻居"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "description": "返回论文数",
+            "default": 20
+          },
+          "per_chunk_k": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Per Chunk K",
+            "description": "每个查询块的召回深度（聚合前）",
+            "default": 50
+          },
+          "agg": {
+            "type": "string",
+            "enum": [
+              "coverage",
+              "maxsim"
+            ],
+            "title": "Agg",
+            "description": "coverage=整篇重合（每段都被覆盖才高分，默认）；maxsim=最强单段命中",
+            "default": "coverage"
+          },
+          "sim_threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Sim Threshold",
+            "description": "低于此相似度的命中忽略",
+            "default": 0.0
+          },
+          "filters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Filters",
+            "description": "venue/year/venue_tier 等，复用现有 filter schema"
+          },
+          "max_query_chunks": {
+            "type": "integer",
+            "maximum": 200.0,
+            "minimum": 1.0,
+            "title": "Max Query Chunks",
+            "description": "查询文档切块上限，防超长文档放大检索成本",
+            "default": 40
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_type"
+        ],
+        "title": "MatchDocRequest",
+        "description": "匹配请求。三种输入二选一填对应字段。",
+        "examples": [
+          {
+            "summary": "文本 → 最相近论文（相关工作发现）",
+            "value": {
+              "input_type": "text",
+              "text": "We propose a retrieval-augmented method that reranks passages with a cross-encoder before generation.",
+              "top_k": 20
+            }
+          },
+          {
+            "summary": "已入库论文 → 内容邻居（自动排除自身）",
+            "value": {
+              "input_type": "paper_id",
+              "paper_id": "neurips-2024-some-paper",
+              "top_k": 20
+            }
+          }
+        ]
+      },
+      "MatchDocResponse": {
+        "properties": {
+          "input_type": {
+            "type": "string",
+            "title": "Input Type"
+          },
+          "query_chunks": {
+            "items": {
+              "$ref": "#/components/schemas/QueryChunk"
+            },
+            "type": "array",
+            "title": "Query Chunks",
+            "default": []
+          },
+          "papers": {
+            "items": {
+              "$ref": "#/components/schemas/PaperMatch"
+            },
+            "type": "array",
+            "title": "Papers",
+            "default": []
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_type"
+        ],
+        "title": "MatchDocResponse"
+      },
+      "MatchedSpan": {
+        "properties": {
+          "query_chunk_idx": {
+            "type": "integer",
+            "title": "Query Chunk Idx"
+          },
+          "paper_chunk": {
+            "type": "string",
+            "title": "Paper Chunk"
+          },
+          "sim": {
+            "type": "number",
+            "title": "Sim"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query_chunk_idx",
+          "paper_chunk",
+          "sim"
+        ],
+        "title": "MatchedSpan",
+        "description": "一条命中明细：你的第 query_chunk_idx 段 ↔ 某论文的 paper_chunk，相似度 sim。"
+      },
+      "PaperBatchDownloadRequest": {
+        "properties": {
+          "paper_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Paper Ids"
+          },
+          "artifacts": {
+            "type": "string",
+            "enum": [
+              "pdf",
+              "markdown",
+              "both"
+            ],
+            "title": "Artifacts",
+            "default": "pdf"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper_ids"
+        ],
+        "title": "PaperBatchDownloadRequest",
+        "description": "Download up to ten papers as one ZIP archive."
+      },
+      "PaperGroup": {
+        "properties": {
+          "paper_id": {
+            "type": "string",
+            "title": "Paper Id"
+          },
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "doc_title": {
+            "type": "string",
+            "title": "Doc Title",
+            "default": ""
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "max_score": {
+            "type": "number",
+            "title": "Max Score",
+            "default": 0.0
+          },
+          "chunk_count": {
+            "type": "integer",
+            "title": "Chunk Count",
+            "default": 0
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "default": {}
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "type": "array",
+            "title": "Chunks",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper_id",
+          "doc_id"
+        ],
+        "title": "PaperGroup",
+        "description": "按论文分组的检索结果（粒度=论文）。\n\n检索结果以论文为单位呈现：每篇论文是一张卡片，按其命中 chunk 的最高分\n(`max_score`) 排序，卡片内携带该论文命中的 chunk（`chunks`，已按分降序）。\n`dedup_by_paper=True` 时每篇只保留最高分 chunk；False 时携带全部命中片段。"
+      },
+      "PaperMatch": {
+        "properties": {
+          "paper_id": {
+            "type": "string",
+            "title": "Paper Id"
+          },
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "default": ""
+          },
+          "venue": {
+            "type": "string",
+            "title": "Venue",
+            "default": ""
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "coverage": {
+            "type": "integer",
+            "title": "Coverage",
+            "default": 0
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "default": {}
+          },
+          "matched": {
+            "items": {
+              "$ref": "#/components/schemas/MatchedSpan"
+            },
+            "type": "array",
+            "title": "Matched",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper_id",
+          "doc_id",
+          "score"
+        ],
+        "title": "PaperMatch",
+        "description": "一篇被匹配到的论文卡片。"
+      },
+      "PaperStatsResponse": {
+        "properties": {
+          "total_papers": {
+            "type": "integer",
+            "title": "Total Papers"
+          },
+          "total_documents": {
+            "type": "integer",
+            "title": "Total Documents"
+          },
+          "total_chunks": {
+            "type": "integer",
+            "title": "Total Chunks"
+          },
+          "chunk_levels": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Chunk Levels"
+          },
+          "vector_index_size": {
+            "type": "integer",
+            "title": "Vector Index Size"
+          },
+          "bm25_index_size": {
+            "type": "integer",
+            "title": "Bm25 Index Size"
+          },
+          "collection_name": {
+            "type": "string",
+            "title": "Collection Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_papers",
+          "total_documents",
+          "total_chunks",
+          "chunk_levels",
+          "vector_index_size",
+          "bm25_index_size",
+          "collection_name"
+        ],
+        "title": "PaperStatsResponse",
+        "description": "论文索引统计响应"
+      },
+      "PipelineMetricsResponse": {
+        "properties": {
+          "embed_ms": {
+            "type": "number",
+            "title": "Embed Ms",
+            "default": 0.0
+          },
+          "retrieve_ms": {
+            "type": "number",
+            "title": "Retrieve Ms",
+            "default": 0.0
+          },
+          "rerank_ms": {
+            "type": "number",
+            "title": "Rerank Ms",
+            "default": 0.0
+          },
+          "total_ms": {
+            "type": "number",
+            "title": "Total Ms",
+            "default": 0.0
+          },
+          "candidates_before_rerank": {
+            "type": "integer",
+            "title": "Candidates Before Rerank",
+            "default": 0
+          },
+          "candidates_after_rerank": {
+            "type": "integer",
+            "title": "Candidates After Rerank",
+            "default": 0
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "hybrid"
+          }
+        },
+        "type": "object",
+        "title": "PipelineMetricsResponse",
+        "description": "检索管线性能指标"
+      },
+      "PublicCodeJobResponse": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "operation": {
+            "type": "string",
+            "title": "Operation"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Ids"
+          },
+          "total_sources": {
+            "type": "integer",
+            "title": "Total Sources"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "completed_sources": {
+            "type": "integer",
+            "title": "Completed Sources"
+          },
+          "progress": {
+            "type": "number",
+            "title": "Progress"
+          },
+          "phase": {
+            "type": "string",
+            "title": "Phase"
+          },
+          "current_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Source Id"
+          },
+          "current_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Path"
+          },
+          "files_done": {
+            "type": "integer",
+            "title": "Files Done"
+          },
+          "files_total": {
+            "type": "integer",
+            "title": "Files Total"
+          },
+          "chunks_done": {
+            "type": "integer",
+            "title": "Chunks Done"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "source_progress": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Source Progress"
+          },
+          "results": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Errors"
+          },
+          "created_at": {
+            "type": "number",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "operation",
+          "source_ids",
+          "total_sources",
+          "status",
+          "completed_sources",
+          "progress",
+          "phase",
+          "current_source_id",
+          "current_path",
+          "files_done",
+          "files_total",
+          "chunks_done",
+          "message",
+          "source_progress",
+          "results",
+          "errors",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "PublicCodeJobResponse"
+      },
+      "PublicCodeSearchHitResponse": {
+        "properties": {
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "retrieval_score": {
+            "type": "number",
+            "title": "Retrieval Score"
+          },
+          "reranker_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Score"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "start_line": {
+            "type": "integer",
+            "title": "Start Line"
+          },
+          "end_line": {
+            "type": "integer",
+            "title": "End Line"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "score",
+          "retrieval_score",
+          "source_id",
+          "revision",
+          "domain",
+          "path",
+          "language",
+          "start_line",
+          "end_line",
+          "label",
+          "content",
+          "code"
+        ],
+        "title": "PublicCodeSearchHitResponse"
+      },
+      "PublicCodeSearchRequestBody": {
+        "properties": {
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Source Ids"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Domains"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 10
+          },
+          "mode": {
+            "type": "string",
+            "pattern": "^(dense|hybrid|keyword)$",
+            "title": "Mode",
+            "default": "hybrid"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "rerank": {
+            "type": "boolean",
+            "title": "Rerank",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "PublicCodeSearchRequestBody"
+      },
+      "PublicCodeSearchResponseBody": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "selected_source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Selected Source Ids"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/PublicCodeSearchHitResponse"
+            },
+            "type": "array",
+            "title": "Hits"
+          },
+          "requested_mode": {
+            "type": "string",
+            "enum": [
+              "hybrid",
+              "dense",
+              "keyword"
+            ],
+            "title": "Requested Mode"
+          },
+          "effective_mode": {
+            "type": "string",
+            "enum": [
+              "hybrid",
+              "dense",
+              "keyword",
+              "unavailable"
+            ],
+            "title": "Effective Mode"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice",
+            "description": "Search diagnostic, including strict keyword unavailability or a dense-only hybrid fallback."
+          },
+          "rerank_applied": {
+            "type": "boolean",
+            "title": "Rerank Applied"
+          },
+          "candidate_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Candidate Count",
+            "description": "Retrieved candidate count before rerank candidate diversification."
+          },
+          "rerank_candidate_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Rerank Candidate Count",
+            "description": "Candidate count supplied to the reranker after duplicate and file diversity control."
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "selected_source_ids",
+          "hits",
+          "requested_mode",
+          "effective_mode",
+          "rerank_applied",
+          "candidate_count",
+          "rerank_candidate_count"
+        ],
+        "title": "PublicCodeSearchResponseBody"
+      },
+      "PublicCodeSourceCreateRequest": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Source Id"
+          },
+          "domain": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Domain"
+          },
+          "upstream_url": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Upstream Url"
+          },
+          "relative_path": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Relative Path"
+          },
+          "default_ref": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Default Ref",
+            "default": "HEAD"
+          },
+          "proxy_profile": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proxy Profile"
+          },
+          "credential_profile": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Profile"
+          },
+          "language_overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Language Overrides"
+          },
+          "update_policy": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "scheduled"
+            ],
+            "title": "Update Policy",
+            "default": "manual"
+          },
+          "update_interval_minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 43200.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Interval Minutes"
+          },
+          "index_now": {
+            "type": "boolean",
+            "title": "Index Now",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_id",
+          "domain",
+          "upstream_url",
+          "relative_path"
+        ],
+        "title": "PublicCodeSourceCreateRequest"
+      },
+      "PublicCodeSourceCreateResponse": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/PublicCodeSourceResponse"
+          },
+          "index_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicCodeJobResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "index_job"
+        ],
+        "title": "PublicCodeSourceCreateResponse"
+      },
+      "PublicCodeSourceResponse": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "upstream_url": {
+            "type": "string",
+            "title": "Upstream Url"
+          },
+          "default_ref": {
+            "type": "string",
+            "title": "Default Ref"
+          },
+          "proxy_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proxy Profile"
+          },
+          "credential_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Profile"
+          },
+          "language_overrides": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Language Overrides"
+          },
+          "source_origin": {
+            "type": "string",
+            "title": "Source Origin"
+          },
+          "created_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By User Id"
+          },
+          "active_manifest_file_count": {
+            "type": "integer",
+            "title": "Active Manifest File Count"
+          },
+          "active_chunk_count": {
+            "type": "integer",
+            "title": "Active Chunk Count"
+          },
+          "active_vector_count": {
+            "type": "integer",
+            "title": "Active Vector Count"
+          },
+          "active_promoted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Promoted At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "update_policy": {
+            "type": "string",
+            "title": "Update Policy"
+          },
+          "update_interval_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Interval Minutes"
+          },
+          "active_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Revision"
+          },
+          "last_mirrored_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Mirrored Revision"
+          },
+          "last_remote_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Remote Revision"
+          },
+          "last_check_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Check Error"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "domain",
+          "relative_path",
+          "upstream_url",
+          "default_ref",
+          "proxy_profile",
+          "credential_profile",
+          "language_overrides",
+          "source_origin",
+          "created_by_user_id",
+          "active_manifest_file_count",
+          "active_chunk_count",
+          "active_vector_count",
+          "active_promoted_at",
+          "created_at",
+          "updated_at",
+          "update_policy",
+          "update_interval_minutes",
+          "active_revision",
+          "last_mirrored_revision",
+          "last_remote_revision",
+          "last_check_error",
+          "last_checked_at"
+        ],
+        "title": "PublicCodeSourceResponse"
+      },
+      "PublicCodeSourceSelection": {
+        "properties": {
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Source Ids"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "title": "PublicCodeSourceSelection"
+      },
+      "PublicCodeUpdatePolicyRequest": {
+        "properties": {
+          "update_policy": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "scheduled"
+            ],
+            "title": "Update Policy"
+          },
+          "update_interval_minutes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 43200.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Interval Minutes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "update_policy"
+        ],
+        "title": "PublicCodeUpdatePolicyRequest"
+      },
+      "QueryChunk": {
+        "properties": {
+          "idx": {
+            "type": "integer",
+            "title": "Idx"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          }
+        },
+        "type": "object",
+        "required": [
+          "idx",
+          "text"
+        ],
+        "title": "QueryChunk",
+        "description": "查询文档被切成的一段。idx 是它在文档里的顺序位置。"
+      },
+      "RetrievalMethod": {
+        "type": "string",
+        "enum": [
+          "vector",
+          "hybrid",
+          "sparse"
+        ],
+        "title": "RetrievalMethod",
+        "description": "检索方法"
+      },
+      "SearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "检索文本。系统为 BGE-M3 向量检索（dense+sparse 混合 RRF + cross-encoder 精排），对长而具体的语义输入效果最好——建议使用尽可能详细、完整的查询（完整问题描述 / 方法句 / 概念组合），而非单个关键词。"
+          },
+          "method": {
+            "$ref": "#/components/schemas/RetrievalMethod",
+            "default": "hybrid"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "description": "返回结果数量，必须大于0",
+            "default": 20
+          },
+          "filters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Filters",
+            "default": {}
+          },
+          "source_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Type"
+          },
+          "data_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Source"
+          },
+          "venue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "venue_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Venue Tier"
+          },
+          "title_only": {
+            "type": "boolean",
+            "title": "Title Only",
+            "description": "仅匹配论文标题与 L1（标题+摘要）块。聚焦标题/摘要，不被正文里附录等次要内容带偏大方向；适合论文初步调研、按主题快速圈定候选论文。",
+            "default": false
+          },
+          "dedup_by_paper": {
+            "type": "boolean",
+            "title": "Dedup By Paper",
+            "description": "每篇论文卡片展示几个 chunk。True（默认，保留最高分）：每篇论文只返回最高分的那个 chunk，防止单篇多段刷屏（W3）、控制返回数据量。False（展开全部匹配）：每篇论文返回其全部命中的 chunk——适合精读单篇、定位论文内的多个相关段落。注意：无论该开关如何，结果始终按「论文最高分」分组排序，粒度是论文。",
+            "default": true
+          },
+          "paper_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paper Ids",
+            "description": "限定检索范围到指定的一个或多个论文（paper_id）。只在这些论文的 chunk 上检索，其余论文一律不参与。用于「在指定论文内检索」——配合 dedup_by_paper=False + 较大的 top_k，可拿到单篇论文全部命中片段及其分数，看清论文不同部分与查询的匹配程度。"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest",
+        "description": "检索请求",
+        "examples": [
+          {
+            "description": "用完整的方法描述而非关键词；venue/year 收窄到目标会议。",
+            "summary": "语义检索 + 会议/年份过滤",
+            "value": {
+              "method": "hybrid",
+              "query": "retrieval-augmented generation with a learned reranker for long-context QA",
+              "top_k": 20,
+              "venue": "NeurIPS",
+              "year": 2024
+            }
+          },
+          {
+            "description": "paper_ids 锁定单篇 + dedup_by_paper=false + 较大 top_k，拿回该论文全部命中段落及分数。",
+            "summary": "在指定论文内检索（展开全部命中片段）",
+            "value": {
+              "dedup_by_paper": false,
+              "paper_ids": [
+                "neurips-2024-some-paper"
+              ],
+              "query": "how is the position head pretrained",
+              "top_k": 50
+            }
+          }
+        ]
+      },
+      "SearchResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "method": {
+            "$ref": "#/components/schemas/RetrievalMethod"
+          },
+          "total_results": {
+            "type": "integer",
+            "title": "Total Results"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "type": "array",
+            "title": "Results",
+            "default": []
+          },
+          "papers": {
+            "items": {
+              "$ref": "#/components/schemas/PaperGroup"
+            },
+            "type": "array",
+            "title": "Papers",
+            "default": []
+          },
+          "aggregated": {
+            "items": {
+              "$ref": "#/components/schemas/AggregatedResult"
+            },
+            "type": "array",
+            "title": "Aggregated",
+            "default": []
+          },
+          "pipeline_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PipelineMetricsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "venue_distribution": {
+            "items": {
+              "$ref": "#/components/schemas/VenueAggregation"
+            },
+            "type": "array",
+            "title": "Venue Distribution",
+            "default": []
+          },
+          "year_distribution": {
+            "items": {
+              "$ref": "#/components/schemas/YearAggregation"
+            },
+            "type": "array",
+            "title": "Year Distribution",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "method",
+          "total_results"
+        ],
+        "title": "SearchResponse",
+        "description": "检索响应。\n\n`results` 是命中 chunk 的扁平列表（向后兼容，`total_results == len(results)`）。\n`papers` 是同一批 chunk 按论文分组后的视图（粒度=论文，按论文最高分排序）——\n前端以 `papers` 为主渲染论文卡片。"
+      },
+      "SearchResult": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "chunk_id": {
+            "type": "string",
+            "title": "Chunk Id"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "doc_title": {
+            "type": "string",
+            "title": "Doc Title"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "default": {}
+          }
+        },
+        "type": "object",
+        "required": [
+          "doc_id",
+          "chunk_id",
+          "content",
+          "score",
+          "doc_title",
+          "source"
+        ],
+        "title": "SearchResult",
+        "description": "检索结果"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VenueAggregation": {
+        "properties": {
+          "venue": {
+            "type": "string",
+            "title": "Venue"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "avg_score": {
+            "type": "number",
+            "title": "Avg Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "venue",
+          "count",
+          "avg_score"
+        ],
+        "title": "VenueAggregation"
+      },
+      "YearAggregation": {
+        "properties": {
+          "year": {
+            "type": "integer",
+            "title": "Year"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "avg_score": {
+            "type": "number",
+            "title": "Avg Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "year",
+          "count",
+          "avg_score"
+        ],
+        "title": "YearAggregation"
+      },
+      "CodeSearchTimingsMs": {
+        "properties": {
+          "embed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embed",
+            "description": "Query embedding."
+          },
+          "retrieve": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieve",
+            "description": "Qdrant vector search."
+          },
+          "fuse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fuse",
+            "description": "RRF fusion across legs. Null for a single-leg (non-federated) search."
+          },
+          "rerank": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank",
+            "description": "Cross-encoder rescoring."
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total",
+            "description": "Whole request, wall time."
+          }
+        },
+        "type": "object",
+        "title": "CodeSearchTimingsMs",
+        "description": "Per-phase wall time in milliseconds (F2-b). A phase this request never ran\n(e.g. ``rerank`` when ``rerank=false``, ``fuse`` on a single-leg search) is null,\nnever 0 — 0 would misrepresent \"ran instantly\" as \"did not run\"."
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "sk-...",
+        "description": "Retrieval API key passed as Authorization: Bearer sk-..."
+      },
+      "SessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "session",
+        "description": "Signed browser session cookie issued by the public gateway."
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://retrieval.rnarket.com",
+      "description": "公网生产（BWH gateway → 4090 算力）"
+    }
+  ]
+}
