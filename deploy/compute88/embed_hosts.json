@@ -1,0 +1,62 @@
+{
+  "arc99": {
+    "ssh_target": "arc99",
+    "python": "C:/Users/Arc/Prd/retrival/.venv/Scripts/python.exe",
+    "worker": "C:/Users/Arc/retrival-embed-host/scripts/remote_embed/embed_worker.py",
+    "model_dir": "C:/Users/Arc/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/5617a9f61b028005a4858fdac845db406aefb181",
+    "workdir": "Prd/retrival/data/remote_embed_host",
+    "batch_size": 64,
+    "shard_size": 25000,
+    "concurrent_shards": 2,
+    "ingest_embed": "local",
+    "marker": {
+      "python": "C:/Users/Arc/Prd/retrival/.venv/Scripts/python.exe",
+      "worker": "C:/Users/Arc/retrival-embed-host/scripts/remote_pvl/wsl_worker.py",
+      "env": {
+        "PADDLE_PDX_CACHE_HOME": "/home/arc/retrival-4090-migration/.cache/paddlex",
+        "PADDLE_PDX_MODEL_SOURCE": "modelscope",
+        "TOKENIZERS_PARALLELISM": "false",
+        "KATEX_NODE": "/home/arc/.local/node22/bin/node",
+        "CUDA_HOME": "/usr/local/cuda-13.2",
+        "OMP_NUM_THREADS": "2",
+        "MKL_NUM_THREADS": "2",
+        "MALLOC_ARENA_MAX": "2",
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "WSLENV": "PADDLE_PDX_CACHE_HOME/u:PADDLE_PDX_MODEL_SOURCE/u:TOKENIZERS_PARALLELISM/u:KATEX_NODE/u:CUDA_HOME/u:OMP_NUM_THREADS/u:MKL_NUM_THREADS/u:MALLOC_ARENA_MAX/u:HF_HUB_OFFLINE/u:TRANSFORMERS_OFFLINE/u"
+      },
+      "args": [
+        "--wsl-distro",
+        "Ubuntu-24.04",
+        "--wsl-cwd",
+        "/home/arc/retrival-4090-migration/retrival",
+        "--wsl-python",
+        "/home/arc/.venvs/retrival-pvl/bin/python",
+        "--wsl-worker",
+        "scripts/remote_pvl/pvl_worker.py",
+        "--wsl-stop-on-eof",
+        "--server-config",
+        "deploy/compute88/pvl_vllm.yaml",
+        "--server-command",
+        "/home/arc/.venvs/retrival-pvl-server/bin/vllm serve /home/arc/retrival-4090-migration/.cache/paddlex/official_models/PaddleOCR-VL-1.6 --config {config} --port {port} --chat-template {root}/deploy/compute88/PaddleOCR-VL-1.6-0.9B.jinja --no-enable-prefix-caching",
+        "--fallback-config",
+        "deploy/compute88/mineru_vllm.yaml",
+        "--fallback-command",
+        "/home/arc/.venvs/retrival-pvl-server/bin/vllm serve /home/arc/retrival-4090-migration/.cache/mineru/MinerU2.5-Pro-2605-1.2B --config {config} --port {port} --logits-processors mineru_vl_utils:MinerULogitsProcessor --no-enable-prefix-caching",
+        "--fallback-model",
+        "MinerU2.5-Pro-2605-1.2B",
+        "--max-concurrency",
+        "64",
+        "--stall-seconds",
+        "360",
+        "--server-prefix",
+        "systemd-run --user --scope -p MemoryHigh=4G --",
+        "--batch-pdfs",
+        "8"
+      ],
+      "extract_min_free_mb": 14336,
+      "batch_size": 120,
+      "ranks_per_gpu": 1
+    }
+  }
+}

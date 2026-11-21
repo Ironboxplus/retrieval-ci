@@ -1,0 +1,39 @@
+[Unit]
+Description=Arc Retrieval BGE-M3 embedding service (vLLM) on compute .88
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=/home/arc/retrival-4090-migration/retrival
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
+Environment=NO_PROXY=localhost,127.0.0.1
+Environment=TOKENIZERS_PARALLELISM=false
+# cuBLAS fp16 accumulation: the user's decision of 2026-11-14. `vllm serve` does not load
+# scripts/remote_embed/fp16_accumulation/sitecustomize.py by itself; with its directory on PYTHONPATH the API
+# process and the engine process it spawns both import it before vLLM builds anything (it sets
+# torch.backends.cuda.matmul.allow_fp16_accumulation unconditionally and prints the value to stderr).
+# Measured on the arc99 RTX 3090: 123 -> 171 chunks/s. Numeric gate against FlagEmbedding fp16 vectors: dense
+# cos mean >= 0.9999 and min >= 0.998 (tests/test_vllm_client.py, deploy/compute88/verify_embed_service.py).
+# Not on the reranking service: only the embedding numbers were verified.
+Environment=PYTHONPATH=/home/arc/retrival-4090-migration/retrival/scripts/remote_embed/fp16_accumulation
+# One set of vLLM keys for every host (deploy/compute88/vllm_bge_m3.yaml); only the model directory, the
+# port and the share of the card are this host's. The venv holds vLLM 0.33.0 and bge_m3_sparse_plugin
+# (scripts/remote_embed/bge_m3_sparse_plugin, pinned to that vLLM): never the backend's torch environment.
+# The model directory is a symlink named with the profile's revision (README, "Model services"): the path
+# is what /v1/models reports as `root`, and vllm_client.check_service refuses a path without the revision.
+ExecStart=/home/arc/.venvs/retrival-vllm/bin/vllm serve /home/arc/retrival-4090-migration/.cache/modelscope/BAAI/bge-m3-5617a9f61b028005a4858fdac845db406aefb181 --config /home/arc/retrival-4090-migration/retrival/deploy/compute88/vllm_bge_m3.yaml --port 18200 --gpu-memory-utilization 0.2
+Restart=on-failure
+RestartSec=10
+# model load, torch.compile and CUDA graph capture: 50-75 s on the 3090 with a warm compile cache
+TimeoutStartSec=300
+TimeoutStopSec=60
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

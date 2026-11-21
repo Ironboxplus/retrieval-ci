@@ -1,0 +1,206 @@
+{
+ "paper": "eccv-2024-05783",
+ "page": 7,
+ "attempt": 0,
+ "scale": 2.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     816,
+     184,
+     899,
+     205
+    ],
+    "block_content": "ReSyncer"
+   },
+   {
+    "block_id": 1,
+    "block_label": "number",
+    "block_bbox": [
+     949,
+     186,
+     963,
+     203
+    ],
+    "block_content": "7"
+   },
+   {
+    "block_id": 2,
+    "block_label": "text",
+    "block_bbox": [
+     264,
+     232,
+     964,
+     305
+    ],
+    "block_content": "As  $ I_t^{AM} $ directly provides the 3D mouth shape information, the reference frame can hardly influence the prediction result as long as it is not the target frame itself. Thus we randomly sample  $ I_{ref} $ within the nearest 30 frames of  $ I_t $."
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     306,
+     965,
+     496
+    ],
+    "block_content": "A number of previous lip-sync studies [22,32,59,77,81] rely on encoding audio information into the  $ W $ space for animation. However, with explicit guidance, the driving information would play a less important role in the  $ W $ space. Meanwhile, the face-swapping task illustrates that  $ W $ space embedding benefits identity information [35,73,83] which we intend to enhance. To avoid involving extra network design and inference procedures, we directly send the encoded  $ f_f $ from  $ [I_t^{AM}, I_{ref}] $ to the  $ \\mathcal{W} $, so that the reference frame provides more facial detail while  $ I_t^{AM} $ also passes dynamic information."
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     498,
+     966,
+     617
+    ],
+    "block_content": "Loss Functions. To sum up, in the second stage, the generator takes the output only of a single facial encoder and predicts the target frame itself as  $ \\hat{I}_t $. The training objective is much simpler with the 3D guidance. We only adopt the same loss functions as Pix2pix-HD [65], which are the  $ L_1 $, VGG, and adversarial loss empowered with StyleGAN2's discriminator."
+   },
+   {
+    "block_id": 5,
+    "block_label": "display_formula",
+    "block_bbox": [
+     369,
+     631,
+     858,
+     697
+    ],
+    "block_content": " $$ \\mathcal{L}_{r e c}=\\|\\hat{I}_{t}-I_{t}\\|_{1}+\\lambda_{2}\\sum_{m=1}^{N_{v g g}}\\|\\mathrm{V G G}_{m}(\\hat{I}_{t})-\\mathrm{V G G}_{m}(I_{t})\\|_{1}, $$ "
+   },
+   {
+    "block_id": 6,
+    "block_label": "formula_number",
+    "block_bbox": [
+     935,
+     653,
+     961,
+     678
+    ],
+    "block_content": "(1)"
+   },
+   {
+    "block_id": 7,
+    "block_label": "display_formula",
+    "block_bbox": [
+     380,
+     735,
+     847,
+     770
+    ],
+    "block_content": " $$ \\begin{array}{r}{\\mathcal{L}_{a d v}=\\underset{\\mathrm{~G~\\quad D~}}{\\mathrm{m i n}}\\mathrm{m a x}(\\mathbb{E}_{I_{t}}[\\log\\mathrm{D}(I_{t})]+\\mathbb{E}_{\\hat{I}_{t}}[\\log(1-\\mathrm{D}(\\hat{I}_{t}))]).}\\end{array} $$ "
+   },
+   {
+    "block_id": 8,
+    "block_label": "formula_number",
+    "block_bbox": [
+     935,
+     738,
+     961,
+     762
+    ],
+    "block_content": "(2)"
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     785,
+     963,
+     831
+    ],
+    "block_content": "As the rendered meshes provide much clearer guidance than audio, the generator can be easily trained without task-oriented losses or specific tuning."
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     833,
+     965,
+     926
+    ],
+    "block_content": "During inference, we overlay the predicted mesh  $ M_t^p $ from the first stage to form the input  $ [\\hat{I}_t^{AM}, I_{ref}] $. Though the predicted  $ \\hat{M}_t^p $ cannot perfectly match the reconstructed results, we rely on the powerful generator to compensate for such disturbance."
+   },
+   {
+    "block_id": 11,
+    "block_label": "text",
+    "block_bbox": [
+     264,
+     927,
+     965,
+     999
+    ],
+    "block_content": "Video-Driven Lip-Sync. The generator only depends on mesh information, thus we can transfer the displacements of meshes  $ \\Delta M' $ of another person to the target template  $ \\bar{M} $ so that video-driven lip-sync can be naturally achieved."
+   },
+   {
+    "block_id": 12,
+    "block_label": "text",
+    "block_bbox": [
+     264,
+     999,
+     964,
+     1096
+    ],
+    "block_content": "Personalized Fine-tuning. Given that syncing information is derived from the 3D facial mesh, the generator in the second stage will not overfit the limited lip patterns present in given clips. This masks our method full-parameter fine-tunable on only seconds of videos."
+   },
+   {
+    "block_id": 13,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     265,
+     1127,
+     473,
+     1152
+    ],
+    "block_content": "3.3 Face-Swapping"
+   },
+   {
+    "block_id": 14,
+    "block_label": "text",
+    "block_bbox": [
+     263,
+     1165,
+     964,
+     1335
+    ],
+    "block_content": "We now illustrate the power of our comprehensive framework to directly achieve face-swapping and lip-sync with unified training. Our design of leveraging the W space for enhancing facial generation considers the similar setting used in previous face swapping studies [35, 72, 73]. Moreover, the identity information of the audio-predicted mesh  $ \\hat{M}_t $ can be easily transferred by sending different template meshes into the style encoder of the Style-SyncFormer. So that the shape of facial organs can be seamlessly swapped to another person."
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "omission: page text 'withstylegansdiscriminatormathcallreclambdasumvggmhatittextv' is 16% in the Markdown (< 50%)",
+   "formula_symbol: display formula '\\\\mathcal{L}_{r e c}=\\\\|\\\\hat{I}_{t}-I_{t}\\\\|_{1}+\\\\lam' lacks characters the page has there (coverage 0.79 < 0.9)",
+   "formula_symbol: display formula '\\\\begin{array}{r}{\\\\mathcal{L}_{a d v}=\\\\underset{\\\\ma' lacks characters the page has there (coverage 0.68 < 0.9)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 18,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.163,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.961,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "table_digits_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

@@ -46,6 +46,10 @@ class GateResult:
 
     ok: bool
     reason: str = ""
+    # A failed *preflight* whose cause clears by itself (another process holds the GPU for now): the
+    # orchestrator keeps the stage's place at the head of its resource queue, waits and asks again
+    # instead of failing the stage (Orchestrator._wait_out_transient_preflight).
+    transient: bool = False
 
 
 # Duck-typed: ctx is whatever StageContext the orchestrator forwards; sink is

@@ -46,10 +46,13 @@ class TestConferenceYamlSchema(unittest.TestCase):
         expected = {
             # AI
             "AAAI", "ACL", "CVPR", "EMNLP", "ICCV", "ICLR", "ICML", "IJCAI", "NeurIPS",
+            "ECCV", "TPAMI", "JMLR", "IJCV",
             # DB
             "KDD", "SIGIR", "SIGMOD", "VLDB",
             # SC
-            "CCS", "USENIX Security", "NDSS",
+            "CCS", "USENIX Security", "NDSS", "IEEE S&P",
+            # SE (system software)
+            "OSDI", "SOSP",
             # CG
             "ACM MM",
             # MX (interdisciplinary): WWW = The Web Conference, CSUR = ACM Computing Surveys (journal)
@@ -99,7 +102,7 @@ class TestLoadFromYaml(unittest.TestCase):
         from pipeline.paper_crawler.ccf_a_main_corpus import load_conference_registry
         registry = load_conference_registry()
         self.assertIsInstance(registry, list)
-        self.assertEqual(len(registry), 26)
+        self.assertEqual(len(registry), 33)
 
     def test_registry_entries_have_source(self):
         from pipeline.paper_crawler.ccf_a_main_corpus import load_conference_registry
@@ -113,9 +116,10 @@ class TestLoadFromYaml(unittest.TestCase):
     def test_build_sources_covers_all_entries(self):
         from pipeline.paper_crawler.ccf_a_main_corpus import build_sources
         sources = build_sources()
-        self.assertEqual(len(sources), 26)
+        self.assertEqual(len(sources), 33)
         for required in ("ICLR", "CCS", "VLDB", "ACM MM", "USENIX Security", "NDSS", "WWW", "CSUR",
-                         "ASPLOS", "ISCA", "PPoPP", "EuroSys", "DAC", "FAST", "USENIX ATC"):
+                         "ASPLOS", "ISCA", "PPoPP", "EuroSys", "DAC", "FAST", "USENIX ATC",
+                         "ECCV", "TPAMI", "JMLR", "IJCV", "IEEE S&P", "OSDI", "SOSP"):
             self.assertIn(required, sources)
 
     def test_registry_derives_venue_tier(self):

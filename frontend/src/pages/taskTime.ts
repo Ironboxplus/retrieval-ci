@@ -1,28 +1,33 @@
 /**
- * Task timestamp parsing (frontend refactor F1-f).
+ * Timestamp parsing.
  *
- * Production fact confirmed on .88: `tasks.created_at` is written as UTC,
- * `tasks.started_at` is written as local wall-clock time — the two differ by
- * a fixed 8h offset in production. Neither string carries a timezone suffix,
- * so a plain `new Date(str)` would treat both as local and misrender
- * `created_at` by the local UTC offset. This file is the one place that
- * distinction is applied; nothing on the backend changes.
+ * Task, event, resource and schedule timestamps are RFC 3339 with an explicit
+ * offset (`...Z` / `+08:00`), so `parseTimestamp` is a plain instant parse and
+ * `instantMs` is what to compare or sort by (never the strings: offsets differ).
+ *
+ * `parseCreatedAt` remains for endpoints still sending naive strings (document
+ * `created_at`, written as UTC with no zone suffix): a naive string is read as
+ * UTC instead of the browser's local time.
  */
 
 const HAS_ZONE = /Z$|[+-]\d{2}:?\d{2}$/;
 
-/** `created_at`: naive strings are UTC. */
+/** An RFC 3339 timestamp (explicit offset) as a Date. */
+export function parseTimestamp(raw: string): Date {
+  return new Date(raw);
+}
+
+/** Epoch ms of an RFC 3339 timestamp; missing or unparseable is 0, so it sorts first and never yields NaN. */
+export function instantMs(raw: string | null | undefined): number {
+  const ms = raw ? Date.parse(raw) : NaN;
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+/** Naive strings are UTC. */
 export function parseCreatedAt(raw: string): Date {
   if (HAS_ZONE.test(raw)) return new Date(raw);
   const iso = raw.includes(' ') ? raw.replace(' ', 'T') : raw;
   return new Date(`${iso}Z`);
-}
-
-/** `started_at`: naive strings are already local wall-clock time. */
-export function parseStartedAt(raw: string): Date {
-  if (HAS_ZONE.test(raw)) return new Date(raw);
-  const iso = raw.includes(' ') ? raw.replace(' ', 'T') : raw;
-  return new Date(iso);
 }
 
 const MINUTE = 60_000;
@@ -57,4 +62,10 @@ export function formatDuration(seconds: number | null | undefined): string | nul
 export function formatDateTime(date: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
+}
+
+/** Local wall-clock `HH:mm:ss`. */
+export function formatClock(date: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
 }

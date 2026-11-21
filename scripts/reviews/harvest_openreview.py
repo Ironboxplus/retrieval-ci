@@ -1,9 +1,7 @@
 """Harvest public OpenReview reviews (reviews + rebuttals + meta-review + decision)
 for a venue into a structured JSONL, one record per submission.
 
-Confirmed public-review venues (probed 2026-06-16): ICLR.cc/{year}/Conference,
-NeurIPS.cc/{year}/Conference, MIDL.io/{year}/Conference. ICML / AAAI / thecvf
-(CVPR/ICCV/ECCV) / ACL family / KDD do NOT expose reviews publicly.
+Public-review venue coverage and field differences live in review_venues.py.
 
 Network: OpenReview (api2.openreview.net) is reached ONLY through the 10808 proxy
 (W111: the 4090 box has no egress; harvest runs Arc-side). The proxy is read from
@@ -29,11 +27,16 @@ import argparse
 import json
 import logging
 import os
+import re
+import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 import requests
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from pipeline.http_retry import retry_after_from  # noqa: E402
 
 logger = logging.getLogger("harvest_openreview")
 
@@ -46,6 +49,14 @@ class RateLimited(Exception):
 
 API = "https://api2.openreview.net/notes"
 
+
+class AccessChallengeRequired(RuntimeError):
+    """Public API access needs operator browser verification; do not hammer it."""
+
+
+class RequestBudgetReached(RuntimeError):
+    """Stop at the operator's request budget, preserving the harvest cursor."""
+
 # Each venue's review form uses different field names. Map a canonical role to an
 # ordered list of candidate field names (first non-empty wins) so the harvested
 # record schema is uniform across ICLR / NeurIPS / COLM / CoRL / UAI / D&B / ...
@@ -57,7 +68,7 @@ REVIEW_TEXT_MAP = {
     "strengths":  ["strengths", "Q3_Main_strengths", "reasons_to_accept"],
     "weaknesses": ["weaknesses", "Q4_Main_weakness", "reasons_to_reject",
                    "opportunities_for_improvement", "requested_changes",
-                   "other_strengths_and_weaknesses", "review"],
+                   "other_strengths_and_weaknesses", "strengths_and_weaknesses", "review"],
     "questions":  ["questions", "questions_for_rebuttal", "questions_for_authors",
                    "Q5_Detailed_comments_to_the_authors", "additional_feedback"],
 }
@@ -124,8 +135,9 @@ def _first_int(value: Any) -> Optional[int]:
 
 class OpenReviewHarvester:
     def __init__(self, proxy: Optional[str], tries: int = 6, base_sleep: float = 1.2,
-                 pace: float = 0.3):
+                 pace: float = 0.3, max_requests: Optional[int] = None):
         self.session = requests.Session()
+        self.session.trust_env = False
         self.session.headers.update({"User-Agent": "retrival-reviews/1.0"})
         if proxy:
             self.session.proxies.update({"http": proxy, "https": proxy})
@@ -138,24 +150,42 @@ class OpenReviewHarvester:
         self.tries = tries
         self.base_sleep = base_sleep
         self.pace = pace
+        self.max_requests = max_requests
+        self.requests_made = 0
 
     def _get(self, params: dict) -> dict:
         last = None
         for i in range(self.tries):
-            r = self.session.get(API, params=params, timeout=45)
+            if self.max_requests is not None and self.requests_made >= self.max_requests:
+                raise RequestBudgetReached(f"OpenReview request budget reached ({self.max_requests})")
+            self.requests_made += 1
+            r = self.session.get(API, params=params, timeout=45, allow_redirects=False)
             last = r.status_code
             if r.status_code == 200:
                 time.sleep(self.pace)  # be polite to the shared proxy IP
                 return r.json()
+            if r.status_code == 403:
+                raise AccessChallengeRequired(
+                    "OpenReview returned 403: complete its browser verification or "
+                    "provide an authorized public API session before resuming."
+                )
+            if r.status_code != 429 and r.status_code < 500:
+                r.raise_for_status()
+                raise requests.HTTPError(f"Unexpected OpenReview HTTP {r.status_code}", response=r)
             wait = self.base_sleep * (2 ** i)
+            if r.status_code == 429:
+                wait = max(60.0, wait, retry_after_from(r, default=60.0))
             logger.warning("HTTP %s on %s — retry %d/%d in %.1fs",
                            r.status_code, params.get("forum") or params.get("invitation"),
                            i + 1, self.tries, wait)
-            time.sleep(wait)
+            if i + 1 < self.tries:
+                time.sleep(wait)
         # Exhausted retries — DO NOT pretend "no data". Raise so the driver
         # checkpoints + resumes instead of writing a truncated file as complete.
-        raise RateLimited(f"{last} after {self.tries} tries: "
-                          f"{params.get('forum') or params.get('invitation')}")
+        message = f"{last} after {self.tries} tries: {params.get('forum') or params.get('invitation')}"
+        if last == 429:
+            raise RateLimited(message)
+        raise requests.HTTPError(message, response=r)
 
     def iter_submissions(self, venue: str, limit: Optional[int]):
         """Yield submission notes for a venue, paginating. Includes rejected."""
@@ -202,9 +232,10 @@ class OpenReviewHarvester:
             pdf_url = str(pdf_val) if str(pdf_val).startswith("http") \
                 else f"https://openreview.net{pdf_val}"
         forum_url = f"https://openreview.net/forum?id={sub['id']}"
-        # accepted iff the venue/venueid is NOT a rejected/withdrawn/submitted marker
+        # Missing decisions are common before release and are not acceptance.
         low = (venue_str + " " + venueid).lower()
-        accepted = not any(k in low for k in ("reject", "withdraw", "desk", "submitted to"))
+        accepted = bool(venueid == venue or re.search(r"\b(accept\w*|oral|spotlight|poster)\b", low))
+        accepted = accepted and not any(k in low for k in ("reject", "withdraw", "desk", "submitted to"))
 
         if replies is None:
             replies = self.forum_notes(sub["id"])
@@ -212,10 +243,14 @@ class OpenReviewHarvester:
         reviews, rebuttals = [], []
         meta_review, decision_text = None, None
         for n in replies:
+            if "everyone" not in (n.get("readers") or []):
+                continue
             suf = _suffix(n)
             c = n.get("content", {})
             if suf in ("Official_Review", "Review"):
-                rec = {"reviewer": (n.get("signatures") or ["?"])[0].split("/")[-1]}
+                rec = {"id": n.get("id"), "license": n.get("license"),
+                       "readers": n.get("readers"), "content": c,
+                       "reviewer": (n.get("signatures") or ["?"])[0].split("/")[-1]}
                 for role, cands in REVIEW_SCORE_MAP.items():
                     rec[role] = _pick(c, cands)
                 for role, cands in REVIEW_TEXT_MAP.items():
@@ -229,6 +264,10 @@ class OpenReviewHarvester:
                 txt = _val(c, "rebuttal") or _val(c, "comment")
                 if txt:
                     rebuttals.append(txt)
+
+        if not venue_str and not venueid and decision_text:
+            accepted = bool(re.search(r"\baccept\w*\b", decision_text.lower()))
+            accepted = accepted and not any(k in decision_text.lower() for k in ("reject", "withdraw", "desk"))
 
         ratings = [r for r in (_first_int(rv.get("rating")) for rv in reviews) if r is not None]
         return {
@@ -286,7 +325,7 @@ class OpenReviewHarvester:
         return out
 
     def iter_harvest(self, venue: str, year: int, venue_name: str,
-                     start_offset: int = 0):
+                     start_offset: int = 0, after: Optional[str] = None):
         """Stream (offset_consumed, record) from start_offset, paging the batch
         endpoint. Lets the driver write + checkpoint incrementally so a big venue
         resumes mid-way. Propagates RateLimited (NOT swallowed) so a truncated run
@@ -296,8 +335,14 @@ class OpenReviewHarvester:
         offset = start_offset
         page = 50
         while True:
-            d = self._get({"invitation": inv, "limit": page, "offset": offset,
-                           "details": "replies"})
+            # Match the official efficient_iterget: after is paired with id sort.
+            params = {"invitation": inv, "limit": page, "details": "replies", "sort": "id"}
+            if after:
+                params["after"] = after
+            elif start_offset:
+                # Legacy callers can resume once by offset, then switch to cursor.
+                params["offset"] = start_offset
+            d = self._get(params)
             notes = d.get("notes", [])
             if not notes:
                 return
@@ -306,6 +351,11 @@ class OpenReviewHarvester:
                 offset += 1
                 yield offset, self.parse_submission(sub, venue, year, venue_name,
                                                     replies=reps)
+            next_after = notes[-1]["id"]
+            if next_after == after:
+                raise RuntimeError("OpenReview cursor did not advance; harvest incomplete")
+            after = next_after
+            start_offset = 0
             if len(notes) < page:
                 return
 
@@ -322,10 +372,12 @@ def main():
     ap.add_argument("--proxy", default=os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"))
     ap.add_argument("--per-forum", action="store_true",
                     help="use per-forum fetch (robust) instead of batch details=replies")
+    ap.add_argument("--max-requests", type=int, default=3,
+                    help="HTTP attempt budget, including retries; 0 explicitly allows an unbounded run")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    h = OpenReviewHarvester(proxy=args.proxy)
+    h = OpenReviewHarvester(proxy=args.proxy, max_requests=args.max_requests or None)
     name = args.name or _derive_name(args.venue)
     logger.info("harvest %s (name=%s) year=%s limit=%s proxy=%s batch=%s",
                 args.venue, name, args.year, args.limit, args.proxy, not args.per_forum)

@@ -1,0 +1,30 @@
+{
+  "python": "/home/arc/.venvs/retrival-pvl/bin/python",
+  "worker": "scripts/remote_pvl/pvl_worker.py",
+  "env": {
+    "PADDLE_PDX_CACHE_HOME": "/home/arc/retrival-4090-migration/.cache/paddlex",
+    "PADDLE_PDX_MODEL_SOURCE": "modelscope",
+    "TOKENIZERS_PARALLELISM": "false"
+  },
+  "args": [
+    "--server-config",
+    "deploy/compute88/pvl_vllm.yaml",
+    "--server-command",
+    "/home/arc/.venvs/retrival-pvl-server/bin/vllm serve /home/arc/retrival-4090-migration/.cache/paddlex/official_models/PaddleOCR-VL-1.6 --config {config} --port {port} --chat-template {root}/deploy/compute88/PaddleOCR-VL-1.6-0.9B.jinja --no-enable-prefix-caching",
+    "--fallback-config",
+    "deploy/compute88/mineru_vllm.yaml",
+    "--fallback-command",
+    "/home/arc/.venvs/retrival-pvl-server/bin/vllm serve /home/arc/retrival-4090-migration/.cache/mineru/MinerU2.5-Pro-2605-1.2B --config {config} --port {port} --logits-processors mineru_vl_utils:MinerULogitsProcessor --no-enable-prefix-caching",
+    "--fallback-model",
+    "MinerU2.5-Pro-2605-1.2B",
+    "--max-concurrency",
+    "64",
+    "--stall-seconds",
+    "360",
+    "--server-prefix",
+    "systemd-run --user --scope -p MemoryHigh=4G --"
+  ],
+  "extract_min_free_mb": 6657,
+  "batch_size": 40,
+  "ranks_per_gpu": 1
+}

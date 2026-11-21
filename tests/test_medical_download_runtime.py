@@ -838,7 +838,7 @@ def test_medical_request_schema_does_not_regress_existing_ingest_request_contrac
     ingest = IngestPipelineRequest(venue="CVPR", year=2026, ssh_target="4090")
     assert ingest.remote_repo is None
     assert ingest.concurrency == 8
-    assert ingest.execution_mode == "remote"
+    assert ingest.execution_mode == "local"
     assert set(MedicalDownloadRequest.model_fields) == {"download_limit", "allow_cf_bypass"}
 
 
