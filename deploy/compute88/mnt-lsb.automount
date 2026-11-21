@@ -1,0 +1,10 @@
+[Unit]
+Description=Automount Retrieval paper artifacts on compute .88
+
+[Automount]
+Where=/mnt/lsb
+TimeoutIdleSec=0
+
+[Install]
+WantedBy=multi-user.target
+
