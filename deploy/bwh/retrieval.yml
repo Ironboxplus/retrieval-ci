@@ -1,0 +1,96 @@
+# Traefik dynamic routing for retrival — GATED (paid app-tier live).
+#
+# Deployed to BWH: ~/docker/traefik/dynamic/retrieval.yml  (file provider, auto-reload).
+# This is the FULL file (not a patch) — it carries the tls/certResolver (666resolver
+# wildcard *.rnarket.com) + entrypoint (websecure) the edge needs.
+#
+# Routing (2026-06-18, option A full paid gate):
+#   /auth/*                                   → gateway  (login / callback / register / keys / me)
+#   /api/linuxdooid/* /api/google/*           → gateway  (social login: linux.do + Google OAuth)
+#   /api/search(+/stream) /match-doc /topup /payment → gateway  (login + credit debit)
+#   /api/papers/*                             → gateway  (LOGIN-gated, NOT metered; scrubs txt/pdf paths) W127
+#   /api/conferences /stats /dashboard/distribution → gateway  (LOGIN-gated, NOT metered) W127b
+#   /api/public-code/*                         → gateway  (ADMIN-only, not metered)
+#   everything else (SPA + /openapi.json + /docs/) → retrieval-frontend (nginx)
+# NOTHING under /api/* is anonymous anymore — only the login flow (/auth/*) + static.
+#
+# The gateway proxies the metered calls onward to the SAME tunnel
+# (GATEWAY_INTERNAL_BASE_URL=http://retrieval-xray:18000). Anonymous search is
+# impossible: /api/search only resolves to the gateway, which 401s without a session.
+#
+# Rollback: `mv retrieval.yml retrieval.yml.disabled` (file provider drops it in ~1s)
+# → site 404s, nothing else depends on it. retrieval.yml.disabled (pre-gateway,
+# all-anonymous) is kept on the box as the previous-generation backup.
+
+http:
+  middlewares:
+    retrieval-ratelimit:
+      rateLimit:
+        average: 20
+        period: 1m
+        burst: 10
+
+  routers:
+    # ── /auth/* (login / callback / register / keys / me / logout) → gateway ──
+    retrieval-auth:
+      entryPoints: [websecure]
+      rule: "Host(`retrieval.rnarket.com`) && PathPrefix(`/auth`)"
+      priority: 100
+      service: retrieval-gateway
+      middlewares: [retrieval-ratelimit]
+      tls:
+        certResolver: 666resolver
+        domains:
+          - main: "rnarket.com"
+            sans:
+              - "*.rnarket.com"
+
+    # ── metered + billing + social login + paper browsing → gateway ──
+    # PathPrefix(/api/search) covers /api/search AND /api/search/stream.
+    # PathPrefix(/api/payment) covers /api/payment/notify.
+    # PathPrefix(/api/linuxdooid|/api/google) covers social-login login/link/callback.
+    # PathPrefix(/api/papers) = LOGIN-gated (not metered) + path-scrub (W127).
+    # /api/conferences|stats|dashboard/distribution = LOGIN-gated aggregates (W127b).
+    retrieval-gateway:
+      entryPoints: [websecure]
+      rule: "Host(`retrieval.rnarket.com`) && (PathPrefix(`/api/search`) || Path(`/api/match-doc`) || Path(`/api/topup`) || PathPrefix(`/api/payment`) || PathPrefix(`/api/linuxdooid`) || PathPrefix(`/api/google`) || PathPrefix(`/api/papers`) || PathPrefix(`/api/public-code`) || Path(`/api/conferences`) || Path(`/api/stats`) || Path(`/api/dashboard/distribution`))"
+      priority: 95
+      service: retrieval-gateway
+      middlewares: [retrieval-ratelimit]
+      tls:
+        certResolver: 666resolver
+        domains:
+          - main: "rnarket.com"
+            sans:
+              - "*.rnarket.com"
+
+    # ── (W127b) retrieval-free router REMOVED — no anonymous /api/* remains.
+    #    conferences/stats/distribution are now login-gated via retrieval-gateway.
+    #    /openapi.json + /docs/ are static (served by the SPA router below). ──
+
+    # ── SPA fallback (lowest priority) → nginx static ──
+    retrieval-web:
+      entryPoints: [websecure]
+      rule: "Host(`retrieval.rnarket.com`)"
+      priority: 1
+      service: retrieval-frontend
+      tls:
+        certResolver: 666resolver
+        domains:
+          - main: "rnarket.com"
+            sans:
+              - "*.rnarket.com"
+
+  services:
+    retrieval-backend:        # the xray reverse tunnel inbound → 4090:8000
+      loadBalancer:
+        servers:
+          - url: "http://retrieval-xray:18000"
+    retrieval-frontend:
+      loadBalancer:
+        servers:
+          - url: "http://retrieval-frontend:80"
+    retrieval-gateway:        # the BWH app-tier (auth + billing + reverse-proxy)
+      loadBalancer:
+        servers:
+          - url: "http://retrieval-gateway:8001"

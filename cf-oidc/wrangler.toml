@@ -1,0 +1,40 @@
+# Wrangler config for the live OIDC Worker (CF script "116" @ 116.ironbox.workers.dev).
+#
+# Bindings below MIRROR the deployed worker exactly (read from the live settings API
+# 2026-06-17) so a `wrangler deploy` never drops one:
+#   MY_DB (D1)  KV (kv_namespace)  +  PRIVATE_JWK / PUBLIC_JWK (json vars, kept by
+#   --keep-vars)  +  ADMIN_PASSWORD (secret, persists across deploys).
+#
+# ALWAYS deploy with --keep-vars so the dashboard-set JWK vars + ADMIN_PASSWORD secret
+# survive:   wrangler deploy --keep-vars
+#
+# admin_arc is DATA-driven: an admin-role row in the cdks D1 table (role='admin').
+# The code honors role==='admin' and never disables admin CDKs, so it is preserved.
+
+name = "116"
+main = "main.js"
+compatibility_date = "2026-03-17"   # matches the live worker
+
+[[d1_databases]]
+binding = "MY_DB"
+database_name = "116"
+database_id = "ff0590f8-37f8-4a2d-9e89-d93bd344489e"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "ea430b3621da46f488b462dab48e883b"
+
+# Security knobs (backward compatible). plain PKCE stays ENABLED because the live
+# worker currently advertises it and existing clients may rely on it — flip to
+# "false" once every relying party is confirmed on S256. Redirect/client allowlists
+# left empty (= accept any valid https) to avoid locking out current RPs; tighten
+# once their exact redirect_uris are known.
+[vars]
+ALLOWED_REDIRECT_URIS = ""
+ALLOWED_CLIENT_IDS = ""
+ALLOW_PLAIN_PKCE = "true"
+
+# Secrets / JWK vars are NOT defined here (set in the dashboard). Preserve with:
+#   wrangler deploy --keep-vars
+# To rotate keys later, prefer moving PRIVATE_JWK to a secret:
+#   wrangler secret put PRIVATE_JWK

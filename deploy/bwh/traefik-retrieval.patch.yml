@@ -1,0 +1,68 @@
+# Traefik dynamic routing for retrival — PATCH, not a blind replacement.
+#
+# Target file on BWH: ~/docker/traefik/dynamic/retrieval.yml  (file provider, auto-reload).
+# DO NOT overwrite that file wholesale — it carries entrypoints/tls/certResolver
+# (666resolver wildcard *.rnarket.com) that are not reproduced here. Instead MERGE the
+# routers + service below, keeping the file's existing tls/entrypoint fields.
+#
+# Change vs the current (pre-gateway) routing:
+#   before:  all whitelisted /api/* → retrieval-xray:18000 (anonymous, free)
+#   after:   metered/auth paths → gateway:8001 (login + credits);
+#            free read-only paths stay direct → retrieval-xray:18000 (anonymous).
+#
+# Single API entry stays retrieval.rnarket.com; the gateway proxies the metered calls
+# on to the SAME tunnel (GATEWAY_INTERNAL_BASE_URL=http://retrieval-xray:18000).
+
+http:
+  routers:
+
+    # ── /auth/* (login / callback / register / keys / me / logout) → gateway ──
+    retrieval-auth:
+      rule: "Host(`retrieval.rnarket.com`) && PathPrefix(`/auth`)"
+      priority: 100
+      service: retrieval-gateway
+      entryPoints: [websecure]      # ← match the existing file's entrypoint name
+      tls: {}                       # ← match the existing file's tls/certResolver block
+
+    # ── metered + billing + social login + paper browsing → gateway ──
+    # PathPrefix(/api/search) covers /api/search AND /api/search/stream.
+    # PathPrefix(/api/linuxdooid|/api/google) = linux.do + Google OAuth login/link/callback.
+    # PathPrefix(/api/papers) = LOGIN-gated (not metered) + path-scrub (W127).
+    # conferences/stats/dashboard.distribution = LOGIN-gated aggregates (W127b).
+    # PathPrefix(/api/public-code) = ADMIN-only shared corpus control/search.
+    retrieval-gateway:
+      rule: >-
+        Host(`retrieval.rnarket.com`) && (
+          PathPrefix(`/api/search`) ||
+          Path(`/api/match-doc`) ||
+          Path(`/api/topup`) ||
+          PathPrefix(`/api/payment`) ||
+          PathPrefix(`/api/linuxdooid`) ||
+          PathPrefix(`/api/google`) ||
+          PathPrefix(`/api/papers`) ||
+          PathPrefix(`/api/public-code`) ||
+          Path(`/api/conferences`) ||
+          Path(`/api/stats`) ||
+          Path(`/api/dashboard/distribution`)
+        )
+      priority: 95
+      service: retrieval-gateway
+      middlewares: [retrieval-ratelimit]
+      entryPoints: [websecure]
+      tls: {}
+
+    # ── (W127b) retrieval-free router REMOVED — no anonymous /api/* remains. The
+    #    aggregates (conferences/stats/distribution) are now login-gated via
+    #    retrieval-gateway. /openapi.json + /docs/ are static (SPA router). ──
+
+    # ── SPA fallback (priority 1) — keep the existing retrieval-frontend router as-is ──
+    # retrieval-frontend: Host(`retrieval.rnarket.com`) → http://retrieval-frontend:80
+
+  services:
+    # NEW — add this. retrieval-xray + retrieval-frontend services already exist; keep them.
+    retrieval-gateway:
+      loadBalancer:
+        servers:
+          - url: "http://retrieval-gateway:8001"
+
+  # retrieval-ratelimit middleware already exists (rateLimit average 20 / period 1m / burst 10).
