@@ -1,0 +1,12 @@
+# PDF -> Markdown worker dependencies shared by Windows and Linux.
+#
+# Install the host-appropriate CUDA Torch build first.  Windows currently uses
+# torch 2.8.0+cu126; compute .88 uses torch 2.12.0+cu130.  Pinning one wheel
+# here would make one of the two hosts wrong.
+marker-pdf==2.0.0
+surya-ocr==0.22.1
+psutil>=7.2.2,<8
+
+# Real artifact validation before/after conversion.  The worker itself uses
+# pypdfium2 through Marker; pypdf is the independent acceptance parser.
+pypdf>=6.9.0,<7
