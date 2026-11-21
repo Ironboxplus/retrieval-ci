@@ -1,0 +1,202 @@
+"""SQLite FTS5 keyword index for ACE journal entries.
+
+Keyword search is deliberately **embedding-free**: it runs entirely in SQLite, so
+it keeps working when the shared BGE-M3 embed endpoint (4090) is down (W131). It
+complements the dense/sparse Qdrant path — literal terms, file paths, error codes
+and W-numbers match here without a model round-trip.
+
+The virtual table lives in the same SQLite DB as the ORM tables but is managed by
+raw DDL (SQLAlchemy does not model FTS5 vtables). owner_user_id / project_slug /
+source_kind are UNINDEXED columns so we can filter the same match by tenant.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from collections.abc import Sequence
+from typing import Any
+
+from sqlalchemy import bindparam, text
+from sqlalchemy.orm import Session
+
+logger = logging.getLogger("journal.fts")
+
+TABLE = "journal_fts"
+
+_CREATE = f"""
+CREATE VIRTUAL TABLE IF NOT EXISTS {TABLE} USING fts5(
+    entry_id UNINDEXED,
+    owner_user_id UNINDEXED,
+    project_slug UNINDEXED,
+    source_kind UNINDEXED,
+    title,
+    summary,
+    body,
+    tags,
+    tokenize = 'unicode61'
+)
+"""
+
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def ensure_fts(session: Session) -> None:
+    """Idempotently create the FTS5 virtual table."""
+    session.execute(text(_CREATE))
+
+
+def _match_query(raw: str) -> str | None:
+    """Turn free text into a safe FTS5 MATCH expression (prefix, OR semantics).
+
+    Extracting `\\w+` tokens strips FTS operators (quotes, `-`, `:`) that would
+    otherwise be interpreted as syntax or raise. Each token is a prefix term so
+    `observ` matches `observability`.
+
+    Terms are OR-ed, not AND-ed: this is the tool's default "always works" recall
+    path, and a natural-language sentence rarely has EVERY token in one entry — AND
+    made such queries silently return nothing. bm25 still ranks entries that match
+    more (and rarer) terms first, so precision comes from ordering, not exclusion.
+    """
+    tokens = query_tokens(raw)
+    if not tokens:
+        return None
+    return " OR ".join(f"{t}*" for t in tokens)
+
+
+def query_tokens(raw: str) -> list[str]:
+    """Return the same sanitized tokens used to build journal FTS MATCH queries."""
+    return _TOKEN_RE.findall(raw or "")
+
+
+def like_token_pattern(token: str) -> str:
+    """Return a SQLite LIKE pattern for one sanitized token.
+
+    FTS tokenization treats identifiers such as ``delete_code`` literally enough
+    to find the right entry. Chunk hydration must not broaden that to
+    ``delete-code`` by letting LIKE interpret ``_`` as a wildcard.
+    """
+    escaped = (
+        token.lower()
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"%{escaped}%"
+
+
+def index_entry(
+    session: Session,
+    *,
+    entry_id: str,
+    owner_user_id: str | None,
+    project_slug: str,
+    source_kind: str,
+    title: str | None,
+    summary: str | None,
+    body: str,
+    tags: list[str] | None,
+) -> None:
+    """Replace the FTS row for one entry (delete-then-insert = idempotent upsert)."""
+    delete_entry(session, entry_id)
+    session.execute(
+        text(
+            f"INSERT INTO {TABLE} "
+            "(entry_id, owner_user_id, project_slug, source_kind, title, summary, body, tags) "
+            "VALUES (:entry_id, :owner, :project, :source, :title, :summary, :body, :tags)"
+        ),
+        {
+            "entry_id": entry_id,
+            "owner": owner_user_id or "",
+            "project": project_slug,
+            "source": source_kind,
+            "title": title or "",
+            "summary": summary or "",
+            "body": body or "",
+            "tags": " ".join(tags or []),
+        },
+    )
+
+
+def delete_entry(session: Session, entry_id: str) -> None:
+    session.execute(
+        text(f"DELETE FROM {TABLE} WHERE entry_id = :entry_id"),
+        {"entry_id": entry_id},
+    )
+
+
+# Max entry_ids expanded into a single `IN (...)` — well under SQLite's default variable
+# cap (999 on old builds, 32766 on recent). A path_glob match-set larger than this is
+# batched and merged, so a huge subtree can't raise "too many SQL variables".
+_IN_BATCH = 500
+
+
+def search(
+    session: Session,
+    query: str,
+    *,
+    owner_user_id: str | None = None,
+    project_slug: str | Sequence[str] | None = None,
+    source_kind: str | None = None,
+    entry_ids: list[str] | None = None,
+    limit: int = 20,
+) -> list[tuple[str, float]]:
+    """Return `(entry_id, score)` best-first. Score is `-bm25` (higher = better).
+
+    `entry_ids` restricts the match to that id set (pushed into the WHERE, BEFORE LIMIT),
+    so a path_glob filter fills top_k only from matching docs without dropping any (the
+    id set is resolved once by the service; passing [] matches nothing). A match-set larger
+    than `_IN_BATCH` is queried in batches and merged — each batch is a valid top-`limit`
+    for its slice, so re-sorting the union by rank and truncating yields the exact global
+    top-`limit` (bm25 is comparable across batches: same MATCH, same table)."""
+    match = _match_query(query)
+    if match is None:
+        return []
+    if entry_ids is not None and not entry_ids:
+        return []  # glob matched nothing — never widen to "match everything"
+
+    if entry_ids is None or len(entry_ids) <= _IN_BATCH:
+        return _search_batch(session, match, owner_user_id, project_slug,
+                             source_kind, entry_ids, limit)
+    merged: list[tuple[str, float]] = []
+    for start in range(0, len(entry_ids), _IN_BATCH):
+        merged.extend(_search_batch(session, match, owner_user_id, project_slug,
+                                    source_kind, entry_ids[start:start + _IN_BATCH], limit))
+    merged.sort(key=lambda r: r[1], reverse=True)  # score = -bm25, higher = better
+    return merged[:limit]
+
+
+def _search_batch(
+    session: Session,
+    match: str,
+    owner_user_id: str | None,
+    project_slug: str | Sequence[str] | None,
+    source_kind: str | None,
+    entry_ids: list[str] | None,
+    limit: int,
+) -> list[tuple[str, float]]:
+    where = [f"{TABLE} MATCH :match"]
+    params: dict[str, Any] = {"match": match, "limit": limit}
+    if owner_user_id is not None:
+        where.append("owner_user_id = :owner")
+        params["owner"] = owner_user_id
+    if project_slug is not None:
+        projects = [project_slug] if isinstance(project_slug, str) else list(project_slug)
+        where.append("project_slug IN :projects")
+        params["projects"] = projects
+    if source_kind is not None:
+        where.append("source_kind = :source")
+        params["source"] = source_kind
+    if entry_ids is not None:
+        where.append("entry_id IN :entry_ids")
+        params["entry_ids"] = entry_ids
+    sql = (
+        f"SELECT entry_id, bm25({TABLE}) AS rank FROM {TABLE} "
+        f"WHERE {' AND '.join(where)} ORDER BY rank LIMIT :limit"
+    )
+    stmt = text(sql)
+    if project_slug is not None:
+        stmt = stmt.bindparams(bindparam("projects", expanding=True))
+    if entry_ids is not None:
+        stmt = stmt.bindparams(bindparam("entry_ids", expanding=True))
+    rows = session.execute(stmt, params).fetchall()
+    return [(row[0], -float(row[1])) for row in rows]

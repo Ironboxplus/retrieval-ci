@@ -1,0 +1,120 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "tags": ["retrieval", "w128"],
+  "time": {"from": "now-3h", "to": "now"},
+  "refresh": "30s",
+  "title": "Retrieval — Overview",
+  "uid": "retrieval-overview",
+  "panels": [
+    {
+      "type": "row", "title": "Backend (FastAPI)", "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries", "title": "Request rate by handler (req/s)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "sum by (handler) (rate(http_requests_total[5m]))", "legendFormat": "{{handler}}"}]
+    },
+    {
+      "type": "timeseries", "title": "Latency P95 by handler (s)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "histogram_quantile(0.95, sum by (le, handler) (rate(http_request_duration_seconds_bucket[5m])))",
+        "legendFormat": "{{handler}}"}]
+    },
+    {
+      "type": "stat", "title": "5xx error rate (req/s)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 9},
+      "fieldConfig": {"defaults": {"unit": "reqps", "thresholds": {"mode": "absolute",
+        "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.1}]}}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "sum(rate(http_requests_total{status=\"5xx\"}[5m]))"}]
+    },
+    {
+      "type": "stat", "title": "Overall P95 latency (s)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 9},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_highr_seconds_bucket[5m])))"}]
+    },
+    {
+      "type": "timeseries", "title": "Requests by status class (req/s)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 9},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "sum by (status) (rate(http_requests_total[5m]))", "legendFormat": "{{status}}"}]
+    },
+    {
+      "type": "row", "title": "Qdrant", "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17}
+    },
+    {
+      "type": "stat", "title": "Vectors total",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 18},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "collections_vector_total"}]
+    },
+    {
+      "type": "stat", "title": "Collections",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 18},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "collections_total"}]
+    },
+    {
+      "type": "timeseries", "title": "Qdrant REST responses (resp/s)",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 18},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "expr": "sum by (status) (rate(rest_responses_total[5m]))", "legendFormat": "{{status}}"}]
+    },
+    {
+      "type": "row", "title": "Per-user access (Loki — every request, auth + anon)", "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24}
+    },
+    {
+      "type": "table", "title": "Requests per user (selected range)",
+      "description": "Counts EVERY request the gateway saw, grouped by user. Anonymous/unauthenticated hits group under (anon).",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 9, "w": 8, "x": 0, "y": 25},
+      "fieldConfig": {"defaults": {"unit": "short", "custom": {"align": "auto"}}, "overrides": []},
+      "options": {"showHeader": true, "sortBy": [{"displayName": "Value", "desc": true}]},
+      "targets": [{"refId": "A", "datasource": {"type": "loki", "uid": "loki"},
+        "expr": "sum by (username) (count_over_time({job=\"gateway-access\"} | json | label_format username=\"{{ if .username }}{{ .username }}{{ else }}(anon){{ end }}\" [$__range]))",
+        "queryType": "instant", "instant": true}],
+      "transformations": [{"id": "organize", "options": {"renameByName": {"Value": "requests", "username": "user"}}}]
+    },
+    {
+      "type": "timeseries", "title": "Requests by user (count / interval)",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 9, "w": 16, "x": 8, "y": 25},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "targets": [{"refId": "A", "datasource": {"type": "loki", "uid": "loki"},
+        "expr": "sum by (username) (count_over_time({job=\"gateway-access\"} | json | label_format username=\"{{ if .username }}{{ .username }}{{ else }}(anon){{ end }}\" [$__auto]))",
+        "queryType": "range", "legendFormat": "{{username}}"}]
+    },
+    {
+      "type": "logs", "title": "Access log — every request (live)",
+      "datasource": {"type": "loki", "uid": "loki"},
+      "gridPos": {"h": 11, "w": 24, "x": 0, "y": 34},
+      "options": {"showTime": true, "wrapLogMessage": false, "sortOrder": "Descending", "enableLogDetails": true},
+      "targets": [{"refId": "A", "datasource": {"type": "loki", "uid": "loki"},
+        "expr": "{job=\"gateway-access\"} | json", "queryType": "range"}]
+    }
+  ]
+}
