@@ -25,6 +25,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from pipeline.paper_crawler.runtime_files import write_json_atomic  # noqa: E402
+
 CORPUS_ROOT = Path("data/papers/ccf_a_main_conference_corpus")
 MANIFEST_PATH = CORPUS_ROOT / "manifests" / "paper_manifest.json"
 DEFAULT_MD_ROOT_SMB = Path(r"\\10.100.100.9\lsb\retrival\papers\markdown\iclr")
@@ -109,9 +111,7 @@ def main() -> int:
         log.info("nothing to write")
         return 0
 
-    tmp = MANIFEST_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(MANIFEST_PATH)
+    write_json_atomic(MANIFEST_PATH, manifest)
     log.info("manifest written: %s", MANIFEST_PATH)
     return 0
 

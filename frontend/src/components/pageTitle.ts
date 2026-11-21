@@ -13,6 +13,7 @@ export function pageTitle(pathname: string, search: string): { title: string; su
   if (pathname.startsWith('/match-doc')) return { title: '文档匹配' };
   if (pathname.startsWith('/documents')) return { title: '文档库' };
   if (pathname.startsWith('/tasks')) return { title: '任务' };
+  if (pathname.startsWith('/updates')) return { title: '定时更新' };
   if (pathname.startsWith('/settings')) {
     return { title: '设置', sub: SETTINGS_TAB[params.get('tab') ?? 'data'] ?? SETTINGS_TAB.data };
   }

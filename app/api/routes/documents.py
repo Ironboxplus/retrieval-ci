@@ -1,7 +1,6 @@
 ﻿"""
 文档管理路由
 """
-import asyncio
 import os
 import uuid
 import mimetypes
@@ -217,7 +216,7 @@ def build_document_response(doc: Document, chunks_brief: Optional[List[ChunkBrie
 # ==================== 路由 ====================
 
 @router.get("", response_model=DocumentListResponse)
-async def list_documents(
+def list_documents(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     source_type: Optional[str] = Query(None, description="来源类型筛选: webpage|paper|upload"),
@@ -273,7 +272,7 @@ async def list_documents(
 
 
 @router.get("/{doc_id}", response_model=DocumentDetailResponse)
-async def get_document(
+def get_document(
     doc_id: int,
     db: Session = Depends(get_db)
 ):
@@ -302,7 +301,7 @@ async def get_document(
 
 
 @router.delete("/{doc_id}", response_model=DocumentActionResponse)
-async def delete_document(
+def delete_document(
     doc_id: int,
     db: Session = Depends(get_db)
 ):
@@ -350,7 +349,7 @@ async def delete_document(
     )
 
 @router.put("/{doc_id}", response_model=DocumentResponse)
-async def update_document(
+def update_document(
     doc_id: int,
     request: DocumentUpdateRequest,
     db: Session = Depends(get_db)
@@ -380,7 +379,7 @@ async def update_document(
 
 
 @router.post("/upload", response_model=UploadDocumentResponse)
-async def upload_document(
+def upload_document(
     file: UploadFile = File(..., description="上传的文件 (PDF/TXT/HTML)"),
     title: Optional[str] = Form(None, description="文档标题（可选）"),
     auto_index: bool = Form(True, description="是否自动索引"),
@@ -416,7 +415,7 @@ async def upload_document(
     save_path = os.path.join(save_dir, f"{file_id}{ext}")
 
     # 保存文件
-    content = await file.read()
+    content = file.file.read()
     with open(save_path, "wb") as f:
         f.write(content)
 
@@ -492,7 +491,7 @@ def _resolve_document_markdown(doc: Document):
 
 
 @router.get("/{doc_id}/fulltext")
-async def get_document_fulltext(doc_id: int, db: Session = Depends(get_db)):
+def get_document_fulltext(doc_id: int, db: Session = Depends(get_db)):
     """Full extracted Markdown for one document, as JSON.
 
     Mirrors /api/papers/{paper_id}/fulltext for documents that have no paper_id
@@ -504,7 +503,7 @@ async def get_document_fulltext(doc_id: int, db: Session = Depends(get_db)):
     if not doc:
         raise HTTPException(404, "Document not found")
     md = _resolve_document_markdown(doc)
-    content = await asyncio.to_thread(md.read_text, encoding="utf-8", errors="replace")
+    content = md.read_text(encoding="utf-8", errors="replace")
     return {
         "doc_id": doc_id,
         "title": doc.title,
@@ -524,7 +523,7 @@ async def get_document_fulltext(doc_id: int, db: Session = Depends(get_db)):
         404: {"description": "Document or extracted Markdown not found."},
     },
 )
-async def get_document_markdown_file(doc_id: int, db: Session = Depends(get_db)):
+def get_document_markdown_file(doc_id: int, db: Session = Depends(get_db)):
     """Stream a document's extracted Markdown with HTTP Range support."""
     doc = db.query(Document).filter(Document.id == doc_id).first()
     if not doc:
@@ -538,7 +537,7 @@ async def get_document_markdown_file(doc_id: int, db: Session = Depends(get_db))
 
 
 @router.get("/{doc_id}/download")
-async def download_document(
+def download_document(
     doc_id: int,
     db: Session = Depends(get_db)
 ):
@@ -578,7 +577,7 @@ async def download_document(
 
 
 @router.get("/{doc_id}/source-download")
-async def download_document_source_file(
+def download_document_source_file(
     doc_id: int,
     db: Session = Depends(get_db)
 ):
@@ -616,46 +615,52 @@ async def download_document_source_file(
 
 
 def _count_qdrant_points_for_document(
-    qdrant_store,
+    corpus,
     *,
     doc_id: int,
     paper_id: str | None,
+    source_type=None,
+    venue_tier: str | None = None,
 ) -> int:
-    """Count one document through a stable ``papers`` collection keyword.
+    """Count one document's points through a stable paper-corpus keyword.
 
     Historical paper imports contain both integer and string ``doc_id`` payloads,
     whereas their canonical ``paper_id`` is always a keyword string.  Prefer it
     whenever the SQLite document belongs to a paper.  Non-paper documents retain
     the normalized string ``doc_id`` lookup without an unindexed integer probe.
+    Under the split layout the count reads the collection the document's points
+    belong to (papers / arxiv / reviews).
     """
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    from core.storage.corpus_store import role_for_document
 
     payload_key, payload_value = (
         ("paper_id", paper_id) if paper_id is not None else ("doc_id", str(doc_id))
     )
-    result = qdrant_store.client.count(
-        qdrant_store.collection_name,
-        count_filter=Filter(
-            must=[FieldCondition(key=payload_key, match=MatchValue(value=payload_value))]
-        ),
-        exact=True,
-    )
-    return result.count
+    role = role_for_document(source_type=source_type, venue_tier=venue_tier)
+    return corpus.count_points(payload_key, payload_value, roles=[role])
 
 
-def _count_persisted_document_points(*, doc_id: int, paper_id: str | None) -> int:
+def _count_persisted_document_points(
+    *,
+    doc_id: int,
+    paper_id: str | None,
+    source_type=None,
+    venue_tier: str | None = None,
+) -> int:
     """Create/use the shared Qdrant client off the async request event loop."""
-    from core.storage.qdrant_store import QdrantStore
+    from core.storage.corpus_store import paper_store
 
     return _count_qdrant_points_for_document(
-        QdrantStore(collection_name="papers"),
+        paper_store(),
         doc_id=doc_id,
         paper_id=paper_id,
+        source_type=source_type,
+        venue_tier=venue_tier,
     )
 
 
 @router.get("/{doc_id}/index-status")
-async def get_document_index_status(doc_id: int, db: Session = Depends(get_db)):
+def get_document_index_status(doc_id: int, db: Session = Depends(get_db)):
     """文档索引状态：SQL chunks 数 + Qdrant 向量数 + indexed bool。
 
     同 /api/papers/{paper_id}/index-status 模式，但按 documents.id (int PK) 查询，
@@ -667,14 +672,18 @@ async def get_document_index_status(doc_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Document not found")
 
     sql_chunks_count = db.query(Chunk).filter(Chunk.doc_id == doc_id).count()
-    paper_id = db.query(Paper.paper_id).filter(Paper.doc_id == doc_id).scalar()
+    paper_row = (
+        db.query(Paper.paper_id, Paper.venue_tier).filter(Paper.doc_id == doc_id).first()
+    )
+    paper_id, venue_tier = paper_row if paper_row is not None else (None, None)
 
     qdrant_points_count = 0
     try:
-        qdrant_points_count = await asyncio.to_thread(
-            _count_persisted_document_points,
+        qdrant_points_count = _count_persisted_document_points(
             doc_id=doc_id,
             paper_id=paper_id,
+            source_type=doc.source_type,
+            venue_tier=venue_tier,
         )
     except Exception as e:  # noqa: BLE001
         # W8: Qdrant indexing tick may block count. Degrade gracefully.

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+<entry>
+    <id>http://arxiv.org/abs/1809.02108v2</id>
+    <title>Deep Audio-Visual Speech Recognition</title>
+    <updated>2018-12-22T06:14:27Z</updated>
+    <link href="https://arxiv.org/abs/1809.02108v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1809.02108v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The goal of this work is to recognise phrases and sentences being spoken by a talking face, with or without the audio. Unlike previous works that have focussed on recognising a limited number of words or phrases, we tackle lip reading as an open-world problem - unconstrained natural language sentences, and in the wild videos. Our key contributions are: (1) we compare two models for lip reading, one using a CTC loss, and the other using a sequence-to-sequence loss. Both models are built on top of the transformer self-attention architecture; (2) we investigate to what extent lip reading is complementary to audio speech recognition, especially when the audio signal is noisy; (3) we introduce and publicly release a new dataset for audio-visual speech recognition, LRS2-BBC, consisting of thousands of natural sentences from British television. The models that we train surpass the performance of all previous work on a lip reading benchmark dataset by a significant margin.</summary>
+    <category term="cs.CV" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2018-09-06T17:34:27Z</published>
+    <arxiv:comment>Accepted for publication by IEEE Transactions on Pattern Analysis and Machine Intelligence</arxiv:comment>
+    <arxiv:primary_category term="cs.CV"/>
+    <author>
+      <name>Triantafyllos Afouras</name>
+    </author>
+    <author>
+      <name>Joon Son Chung</name>
+    </author>
+    <author>
+      <name>Andrew Senior</name>
+    </author>
+    <author>
+      <name>Oriol Vinyals</name>
+    </author>
+    <author>
+      <name>Andrew Zisserman</name>
+    </author>
+    <arxiv:doi>10.1109/TPAMI.2018.2889052</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1109/TPAMI.2018.2889052" title="doi"/>
+  </entry>
+<entry>
+    <id>http://arxiv.org/abs/1908.07141v1</id>
+    <title>LogicENN: A Neural Based Knowledge Graphs Embedding Model with Logical Rules</title>
+    <updated>2019-08-20T03:12:13Z</updated>
+    <link href="https://arxiv.org/abs/1908.07141v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1908.07141v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Knowledge graph embedding models have gained significant attention in AI research. Recent works have shown that the inclusion of background knowledge, such as logical rules, can improve the performance of embeddings in downstream machine learning tasks. However, so far, most existing models do not allow the inclusion of rules. We address the challenge of including rules and present a new neural based embedding model (LogicENN). We prove that LogicENN can learn every ground truth of encoded rules in a knowledge graph. To the best of our knowledge, this has not been proved so far for the neural based family of embedding models. Moreover, we derive formulae for the inclusion of various rules, including (anti-)symmetric, inverse, irreflexive and transitive, implication, composition, equivalence and negation. Our formulation allows to avoid grounding for implication and equivalence relations. Our experiments show that LogicENN outperforms the state-of-the-art models in link prediction.</summary>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2019-08-20T03:12:13Z</published>
+    <arxiv:primary_category term="cs.AI"/>
+    <author>
+      <name>Mojtaba Nayyeri</name>
+    </author>
+    <author>
+      <name>Chengjin Xu</name>
+    </author>
+    <author>
+      <name>Jens Lehmann</name>
+    </author>
+    <author>
+      <name>Hamed Shariat Yazdi</name>
+    </author>
+  </entry>
+<entry>
+    <id>http://arxiv.org/abs/2307.06797v2</id>
+    <title>Fast and Functional Structured Data Generators Rooted in Out-of-Equilibrium Physics</title>
+    <updated>2024-11-12T09:54:07Z</updated>
+    <link href="https://arxiv.org/abs/2307.06797v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2307.06797v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>In this study, we address the challenge of using energy-based models to produce high-quality, label-specific data in complex structured datasets, such as population genetics, RNA or protein sequences data. Traditional training methods encounter difficulties due to inefficient Markov chain Monte Carlo mixing, which affects the diversity of synthetic data and increases generation times. To address these issues, we use a novel training algorithm that exploits non-equilibrium effects. This approach, applied on the Restricted Boltzmann Machine, improves the model's ability to correctly classify samples and generate high-quality synthetic data in only a few sampling steps. The effectiveness of this method is demonstrated by its successful application to four different types of data: handwritten digits, mutations of human genomes classified by continental origin, functionally characterized sequences of an enzyme protein family, and homologous RNA sequences from specific taxonomies.</summary>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.dis-nn" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="q-bio.BM" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="q-bio.GN" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="q-bio.QM" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2023-07-13T15:08:44Z</published>
+    <arxiv:comment>15 pages</arxiv:comment>
+    <arxiv:primary_category term="cs.LG"/>
+    <arxiv:journal_ref>IEEE Transactions on Pattern Analysis and Machine Intelligence, Volume 47, Issue 2 Pages 1309 - 13 (2024)</arxiv:journal_ref>
+    <author>
+      <name>Alessandra Carbone</name>
+    </author>
+    <author>
+      <name>Aurélien Decelle</name>
+    </author>
+    <author>
+      <name>Lorenzo Rosset</name>
+    </author>
+    <author>
+      <name>Beatriz Seoane</name>
+    </author>
+    <arxiv:doi>10.1109/TPAMI.2024.34959</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1109/TPAMI.2024.34959" title="doi"/>
+  </entry>
+<entry>
+    <id>http://arxiv.org/abs/2606.21289v1</id>
+    <title>Reconstructing Randomly Masked Spectra Helps DNNs Identify Discriminant Wavenumbers</title>
+    <updated>2026-06-19T10:13:18Z</updated>
+    <link href="https://arxiv.org/abs/2606.21289v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2606.21289v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Nondestructive detection methods, based on vibrational spectroscopy, are vitally important in a wide range of applications including industrial chemistry, pharmacy and national defense. Recently, deep learning has been introduced into vibrational spectroscopy showing great potential. Different from images, text, etc. that offer large labeled data sets, vibrational spectroscopic data is very limited, which requires novel concepts beyond transfer and meta learning. To tackle this, we propose a task-enhanced augmentation network (TeaNet). The key component of TeaNet is a reconstruction module that inputs randomly masked spectra and outputs reconstructed samples that are similar to the original ones, but include additional variations learned from the domain. These augmented samples are used to train the classification model. The reconstruction and prediction parts are trained simultaneously, end-to-end with back-propagation. Results on both synthetic and real-world datasets verified the superiority of the proposed method. In the most difficult synthetic scenarios TeaNet outperformed CNN by 17%. We visualized and analysed the neuron responses of TeaNet and CNN, and found that TeaNet's ability to identify discriminant wavenumbers was excellent compared to CNN. Our approach is general and can be easily adapted to other domains, offering a solution to more accurate and interpretable few-shot learning.</summary>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2026-06-19T10:13:18Z</published>
+    <arxiv:primary_category term="cs.LG"/>
+    <arxiv:journal_ref>IEEE Transactions on Pattern Analysis and Machine Intelligence, vol. 46, no. 5, pp. 3845-3861, May 2024</arxiv:journal_ref>
+    <author>
+      <name>Yingying Wu</name>
+    </author>
+    <author>
+      <name>Jinchao Liu</name>
+    </author>
+    <author>
+      <name>Yan Wang</name>
+    </author>
+    <author>
+      <name>Stuart Gibson</name>
+    </author>
+    <author>
+      <name>Margarita Osadchy</name>
+    </author>
+    <author>
+      <name>Yongchun Fang</name>
+    </author>
+    <arxiv:doi>10.1109/TPAMI.2023.3347617.</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1109/TPAMI.2023.3347617." title="doi"/>
+  </entry>
+</feed>

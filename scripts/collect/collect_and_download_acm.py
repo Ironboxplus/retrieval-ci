@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import core.wmi_fix  # noqa: F401 — Python 3.13 WMI hang bypass
 
-from pipeline.download_control import ChainedProxyPool
+from pipeline.download_control import ChainedProxyDownloadError, ChainedProxyPool, interleave_by_key
 from pipeline.medical_corpus.cf_bypass import (
     CfBypassResult,
     solve_cloudflare_for_url,
@@ -130,6 +130,9 @@ CONFERENCE_CONFIG = {
         "years": (2025,),
     },
 }
+# Collected through the registry (scripts/collect/collect_2026_to_manifest.py,
+# Crossref listing), downloaded here because ACM DL needs the browser session.
+DOWNLOAD_ONLY_CONFERENCES = ("CCS", "SOSP")
 
 
 def load_manifest(manifest_path: Path) -> list[dict]:
@@ -229,37 +232,10 @@ def merge_into_manifest(manifest_path: Path, new_papers: list[CorpusPaper]) -> i
     return added
 
 
-async def download_acm_pdfs(
-    papers: list[CorpusPaper],
-    pdf_root: Path,
-    proxy_url: str,
-    batch_size: int = 3,
-    delay_between: float = 2.0,
-    limit: int | None = None,
-    challenge_retries: int = 12,
-    require_solver: bool = True,
-    chained_proxy_pool: ChainedProxyPool | None = None,
-    xray_executable: Path | None = None,
-    max_pdfs_per_session: int = 30,
-) -> list[CorpusPaper]:
-    """Download PDFs from ACM DL inside a solver-cleared browser session.
+def select_pending_downloads(papers: list[CorpusPaper], pdf_root: Path) -> tuple[list[tuple], int]:
+    """(paper, pdf_path) still to download, venues alternating, and the front-matter count.
 
-    Why this design (and what it replaces):
-      The proxied exit IP draws Cloudflare's non-interactive managed challenge
-      ("verifying you are human", served in Chinese, with a Ray ID) — there is no
-      clickable Turnstile and it never clears by waiting; only a FRESH browser
-      gets a new CF evaluation (~1 in 6 launches pass). The previous approach
-      opened a NEW TAB + CDP Fetch-intercept + page.navigate PER PAPER: the
-      new_tab CDP call has no timeout and deadlocks once CF re-challenges, and
-      cf_clearance is httpOnly/partitioned so it can't be lifted out to a plain
-      httpx/curl_cffi client (both 403).
-
-      Instead: use the vendored Ironboxplus TurnstileBypass solver to mint and
-      verify a headed Chrome session, inject only its ACM-domain cookies into a
-      fresh nodriver Chrome with the same UA, then keep that dl.acm.org page and
-      fetch() PDFs inside it with credentials:'include'.  No per-paper navigation
-      and no plain-client replay are involved.  When clearance expires, the same
-      solver-assisted launch is repeated for the blocked batch.
+    Papers whose PDF is already on disk get their pdf_path set and are left out.
     """
     conferences_in_batch = list({p.conference for p in papers})
     years_in_batch = tuple(sorted({p.year for p in papers}))
@@ -297,6 +273,44 @@ async def download_acm_pdfs(
             paper.pdf_resolution_status = paper.pdf_resolution_status or "downloaded"
             continue
         needs_download.append((paper, pdf_path))
+    # Two consecutive PDFs come from different venues while more than one has work.
+    needs_download = interleave_by_key(needs_download, key=lambda item: item[0].conference)
+    return needs_download, skipped_frontmatter
+
+
+async def download_acm_pdfs(
+    papers: list[CorpusPaper],
+    pdf_root: Path,
+    proxy_url: str,
+    batch_size: int = 3,
+    delay_between: float = 2.0,
+    limit: int | None = None,
+    challenge_retries: int = 12,
+    require_solver: bool = True,
+    chained_proxy_pool: ChainedProxyPool | None = None,
+    xray_executable: Path | None = None,
+    max_pdfs_per_session: int = 30,
+) -> list[CorpusPaper]:
+    """Download PDFs from ACM DL inside a solver-cleared browser session.
+
+    Why this design (and what it replaces):
+      The proxied exit IP draws Cloudflare's non-interactive managed challenge
+      ("verifying you are human", served in Chinese, with a Ray ID) — there is no
+      clickable Turnstile and it never clears by waiting; only a FRESH browser
+      gets a new CF evaluation (~1 in 6 launches pass). The previous approach
+      opened a NEW TAB + CDP Fetch-intercept + page.navigate PER PAPER: the
+      new_tab CDP call has no timeout and deadlocks once CF re-challenges, and
+      cf_clearance is httpOnly/partitioned so it can't be lifted out to a plain
+      httpx/curl_cffi client (both 403).
+
+      Instead: use the vendored Ironboxplus TurnstileBypass solver to mint and
+      verify a headed Chrome session, inject only its ACM-domain cookies into a
+      fresh nodriver Chrome with the same UA, then keep that dl.acm.org page and
+      fetch() PDFs inside it with credentials:'include'.  No per-paper navigation
+      and no plain-client replay are involved.  When clearance expires, the same
+      solver-assisted launch is repeated for the blocked batch.
+    """
+    needs_download, skipped_frontmatter = select_pending_downloads(papers, pdf_root)
 
     LOGGER.info(
         "Need to download: %d / %d (skipped %d existing, %d front-matter)",
@@ -589,6 +603,27 @@ async def download_acm_pdfs(
                         lease.exit_ordinal if lease is not None else "unavailable",
                         f"{type(exc).__name__}: {exc}",
                     )
+                    if isinstance(exc, ChainedProxyDownloadError) and lease is None:
+                        # Every verified exit has been challenged once this run
+                        # (2026-11-10: 6 verified exits ran out after 120 PDFs).
+                        # Verify more of the pool; if none passes, the old
+                        # exclusions are stale by now, so retry them after a pause.
+                        verified_before = chained_proxy_pool.healthy_count
+                        await chained_proxy_pool.probe_pdf(
+                            CHAIN_PROBE_PDF_URL,
+                            required_healthy=verified_before + 6,
+                            max_candidates=chained_proxy_pool.configured_count,
+                            concurrency=min(6, chained_proxy_pool.configured_count),
+                            timeout_seconds=8.0,
+                        )
+                        LOGGER.info(
+                            "Verified landing exits: %d -> %d",
+                            verified_before,
+                            chained_proxy_pool.healthy_count,
+                        )
+                        if chained_proxy_pool.healthy_count <= verified_before:
+                            browser_exit_exclusions.clear()
+                            await asyncio.sleep(60)
                     continue
             else:
                 solver_result = await _solve_with_proxy(proxy_url)
@@ -763,7 +798,8 @@ def main():
     parser = argparse.ArgumentParser(description="Collect + download ACM conference papers (DBLP + nodriver)")
     parser.add_argument("--stage", choices=("collect", "download", "all"), default="all")
     parser.add_argument("--conferences", nargs="+", default=list(CONFERENCE_CONFIG.keys()),
-                        choices=list(CONFERENCE_CONFIG.keys()))
+                        choices=[*CONFERENCE_CONFIG, *DOWNLOAD_ONLY_CONFERENCES],
+                        help=f"{', '.join(DOWNLOAD_ONLY_CONFERENCES)} take --stage download only.")
     parser.add_argument("--proxy", default=DEFAULT_PROXY)
     parser.add_argument(
         "--year",
@@ -821,6 +857,9 @@ def main():
 
     if (args.proxy_pool_file is None) != (args.xray_executable is None):
         parser.error("--proxy-pool-file and --xray-executable must be supplied together")
+    download_only = sorted(set(args.conferences) & set(DOWNLOAD_ONLY_CONFERENCES))
+    if download_only and args.stage != "download":
+        parser.error(f"{', '.join(download_only)} are collected by collect_2026_to_manifest.py; use --stage download")
 
     configure_logging(verbose=args.verbose)
     # Quiet the per-launch browser/arg dumps during the long relaunch gauntlet so
@@ -831,11 +870,11 @@ def main():
     manifest_path = corpus_root / "manifests" / "paper_manifest.json"
     pdf_root = args.pdf_root or (corpus_root / "pdf")
 
-    # Safety check
-    existing = load_manifest(manifest_path)
-    assert len(existing) >= 60000, f"ABORT: manifest too small ({len(existing)}), refusing to proceed"
-
     if args.stage in ("collect", "all"):
+        # Collect merges into the full corpus manifest; a short one means a broken copy.
+        # Download only rewrites the records it loaded, so it runs on working slices too.
+        existing = load_manifest(manifest_path)
+        assert len(existing) >= 60000, f"ABORT: manifest too small ({len(existing)}), refusing to proceed"
         backup_manifest(manifest_path)
         acm_papers = collect_acm(
             args.conferences,

@@ -9,6 +9,7 @@ from core.code_kb.vector_records import (
     build_code_chunk_payload,
     code_chunk_point_id,
 )
+from core.indexing.embedding_profile import get_profile
 
 
 def record() -> CodeChunkVectorRecord:
@@ -40,6 +41,7 @@ def test_payload_builder_combines_opaque_scope_with_canonical_code_chunk_fields(
         "label": "encode_frame",
         "content": "# path: src/encoder.c\nint encode_frame(void);",
         "code": "int encode_frame(void);",
+        "embed_fp": get_profile().fingerprint,
     }
 
 

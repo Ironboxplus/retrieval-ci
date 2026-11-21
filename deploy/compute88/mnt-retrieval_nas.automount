@@ -1,0 +1,9 @@
+[Unit]
+Description=Optional automount for the pre-migration Retrieval NAS
+
+[Automount]
+Where=/mnt/retrieval_nas
+TimeoutIdleSec=300
+
+[Install]
+WantedBy=multi-user.target

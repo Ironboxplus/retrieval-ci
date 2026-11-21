@@ -15,6 +15,8 @@ import os
 from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping, Sequence
 
+from core.paths import safe_relative_path
+
 
 def _is_windows_root(root_dir: str) -> bool:
     """Whether a scope uses Windows path identity, even when inspected elsewhere."""
@@ -22,15 +24,12 @@ def _is_windows_root(root_dir: str) -> bool:
 
 
 def _normalise_rel_path(value: str) -> str:
-    windows = PureWindowsPath(value)
-    if windows.is_absolute() or windows.drive or windows.root:
-        raise ValueError(f"relative path must not be absolute, drive-relative, or UNC: {value!r}")
-    normalized = value.replace("\\", "/").strip("/")
-    if not normalized or normalized == ".":
-        raise ValueError("relative path must name a file")
-    if normalized == ".." or normalized.startswith("../"):
-        raise ValueError(f"relative path escapes the indexed root: {value!r}")
-    return normalized
+    return safe_relative_path(
+        value,
+        what="relative path",
+        allow_trailing_slash=True,
+        reject_empty_segments=False,
+    ).rstrip("/")
 
 
 @dataclass(frozen=True)
