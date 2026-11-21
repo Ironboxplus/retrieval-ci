@@ -47,6 +47,7 @@ import MarkdownSnippet from '../components/MarkdownSnippet';
 import { groupPapersClientSide } from '../components/groupPapers';
 import { PUBLIC_MODE } from '../constants';
 import { copyText } from '../utils/clipboard';
+import { withdrawnMarks } from './withdrawnModel';
 
 // In-paper search: filter retrieval to this one paper, keep every matched chunk
 // so the heatmap can show how each part of the paper matches the query (W87).
@@ -183,6 +184,7 @@ export default function PaperDetail() {
   const venue = (meta?.venue as string) ?? (paper as unknown as Record<string, unknown>).source as string ?? '-';
   const year = meta?.year as number;
   const abstract = meta?.abstract as string;
+  const marks = withdrawnMarks(meta);
   const paperType = meta?.paper_type as string;
   const sourceUrl = (paper as unknown as Record<string, unknown>).source as string;
   const chunks = (paper as unknown as Record<string, unknown>).chunks as Array<{
@@ -199,6 +201,8 @@ export default function PaperDetail() {
 
       <Space align="center" wrap>
         <Typography.Title level={4} style={{ margin: 0 }}>{paper.title}</Typography.Title>
+        {marks.withdrawn && <Tag color="red">已撤稿</Tag>}
+        {marks.versionLabel && <Tag>{marks.versionLabel}</Tag>}
         {idxLoading && !idx ? (
           <Tag>索引状态加载中…</Tag>
         ) : idxIsError ? (
@@ -222,6 +226,10 @@ export default function PaperDetail() {
 
       <Descriptions bordered column={{ xs: 1, sm: 2 }} size="small">
         <Descriptions.Item label="Paper ID">{paper.paper_id}</Descriptions.Item>
+        {marks.version && <Descriptions.Item label="正文版本">{marks.version}</Descriptions.Item>}
+        {marks.withdrawn && (
+          <Descriptions.Item label="撤稿时间 (UTC)">{marks.withdrawnAt ?? '-'}</Descriptions.Item>
+        )}
         <Descriptions.Item label="会议"><Tag color="blue">{venue}</Tag></Descriptions.Item>
         {year && <Descriptions.Item label="年份">{year}</Descriptions.Item>}
         {paperType && paperType !== 'unknown' && (

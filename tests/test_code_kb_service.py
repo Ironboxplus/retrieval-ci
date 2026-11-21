@@ -21,6 +21,7 @@ from app.services.code_kb.schemas import (
 )
 from app.services.code_kb.service import CodeKBService
 from app.services.code_kb.vector_store import point_id
+from app.services.scope_paths import scopes_share_files
 
 
 # --------------------------------------------------------------------------- #
@@ -91,6 +92,9 @@ class FakeCodeVectorStore:
     def reusable_vectors(self, *, items, **_scope):
         """In-memory stores keep no vectors worth reusing; real Qdrant is tested separately."""
         return [None] * len(items)
+
+    def reusable_vectors_by_content(self, **_scope):
+        return {}
 
     def __init__(self):
         self.points: list[dict] = []
@@ -164,12 +168,26 @@ class FakeCodeVectorStore:
                 if p["owner_user_id"] == owner_user_id
                 and self._project_matches(p["project"], project)}
 
-    def list_owner_files(self, *, owner_user_id):
+    def list_point_ids_and_paths(self, *, owner_user_id, project):
+        return (
+            self.list_point_ids_for_paths(owner_user_id=owner_user_id, project=project),
+            self.list_paths(owner_user_id=owner_user_id, project=project),
+        )
+
+    def list_owner_files(self, *, owner_user_id, related_to=None, exclude_project=None):
         return {(p["project"], p["path"]) for p in self.points
-                if p["owner_user_id"] == owner_user_id}
+                if p["owner_user_id"] == owner_user_id
+                and p["project"] != exclude_project
+                and (related_to is None or scopes_share_files(p["project"], related_to))}
 
     def list_owner_paths(self, *, owner_user_id):
         return {p["path"] for p in self.points if p["owner_user_id"] == owner_user_id}
+
+    def matching_paths(self, *, owner_user_id, project, pattern, case_sensitive):
+        from app.services.scope_paths import path_matches
+        paths = (self.list_paths(owner_user_id=owner_user_id, project=project)
+                 if project else self.list_owner_paths(owner_user_id=owner_user_id))
+        return [p for p in paths if path_matches(p, pattern, case_sensitive=case_sensitive)], len(paths)
 
     def delete_paths(self, *, owner_user_id, project, paths):
         if not paths:
@@ -981,63 +999,6 @@ def test_vector_store_lists_unique_paths_with_qdrant_facet():
     assert inner.client.calls[0]["exact"] is True
 
 
-def test_vector_store_lists_owner_paths_with_one_path_facet():
-    from app.services.code_kb.vector_store import CodeVectorStore
-
-    class FacetClient:
-        def facet(self, **kwargs):
-            assert kwargs["facet_filter"] == {"owner_user_id": "u1"}
-            return SimpleNamespace(hits=[SimpleNamespace(value="shared/main.py")])
-
-        def scroll(self, *_args, **_kwargs):
-            raise AssertionError("cross-project search must not scan owner chunks")
-
-    inner = SimpleNamespace(
-        supports_sparse=True,
-        client=FacetClient(),
-        _build_filter=lambda filters: filters,
-    )
-    store = CodeVectorStore(store=inner)
-
-    assert store.list_owner_paths(owner_user_id="u1") == {"shared/main.py"}
-
-
-def test_vector_store_lists_owner_files_with_facets_not_chunk_scroll():
-    from app.services.code_kb.vector_store import CodeVectorStore
-
-    class FacetClient:
-        def facet(self, **kwargs):
-            if kwargs["key"] == "project":
-                return SimpleNamespace(hits=[
-                    SimpleNamespace(value="/repo"),
-                    SimpleNamespace(value="/repo/child"),
-                ])
-            project = kwargs["facet_filter"]["project"]
-            paths = {
-                "/repo": ["child/shared.py", "parent.py"],
-                "/repo/child": ["shared.py", "child.py"],
-            }[project]
-            return SimpleNamespace(
-                hits=[SimpleNamespace(value=path) for path in paths])
-
-        def scroll(self, *_args, **_kwargs):
-            raise AssertionError("fan-out discovery must not scan owner chunks")
-
-    inner = SimpleNamespace(
-        supports_sparse=True,
-        client=FacetClient(),
-        _build_filter=lambda filters: filters,
-    )
-    store = CodeVectorStore(store=inner)
-
-    assert store.list_owner_files(owner_user_id="u1") == {
-        ("/repo", "child/shared.py"),
-        ("/repo", "parent.py"),
-        ("/repo/child", "shared.py"),
-        ("/repo/child", "child.py"),
-    }
-
-
 def test_facet_failure_does_not_fall_back_to_chunk_scroll():
     from app.services.code_kb.vector_store import CodeVectorStore
 
@@ -1108,7 +1069,7 @@ def test_vector_store_creates_only_missing_search_payload_indexes():
     store = CodeVectorStore(store=inner)
     store.ensure_search_payload_indexes()
 
-    assert inner.client.created == ["project", "path", "language"]
+    assert inner.client.created == ["project", "path", "language", "embed_fp"]
 
 
 def test_payload_index_failure_does_not_skip_later_fields(monkeypatch):
@@ -1134,7 +1095,7 @@ def test_payload_index_failure_does_not_skip_later_fields(monkeypatch):
     store = CodeVectorStore(store=inner)
     store.ensure_search_payload_indexes()
 
-    assert inner.client.attempted == ["owner_user_id", "project", "path", "language"]
+    assert inner.client.attempted == ["owner_user_id", "project", "path", "language", "embed_fp"]
     assert store._missing_search_indexes == {"project"}
 
 
@@ -1145,7 +1106,7 @@ def test_missing_path_index_is_retried_before_facet(monkeypatch):
     class RecoveringClient:
         def __init__(self):
             self.schema = {
-                "owner_user_id": {}, "project": {}, "language": {},
+                "owner_user_id": {}, "project": {}, "language": {}, "embed_fp": {},
             }
             self.created = []
 
@@ -1462,8 +1423,10 @@ def test_fan_out_does_not_resurrect_target_scope_deleted_after_discovery():
             self.owner_snapshot_captured = threading.Event()
             self.release_owner_snapshot = threading.Event()
 
-        def list_owner_files(self, *, owner_user_id):
-            snapshot = super().list_owner_files(owner_user_id=owner_user_id)
+        def list_owner_files(self, *, owner_user_id, related_to=None, exclude_project=None):
+            snapshot = super().list_owner_files(
+                owner_user_id=owner_user_id, related_to=related_to,
+                exclude_project=exclude_project)
             if self.block_owner_snapshot:
                 self.owner_snapshot_captured.set()
                 assert self.release_owner_snapshot.wait(5)

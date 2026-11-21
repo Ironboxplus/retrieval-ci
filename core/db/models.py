@@ -3,7 +3,7 @@
 """
 from sqlalchemy import (
     Boolean, Column, Integer, String, Text, DateTime, ForeignKey, Enum, JSON,
-    Float, UniqueConstraint, Index
+    Float, UniqueConstraint, Index, text
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -188,6 +188,12 @@ for _index in list(JournalProject.__table__.indexes):
 class JournalEntry(Base):
     """Append-only ACE journal entry."""
     __tablename__ = "journal_entries"
+    __table_args__ = (
+        # A scope's live docs (JournalRepository._scoped_live_docs). With only the
+        # single-column indexes and no sqlite_stat1, a slug IN list of three or more
+        # spellings made the planner walk every doc of every project via source_kind.
+        Index("ix_journal_entries_project_kind", "project_id", "source_kind", "deleted_at"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     entry_id = Column(String(100), nullable=False, unique=True, index=True, comment="稳定 entry id")
@@ -261,6 +267,35 @@ class JournalChunk(Base):
         return f"<JournalChunk(chunk_id='{self.chunk_id}', entry_id='{self.entry_id}', level={self.level})>"
 
 
+# Stored rel_path spellings whose normalised identity differs from the stored string
+# (app.services.scope_paths.stored_relative_path_identity): a leading ``/`` or ``./``,
+# ``//``, ``/./``, a trailing ``/.`` and backslashes.
+CATALOG_LEGACY_PATH_SQL = (
+    "(instr(rel_path,'//')>0 OR instr(rel_path,'/./')>0 OR instr(rel_path,char(92))>0 "
+    "OR substr(rel_path,1,2)='./' OR substr(rel_path,1,1)='/' OR substr(rel_path,-2)='/.')"
+)
+# The only non-ASCII characters whose ``str.casefold()`` contains an ASCII letter (sharp s,
+# long s, Kelvin sign, the fi/fl ligatures, ...). SQLite ``lower()`` cannot fold them, so a
+# case-insensitive range over ``lower(rel_path)`` would miss such a row; a test pins this
+# tuple to the interpreter's Unicode tables.
+CASEFOLD_TO_ASCII_CODEPOINTS = (
+    223, 304, 329, 383, 496, 7830, 7831, 7832, 7833, 7834, 7838, 8490,
+    64256, 64257, 64258, 64259, 64260, 64261, 64262,
+)
+def _folding_glob_sql(column: str) -> str:
+    return (
+        f"({column} GLOB '*[' || char("
+        + ",".join(str(code) for code in CASEFOLD_TO_ASCII_CODEPOINTS)
+        + ") || ']*')"
+    )
+
+
+CATALOG_FOLDING_PATH_SQL = _folding_glob_sql("rel_path")
+# The same test on a scope name: a stored spelling such as ``E:/Straße`` equals the
+# canonical ``E:/strasse`` only by Python's casefold, never by ``lower(project)``.
+CATALOG_FOLDING_PROJECT_SQL = _folding_glob_sql("project")
+
+
 class IndexCatalog(Base):
     """Structured registry of *what a user indexed, where*.
 
@@ -277,6 +312,62 @@ class IndexCatalog(Base):
             name="uq_index_catalog_file",
         ),
         Index("ix_index_catalog_scope", "owner_user_id", "host", "project"),
+        # list_projects(): covering, so the owner's DISTINCT project list is read from the
+        # index alone instead of visiting every file row of the owner.
+        # Also created for existing DBs in core/db/database.py::_apply_idempotent_migrations.
+        Index("ix_index_catalog_owner_projects", "owner_user_id", "host", "project",
+              "root_dir", "kind", "deleted_at"),
+        # report_files() on a Windows scope finds the row of a reported path by
+        # case-folded identity; the expression must match the repository query verbatim.
+        Index("ix_index_catalog_scope_lower_path", "owner_user_id", "host", "project",
+              text("lower(rel_path)")),
+        # Search-time path selection (IndexCatalogRepository.matching_code_paths): one
+        # scope's live code files below a directory is an equality prefix plus a range
+        # over rel_path (case-sensitive scopes) or lower(rel_path) (Windows scopes), read
+        # from the index alone. Created for existing DBs by
+        # core/db/database.py::_apply_idempotent_migrations from these same definitions.
+        Index("ix_index_catalog_code_scope_path", "owner_user_id", "kind", "deleted_at",
+              "project", "rel_path", "chunk_count"),
+        # The same range across every scope of the owner (project=None searches). Already
+        # installed on production by scripts/ensure_code_search_path_index.py; the columns
+        # must stay identical to that script's.
+        Index("ix_index_catalog_code_path_lookup", "owner_user_id", "kind", "deleted_at",
+              "rel_path", "project", "chunk_count"),
+        Index("ix_index_catalog_code_scope_lower_path", "owner_user_id", "kind",
+              "deleted_at", "project", text("lower(rel_path)"), "rel_path", "chunk_count"),
+        # Rows whose stored path a range cannot bound: legacy spellings that normalise
+        # into a different path, and names that only case-fold into ASCII. The index holds
+        # just those rows (normally none), so the lookup is a probe, not a scan. The query
+        # must repeat CATALOG_LEGACY_PATH_SQL / CATALOG_FOLDING_PATH_SQL verbatim for
+        # SQLite to use it.
+        Index("ix_index_catalog_code_odd_path", "owner_user_id", "kind", "deleted_at",
+              "project", "rel_path", "chunk_count",
+              sqlite_where=text(f"{CATALOG_LEGACY_PATH_SQL} OR {CATALOG_FOLDING_PATH_SQL}")),
+        # The same rows in ix_index_catalog_code_path_lookup's column order, for a probe
+        # that names no scope: only an index shaped like the owner-wide range lets SQLite
+        # prefer it over reading that range's every row.
+        Index("ix_index_catalog_code_odd_path_any_scope", "owner_user_id", "kind",
+              "deleted_at", "rel_path", "project", "chunk_count",
+              sqlite_where=text(f"{CATALOG_LEGACY_PATH_SQL} OR {CATALOG_FOLDING_PATH_SQL}")),
+        # The spellings of one scope that differ only by case (IndexCatalogService.
+        # equivalent_project_scopes): a Windows scope is one equality prefix on
+        # lower(project), so the rows read are that scope's alone, not the owner's whole
+        # catalog. Live rows only, matching the query's ``deleted_at IS NULL``.
+        Index("ix_index_catalog_live_project_fold", "owner_user_id", "kind",
+              text("lower(project)"), "project",
+              sqlite_where=text("deleted_at IS NULL")),
+        # Live scope names lower() cannot fold into their canonical spelling (see
+        # CATALOG_FOLDING_PROJECT_SQL); normally empty, so the lookup is a probe.
+        Index("ix_index_catalog_live_odd_project", "owner_user_id", "kind", "project",
+              sqlite_where=text(f"deleted_at IS NULL AND {CATALOG_FOLDING_PROJECT_SQL}")),
+        # The compact inventory summary (IndexCatalogRepository.aggregate_inventory): the
+        # per-(owner, host, project, kind) count/chunk sum/newest stamp is one read of this
+        # index, and a group's freshest file is a seek (equality on every column up to
+        # indexed_at, smallest rel_path next). Without it the summary read every live row
+        # through a non-covering index and sorted them all: 5.5 s on a 583K-row catalog.
+        Index("ix_index_catalog_live_summary", "owner_user_id", "host", "project", "kind",
+              "indexed_at", "rel_path", "chunk_count",
+              sqlite_where=text("deleted_at IS NULL")),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -294,6 +385,11 @@ class IndexCatalog(Base):
     metadata_json = Column(JSON, nullable=True, comment="扩展元数据")
     indexed_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), comment="最近索引时间")
     deleted_at = Column(DateTime, nullable=True, index=True, comment="软删除时间")
+    # Set by IndexCatalogRepository.report_files only when the file is new, its content_hash
+    # differs from the stored row, or the row was soft-deleted. indexed_at moves on every
+    # report, so it cannot say "this file changed". NULL = not changed since the column
+    # was added (ALTER TABLE ADD COLUMN, no backfill).
+    content_changed_at = Column(DateTime, nullable=True, comment="内容最近一次变化时间")
     created_at = Column(DateTime, server_default=func.now(), comment="首次登记时间")
 
     def __repr__(self):
@@ -323,7 +419,9 @@ class IndexScopePolicy(Base):
     auto_refresh = Column(Integer, nullable=False, default=1)
     respect_gitignore = Column(Integer, nullable=False, default=1)
     exclude_globs_json = Column(JSON, nullable=True)
-    min_check_interval_s = Column(Integer, nullable=False, default=10)
+    # 300 = AUTO_INDEX_MIN_INTERVAL_S (app/services/index_catalog/schemas.py); core.db
+    # cannot import the app layer
+    min_check_interval_s = Column(Integer, nullable=False, default=300)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -354,6 +452,59 @@ class CodeScopeVisibility(Base):
     previous_completed_snapshot_available = Column(Boolean, nullable=False, default=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class CodeScopeAnalysis(Base):
+    """Where one background analysis of a Code KB scope stands (app/services/code_kb/analysis.py).
+
+    ``watermark`` is the newest ``index_catalog`` change (content_changed_at or deleted_at)
+    the analysis has already covered, so "what changed since" is a durable query that
+    survives restarts and merges any number of index runs. ``version`` counts the results
+    worth reporting; ``delivered_version`` is the newest one already handed to a caller.
+    Keyed by the canonical scope spelling, not by host: like the vectors, an analysis
+    belongs to (owner, scope).
+    """
+    __tablename__ = "code_scope_analyses"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "project", "kind", name="uq_code_scope_analysis"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(String(200), nullable=False)
+    project = Column(String(2000), nullable=False)
+    kind = Column(String(50), nullable=False, default="duplicates")
+    watermark = Column(DateTime, nullable=True)
+    version = Column(Integer, nullable=False, default=0)
+    delivered_version = Column(Integer, nullable=False, default=0)
+    last_run_at = Column(DateTime, nullable=True)
+    summary_json = Column(JSON, nullable=True)
+
+
+class CodeDuplicatePair(Base):
+    """One standing near-duplicate file pair of a scope, maintained incrementally.
+
+    ``path_a <= path_b``, the same orientation core/code_kb/duplicate_rollup.py gives a
+    pair, so a pair has exactly one identity whichever file was queried first.
+    """
+    __tablename__ = "code_duplicate_pairs"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "project", "path_a", "path_b",
+                         name="uq_code_duplicate_pair"),
+        # Pairs are replaced by "every pair that mentions this file"; path_a is the
+        # unique key's prefix, path_b needs its own index.
+        Index("ix_code_duplicate_pairs_path_b", "owner_user_id", "project", "path_b"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(String(200), nullable=False)
+    project = Column(String(2000), nullable=False)
+    path_a = Column(String(1000), nullable=False)
+    path_b = Column(String(1000), nullable=False)
+    shared_chunks = Column(Integer, nullable=False)
+    max_score = Column(Float, nullable=False)
+    examples_json = Column(JSON, nullable=True)
+    first_seen_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
 
 
 class PlaybookBullet(Base):
@@ -748,6 +899,17 @@ class Paper(Base):
     impact_level = Column(String(50), nullable=True, comment="oral|spotlight|poster|regular")
     venue_tier = Column(String(10), nullable=True, comment="CCF-A|CCF-B|CCF-C|other")
     venue_source = Column(String(100), nullable=True, comment="proceedings来源标识")
+    # arXiv: the content version the indexed text was converted from (v1, v2, ...).
+    # Set only for sources that version their text; NULL for conference papers.
+    source_version = Column(String(32), nullable=True, comment="正文所属版本（arXiv: v1/v2…），无版本来源为 NULL")
+    # Origin of the indexed full text: publisher | arxiv | oa_repo. Venue/year/DOI
+    # always come from the official listing; NULL on rows indexed before 2026-11.
+    full_text_source = Column(String(16), nullable=True, comment="全文来源：publisher|arxiv|oa_repo")
+    # arXiv: the newest version is a withdrawal (0kb). The text kept is the last
+    # version that had content; search hides these unless asked (the same flag is
+    # an optional Qdrant payload key, core/storage/papers_payload.py).
+    withdrawn = Column(Boolean, nullable=False, default=False, server_default="0", comment="已撤稿")
+    withdrawn_at = Column(String(40), nullable=True, comment="标记撤稿的 UTC 时间（ISO）")
 
     # 关系
     document = relationship("Document", back_populates="paper")
@@ -766,3 +928,45 @@ class SystemConfig(Base):
 
     def __repr__(self):
         return f"<SystemConfig(key='{self.key}', value='{self.value[:50] if self.value else None}...')>"
+
+
+class Schedule(Base):
+    """A recurring job definition. APScheduler only keeps time (in memory); this
+    table is the source of truth, rebuilt into jobs at startup
+    (app/services/scheduler/service.py)."""
+    __tablename__ = "schedules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(100), nullable=False, unique=True, comment="stable identifier, e.g. arxiv_delta_daily")
+    kind = Column(String(100), nullable=False, index=True, comment="registered JobKind name")
+    title = Column(String(200), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    system = Column(Boolean, nullable=False, default=False, comment="built-in seed; cannot be deleted")
+    trigger_json = Column(JSON, nullable=False, comment="daily | weekly | interval, see app/services/scheduler/triggers.py")
+    params_json = Column(JSON, nullable=False, default=dict, comment="validated by the kind's params model")
+    catchup = Column(String(16), nullable=False, default="latest", comment="latest | skip")
+    misfire_grace_s = Column(Integer, nullable=True, comment="None = the kind's default")
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    ticks = relationship("ScheduleTick", back_populates="schedule", cascade="all, delete-orphan")
+
+
+class ScheduleTick(Base):
+    """One trigger of a schedule and what came of it (naive UTC datetimes)."""
+    __tablename__ = "schedule_ticks"
+    __table_args__ = (
+        UniqueConstraint("schedule_id", "scheduled_for", "trigger", name="ux_schedule_tick_slot"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    schedule_id = Column(Integer, ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False, index=True)
+    scheduled_for = Column(DateTime, nullable=False, comment="the slot the trigger was due (UTC)")
+    fired_at = Column(DateTime, nullable=True, comment="when it actually ran (UTC)")
+    trigger = Column(String(16), nullable=False, comment="cron | manual | retry")
+    status = Column(String(16), nullable=False, comment="enqueued | skipped | missed | error")
+    reason = Column(Text, nullable=True)
+    task_id = Column(Integer, nullable=True, index=True)
+    attempt = Column(Integer, nullable=False, default=0)
+
+    schedule = relationship("Schedule", back_populates="ticks")

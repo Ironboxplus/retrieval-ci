@@ -13,6 +13,7 @@ from typing import Callable
 from filelock import FileLock, Timeout
 
 from app.services.pipeline import GateResult, PipelineOrchestrator, Progress, StageSpec, TaskStore
+from app.services.pipeline.runner_registry import cancel_run, register_runner
 from app.services.pipeline.stage_lock import StageLockSet
 from pipeline.medical_corpus.pdf_fetch import DEFAULT_MAX_BYTES_PER_SECOND, DownloadRateLimiter
 from pipeline.medical_corpus.prepare import (
@@ -22,47 +23,18 @@ from pipeline.medical_corpus.prepare import (
     require_absolute_medical_data_root,
     run_download_pass,
 )
+from pipeline.medical_corpus.executor import (  # noqa: F401 - the service's public names
+    MEDICAL_ACTIONS_EXECUTOR,
+    MEDICAL_PRODUCTION_DATA_ROOT,
+    designated_medical_executor,
+    require_designated_medical_cli_execution,
+    require_designated_medical_download_host,
+)
 from pipeline.medical_corpus.proxy import DEFAULT_PROXY_URL, MedicalProxyConfig, load_medical_proxy_from_settings
 
 # A normal durable Task type.  It deliberately appears in the existing Tasks
 # list/detail surface rather than owning a second control-plane UI.
 MEDICAL_DOWNLOAD_PIPELINE = "medical_corpus_download"
-MEDICAL_PRODUCTION_DATA_ROOT = Path("/mnt/lsb/retrival/medical")
-
-
-def require_designated_medical_download_host() -> None:
-    """The only production executor is the Linux Retrieval service on .88."""
-    if os.name == "nt":
-        raise RuntimeError("medical PDF execution is disabled on Windows; use compute .88")
-    if os.environ.get("MEDICAL_DOWNLOAD_HOST", "").strip() != "10.100.100.88":
-        raise RuntimeError(
-            "medical PDF execution is disabled outside compute .88; set "
-            "MEDICAL_DOWNLOAD_HOST=10.100.100.88 only in its service environment"
-        )
-
-
-def require_designated_medical_cli_execution(
-    data_root: Path,
-    proxy: MedicalProxyConfig,
-) -> Path:
-    """Fail closed before the standalone CLI can fetch a single PDF byte.
-
-    The service runner allows explicitly injected temporary roots for isolated
-    tests.  The human-invoked executable is stricter: it has no task-owned
-    deployment configuration, so real transfers may use only the .88 artifact
-    mount and the local proxy mandated for that host.
-    """
-    require_designated_medical_download_host()
-    root = require_absolute_medical_data_root(data_root)
-    if root != MEDICAL_PRODUCTION_DATA_ROOT:
-        raise RuntimeError(
-            "medical CLI execution requires MEDICAL_DATA_ROOT=/mnt/lsb/retrival/medical"
-        )
-    if proxy.http_proxy != DEFAULT_PROXY_URL or proxy.https_proxy != DEFAULT_PROXY_URL:
-        raise RuntimeError(
-            f"medical CLI execution requires proxy {DEFAULT_PROXY_URL}"
-        )
-    return root
 
 
 @dataclass
@@ -264,6 +236,8 @@ def build_medical_download_pipeline(ctx: MedicalDownloadContext) -> list[StageSp
 class MedicalDownloadPipelineRunner:
     """Launch/resume DB-backed medical download pipelines, one global bandwidth lane."""
 
+    task_type = MEDICAL_DOWNLOAD_PIPELINE
+
     def __init__(
         self,
         *,
@@ -390,6 +364,31 @@ class MedicalDownloadPipelineRunner:
             self._launch(task["id"], wait=wait)
             resumed.append(task["id"])
         return resumed
+
+    # --- TaskRunner (runner_registry) entry points -------------------------
+    def start(self, params: dict) -> dict:
+        return self.start_download(
+            download_limit=int(params.get("download_limit") or 0),
+            allow_cf_bypass=bool(params.get("allow_cf_bypass", True)),
+        )
+
+    def cancel(self, task_id: int) -> bool:
+        with self._lock:
+            abort = self._abort_events.get(task_id)
+        return cancel_run(self.store, task_id, abort)
+
+    def retry(self, task_id: int) -> dict:
+        task = self.store.get_task(task_id)
+        if task is None:
+            raise ValueError(f"task {task_id} not found")
+        if task["status"] not in ("failed", "cancelled"):
+            raise ValueError(f"Cannot retry task in status: {task['status']}")
+        if task["retry_count"] >= task["max_retries"]:
+            raise ValueError(f"Task has exceeded max retries ({task['max_retries']})")
+        if self.retry_download(task_id):
+            return {"status": "started", "task_id": task_id}
+        return {"status": "conflict", "task_id": task_id,
+                "error": "Medical download retry could not be scheduled"}
 
     def cancel_download(self, task_id: int) -> bool:
         """Signal the running stage; the generic Tasks route remains the API."""
@@ -579,3 +578,6 @@ def get_medical_download_runner() -> MedicalDownloadPipelineRunner:
             if _RUNNER is None:
                 _RUNNER = MedicalDownloadPipelineRunner()
     return _RUNNER
+
+
+register_runner(MEDICAL_DOWNLOAD_PIPELINE, get_medical_download_runner)

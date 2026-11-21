@@ -1,0 +1,58 @@
+{
+ "1809.02108": {
+  "paper_id": "tpami-2022-2889052",
+  "title": "Deep Audio-Visual Speech Recognition",
+  "doi": "10.1109/tpami.2018.2889052",
+  "year": 2022,
+  "conference": "TPAMI",
+  "authors": [
+   "Triantafyllos Afouras",
+   "Joon Son Chung",
+   "Andrew Senior",
+   "Oriol Vinyals",
+   "Andrew Zisserman"
+  ]
+ },
+ "1908.07141": {
+  "paper_id": "tpami-2023-3121646",
+  "title": "LogicENN: A Neural Based Knowledge Graphs Embedding Model With Logical Rules",
+  "doi": "10.1109/tpami.2021.3121646",
+  "year": 2023,
+  "conference": "TPAMI",
+  "authors": [
+   "Mojtaba Nayyeri",
+   "Chengjin Xu",
+   "Mirza Mohtashim Alam",
+   "Jens Lehmann",
+   "Hamed Shariat Yazdi"
+  ]
+ },
+ "2606.21289": {
+  "paper_id": "tpami-2024-3347617",
+  "title": "Reconstructing Randomly Masked Spectra Helps DNNs Identify Discriminant Wavenumbers",
+  "doi": "10.1109/tpami.2023.3347617",
+  "year": 2024,
+  "conference": "TPAMI",
+  "authors": [
+   "Yingying Wu",
+   "Jinchao Liu",
+   "Yan Wang",
+   "Stuart Gibson",
+   "Margarita Osadchy",
+   "Yongchun Fang"
+  ]
+ },
+ "2307.06797": {
+  "paper_id": "tpami-2025-3495999",
+  "title": "Fast and Functional Structured Data Generators Rooted in Out-of-Equilibrium Physics",
+  "doi": "10.1109/tpami.2024.3495999",
+  "year": 2025,
+  "conference": "TPAMI",
+  "authors": [
+   "Alessandra Carbone",
+   "Aurélien Decelle",
+   "Lorenzo Rosset",
+   "Beatriz Seoane"
+  ]
+ }
+}

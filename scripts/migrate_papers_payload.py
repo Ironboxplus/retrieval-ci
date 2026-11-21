@@ -52,6 +52,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.storage.papers_payload import PROFILE_BY_SOURCE_TYPE  # noqa: E402
+from core.storage.qdrant_operations import retry_qdrant_operation  # noqa: E402
 
 OPERATIONS = ("doc_id", "data_source")
 
@@ -149,27 +150,6 @@ def normalized_doc_id(value: Any, point_id: Any) -> str:
     return str(value)
 
 
-def _retry(fn, *, max_retries: int = 5, base_delay: float = 1.0, sleep=time.sleep):
-    """Bounded exponential backoff around one Qdrant write call.
-
-    AGENTS.md 2.1 iron law: every upsert/set_payload/delete_payload is
-    wait=True + retry — never a bare call that can silently drop a write
-    under transient pressure (W4/W14).
-    """
-    delay = base_delay
-    last_err: Optional[Exception] = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            return fn()
-        except Exception as e:  # noqa: BLE001 — retry any transient client error
-            last_err = e
-            if attempt == max_retries:
-                raise
-            sleep(delay)
-            delay = min(delay * 2, 30.0)
-    raise last_err  # pragma: no cover — unreachable, loop always returns or raises
-
-
 class Checkpoint:
     """Resume support: persists the last fully-processed scroll offset."""
 
@@ -261,11 +241,13 @@ def migrate(
                     payload={"doc_id": value}, points=list(ids)))
                 for value, ids in pending.items()
             ]
-            _retry(
+            # AGENTS.md 2.1: every write is wait=True + bounded retry (W4/W14).
+            retry_qdrant_operation(
+                f"batch_update_points(collection={collection} operations={len(ops)})",
                 lambda: client.batch_update_points(
                     collection, update_operations=ops, wait=True,
                 ),
-                max_retries=max_retries, sleep=sleep,
+                max_attempts=max_retries, sleep=sleep,
             )
             # Only the key under test comes back: a `papers` point carries 25
             # payload keys including `content` and `abstract`, and pulling all
@@ -291,11 +273,12 @@ def migrate(
         if not ids:
             return
         if execute:
-            _retry(
+            retry_qdrant_operation(
+                f"delete_payload(collection={collection} data_source points={len(ids)})",
                 lambda: client.delete_payload(
                     collection, keys=["data_source"], points=list(ids), wait=True,
                 ),
-                max_retries=max_retries, sleep=sleep,
+                max_attempts=max_retries, sleep=sleep,
             )
             verify = client.retrieve(collection, ids=list(ids), with_payload=["data_source"])
             bad = [v.id for v in verify if "data_source" in (v.payload or {})]

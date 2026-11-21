@@ -55,7 +55,15 @@ def _real_chunks(limit: int) -> list[str]:
     return [t for t in texts if len(t) > 80]
 
 
+def _retired() -> None:
+    """RETIRED: this script loads a model into its own process; every model is a vLLM service now."""
+    from core.inference_retired import RERANKER_INSTEAD, RetiredInferencePath
+
+    raise RetiredInferencePath("rerank_cancel_equivalence_real_gate.py (compares the in-process torch reranker's chunked scoring)", RERANKER_INSTEAD)
+
+
 def main() -> int:
+    _retired()
     from core.retrieval.reranker import RerankCancelledError, get_shared_reranker
 
     reranker = get_shared_reranker()

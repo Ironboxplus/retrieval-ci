@@ -8,6 +8,12 @@ Usage:
     python scripts/download_subset.py --conf ICLR --year 2025 --concurrency 8
     python scripts/download_subset.py --conf ICLR --year 2024 --concurrency 8
     python scripts/download_subset.py --conf CVPR --year 2022 --concurrency 4
+    python scripts/download_subset.py --target JMLR:2024 --target VLDB:2025 --host-turns \
+        --min-interval-seconds 5
+
+Several --target slices download as one serial queue with --host-turns: two
+consecutive requests never hit the same host while another host has work,
+and a host that refuses is cooled down instead of retried.
 """
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ from pipeline.paper_crawler.ccf_a_main_corpus import (
     CorpusPaper,
     load_json_with_recovery,
     sanitize_file_component,
+    verify_full_text_identity,
 )
 from pipeline.download_control import (
     ChainedProxyPool,
@@ -39,10 +46,54 @@ def _alive(p: str | None) -> bool:
     return bool(p) and Path(p).exists()
 
 
+def verify_identity(builder: MainConferenceCorpusBuilder, records: list[dict], targets, dry_run: bool = False) -> dict:
+    """Page-1 title / page-count check of every target PDF on disk, before the
+    extract stage sees them. Rejected non-publisher copies, and any copy whose URL names
+    another paper's DOI, leave the PDF tree; ``dry_run`` only lists them."""
+    wanted = set(targets)
+    papers = [
+        CorpusPaper.from_manifest_record(r) for r in records
+        if (r.get("conference"), r.get("year")) in wanted and r.get("paper_id")
+    ]
+    report = verify_full_text_identity(
+        papers, corpus_root=builder.corpus_root, pdf_root=builder.pdf_root, dry_run=dry_run,
+    )
+    print(
+        f"[{time.strftime('%H:%M:%S')}] identity check: ok={report['ok']} "
+        f"kept_mismatch={report['kept_mismatch']} rejected={report['rejected']} "
+        f"already_checked={report['already_checked']}"
+    )
+    for item in report["kept_mismatches"]:
+        print(f"           kept ({item['full_text_source'] or 'origin unknown'}): "
+              f"{item['paper_id']}: {item['problem']}")
+    for item in report["rejections"]:
+        print(f"           {'would reject' if dry_run else 'rejected'}: {item['paper_id']} "
+              f"({item['full_text_source'] or 'origin unknown'} {item['url']}): {item['problem']}")
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--conf", required=True, help="Conference name (e.g. ICLR, CVPR)")
-    parser.add_argument("--year", type=int, required=True)
+    parser.add_argument("--conf", help="Conference name (e.g. ICLR, CVPR)")
+    parser.add_argument("--year", type=int)
+    parser.add_argument(
+        "--target",
+        action="append",
+        default=[],
+        metavar="CONF:YEAR",
+        help="Slice to download; repeatable. Combined with --conf/--year when both are given.",
+    )
+    parser.add_argument(
+        "--host-turns",
+        action="store_true",
+        help="Serial download that alternates hosts and cools down refusing hosts.",
+    )
+    parser.add_argument(
+        "--host-cooldown-seconds",
+        type=float,
+        default=300.0,
+        help="First cooldown after a host refuses; doubles per consecutive refusal (default: 300).",
+    )
     parser.add_argument("--concurrency", type=int, default=8,
                         help="Concurrent downloads (default: 8). OpenReview CDN tolerates 8-12 well.")
     parser.add_argument("--min-interval-seconds", type=float, default=0.0,
@@ -100,16 +151,33 @@ def main() -> int:
         default=None,
         help="PDF artifact root override; the manifest remains under --corpus-root.",
     )
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="No download: only the full-text identity check of the target PDFs already on disk.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --verify-only: list the copies that would be rejected; move and write nothing.",
+    )
     parser.add_argument("--limit", type=int, default=0,
                         help="Max papers to enqueue (0 = all missing). Useful for smoke test.")
     args = parser.parse_args()
-    if args.conf.upper() == "ICML" and args.year == 2026:
+    if args.dry_run and not args.verify_only:
+        parser.error("--dry-run only applies to --verify-only")
+    targets = parse_targets(args.target, args.conf, args.year)
+    if not targets:
+        parser.error("give --conf and --year, or at least one --target CONF:YEAR")
+    if args.host_turns:
+        args.concurrency = 1
+    if any(conf.upper() == "ICML" and year == 2026 for conf, year in targets):
         args.concurrency = 1
         args.min_interval_seconds = max(args.min_interval_seconds, 10.0)
 
     # 强制走部署配置中的代理（无直连回退）。代理不可达时显式失败，
-    # 不静默改直连（见 config.ProxySettings）。
-    proxy_url = require_explicit_proxy(
+    # 不静默改直连（见 config.ProxySettings）。--verify-only 不发任何请求。
+    proxy_url = "" if args.verify_only else require_explicit_proxy(
         args.first_hop_proxy if args.proxy_pool_file else settings.proxy.http_proxy
     )
     if args.max_bytes_per_second < 0:
@@ -132,7 +200,8 @@ def main() -> int:
         pdf_root=args.pdf_root,
         proxy_url=proxy_url,
     )
-    print(f"[{time.strftime('%H:%M:%S')}] corpus_root={builder.corpus_root} proxy={safe_proxy_label(proxy_url)}")
+    print(f"[{time.strftime('%H:%M:%S')}] corpus_root={builder.corpus_root} "
+          f"proxy={safe_proxy_label(proxy_url) if proxy_url else 'none (verify only)'}")
     print(f"           pdf_root={builder.pdf_root}")
     if chained_pool is not None:
         print(f"           strict two-hop exits={chained_pool.configured_count:,}")
@@ -143,27 +212,39 @@ def main() -> int:
         print("[!] manifest empty / unreadable", file=sys.stderr)
         return 2
     print(f"           manifest entries = {len(records):,}")
+    if args.verify_only:
+        verify_identity(builder, records, targets, dry_run=args.dry_run)
+        return 0
 
-    # Filter to target slice + missing PDFs
+    # Filter to the target slices + missing PDFs
+    wanted = set(targets)
     subset_records = [
         r for r in records
-        if r.get("conference") == args.conf and r.get("year") == args.year
+        if (r.get("conference"), r.get("year")) in wanted
         and not _alive(r.get("pdf_path"))
         and r.get("pdf_url")
     ]
-    total_in_slice = sum(
-        1 for r in records
-        if r.get("conference") == args.conf and r.get("year") == args.year
-    )
-    print(f"           slice {args.conf} {args.year}: {total_in_slice:,} total, "
-          f"{len(subset_records):,} need download")
+    for conf, year in targets:
+        total_in_slice = sum(
+            1 for r in records if r.get("conference") == conf and r.get("year") == year
+        )
+        need = sum(1 for r in subset_records if r.get("conference") == conf and r.get("year") == year)
+        print(f"           slice {conf} {year}: {total_in_slice:,} total, {need:,} need download")
 
-    if args.limit:
-        subset_records = subset_records[: args.limit]
+    if args.limit:  # per slice, so a multi-target smoke covers every slice
+        taken: dict[tuple, int] = {}
+        limited = []
+        for r in subset_records:
+            key = (r.get("conference"), r.get("year"))
+            if taken.get(key, 0) < args.limit:
+                taken[key] = taken.get(key, 0) + 1
+                limited.append(r)
+        subset_records = limited
         print(f"           limit applied: {len(subset_records):,}")
 
     if not subset_records:
         print("[done] nothing to download")
+        verify_identity(builder, records, targets)
         return 0
 
     papers = [CorpusPaper.from_manifest_record(r) for r in subset_records]
@@ -213,13 +294,30 @@ def main() -> int:
             max_bytes_per_second=args.max_bytes_per_second,
             chained_proxy_pool=chained_pool,
             proxy_attempts_per_url=args.proxy_attempts_per_url,
+            host_turns=args.host_turns,
+            host_cooldown_seconds=args.host_cooldown_seconds,
         )
 
     asyncio.run(run_download())
     elapsed = time.perf_counter() - t0
     print(f"[{time.strftime('%H:%M:%S')}] done in {elapsed:.0f}s "
           f"({len(papers) / max(elapsed, 0.001):.2f} papers/s)")
+    verify_identity(builder, records, targets)
     return 0
+
+
+
+def parse_targets(raw_targets: list[str], conf: str | None, year: int | None) -> list[tuple[str, int]]:
+    targets: list[tuple[str, int]] = []
+    if conf and year:
+        targets.append((conf, int(year)))
+    for raw in raw_targets:
+        name, sep, raw_year = raw.rpartition(":")
+        if not sep or not name or not raw_year.isdigit():
+            raise SystemExit(f"--target must look like CONF:YEAR, got {raw!r}")
+        if (name, int(raw_year)) not in targets:
+            targets.append((name, int(raw_year)))
+    return targets
 
 
 if __name__ == "__main__":

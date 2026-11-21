@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
-  Search, FileSearch, BookOpen, ListChecks, Settings, Menu, Sun, Moon, ChevronsLeft, ChevronsRight,
+  Search, FileSearch, BookOpen, ListChecks, CalendarClock, Settings, Menu, Sun, Moon, ChevronsLeft, ChevronsRight,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -28,6 +28,7 @@ const baseNavItems: NavItem[] = [
   { key: '/match-doc', icon: FileSearch, label: '文档匹配' },
   { key: '/documents', icon: BookOpen, label: '文档库' },
   { key: '/tasks', icon: ListChecks, label: '任务' },
+  ...(PUBLIC_MODE ? [] : [{ key: '/updates', icon: CalendarClock, label: '定时更新' }]),
 ];
 
 const navItems = PUBLIC_MODE ? baseNavItems.filter((m) => PUBLIC_KEYS.has(m.key)) : baseNavItems;

@@ -33,6 +33,8 @@ from llama_index.core.schema import Document as _LlamaDocument
 
 from app.models.schemas import Chunk
 from config import settings
+from core.indexing.embedding_profile import get_profile, load_tokenizer, tokens_over_limit
+from core.indexing.token_budget import SEGMENT_CHARS, split_to_budget
 
 _logger = logging.getLogger(__name__)
 
@@ -108,6 +110,49 @@ def _strip_html(text: str) -> str:
 
 def _has_markdown_headings(text: str) -> bool:
     return bool(_MD_HEADING_RE.search(text))
+
+
+def enforce_budget(chunks: List[Chunk]) -> List[Chunk]:
+    """The final guarantee behind every chunker: no chunk is longer than the embedding
+    profile's ``chunk_max_tokens`` real tokens.
+
+    Chunkers aim at character or token targets and none of them promises a bound (a
+    chunker's own token estimate is approximate; an abstract or an unbroken CJK or base64
+    run has no natural break). A chunk over the budget is cut into pieces at whitespace (or
+    at token offsets when it has none). A piece keeps the chunk's level and metadata, gets a
+    new id, and ``start_idx``/``end_idx`` of its own text: the original offset plus the
+    piece's position in the chunk, so ``text[start:end] == content`` still holds wherever it
+    held for the chunk. Chunks within the budget are returned as they are.
+    """
+    if not chunks:
+        return chunks
+    profile = get_profile()
+    limit = profile.chunk_max_tokens
+    oversized = {i for i, _ in tokens_over_limit([c.content for c in chunks], limit, profile)}
+    if not oversized:
+        return chunks
+    out: List[Chunk] = []
+    for index, chunk in enumerate(chunks):
+        if index not in oversized:
+            out.append(chunk)
+            continue
+        for start, end in split_to_budget(chunk.content, max_tokens=limit, profile=profile, prefer="space"):
+            piece = chunk.content[start:end]
+            lead = len(piece) - len(piece.lstrip())
+            piece = piece.strip()
+            if not piece:
+                continue
+            out.append(chunk.model_copy(update={
+                "id": str(uuid.uuid4()),
+                "content": piece,
+                "start_idx": chunk.start_idx + start + lead,
+                "end_idx": chunk.start_idx + start + lead + len(piece),
+                "embedding": None,
+                "metadata": dict(chunk.metadata),
+            }))
+    _logger.info("chunker.budget split %d of %d chunks over %d tokens into %d pieces",
+                 len(oversized), len(chunks), limit, len(out) - (len(chunks) - len(oversized)))
+    return out
 
 
 class Chunker(ABC):
@@ -289,7 +334,7 @@ class SectionAwareChunker(Chunker):
                 doc_id, kind, len(chunks), len(clean_text),
                 (time.monotonic() - t0) * 1000,
             )
-            return chunks
+            return enforce_budget(chunks)
 
         chunks: List[Chunk] = []
         section_count = 0
@@ -311,7 +356,7 @@ class SectionAwareChunker(Chunker):
             doc_id, kind, section_count, len(chunks), len(clean_text),
             (time.monotonic() - t0) * 1000,
         )
-        return chunks
+        return enforce_budget(chunks)
 
 
 class TextChunker(Chunker):
@@ -355,7 +400,7 @@ class TextChunker(Chunker):
             doc_id=doc_id, text=text,
             chunk_size=self.chunk_sizes[-1], overlap=self.overlap // 2, level=3,
         ))
-        return self._dedupe_chunks(chunks)
+        return enforce_budget(self._dedupe_chunks(chunks))
 
     def chunk_document_iter(
         self,
@@ -363,34 +408,9 @@ class TextChunker(Chunker):
         text: str,
         include_summary: bool = True,
     ) -> Iterator[Chunk]:
-        chunks: List[Chunk] = []
-
-        if include_summary:
-            summary = self._create_summary(text)
-            chunks.append(Chunk(
-                id=str(uuid.uuid4()),
-                doc_id=doc_id,
-                content=summary,
-                level=1,
-                start_idx=0,
-                end_idx=len(text),
-                metadata={"type": "summary"},
-            ))
-
-        for chunk in self._chunk_by_size_iter(
-            doc_id=doc_id, text=text,
-            chunk_size=self.chunk_sizes[0], overlap=self.overlap, level=2,
-        ):
-            chunks.append(chunk)
-
-        for chunk in self._chunk_by_size_iter(
-            doc_id=doc_id, text=text,
-            chunk_size=self.chunk_sizes[-1], overlap=self.overlap // 2, level=3,
-        ):
-            chunks.append(chunk)
-
-        for chunk in self._dedupe_chunks(chunks):
-            yield chunk
+        # Deduplication needs every chunk of the document, so nothing is streamed
+        # before chunk_document has finished.
+        yield from self.chunk_document(doc_id, text, include_summary)
 
     def _create_summary(self, text: str, max_length: Optional[int] = None) -> str:
         if max_length is None:
@@ -415,33 +435,7 @@ class TextChunker(Chunker):
         overlap: int,
         level: int,
     ) -> List[Chunk]:
-        chunks: List[Chunk] = []
-        text_len = len(text)
-        start = 0
-
-        while start < text_len:
-            end = min(start + chunk_size, text_len)
-            if end < text_len:
-                boundary = self._find_sentence_boundary(text, end)
-                if boundary > start:
-                    end = boundary
-
-            chunk_text = text[start:end].strip()
-            if chunk_text:
-                chunks.append(Chunk(
-                    id=str(uuid.uuid4()),
-                    doc_id=doc_id,
-                    content=chunk_text,
-                    level=level,
-                    start_idx=start,
-                    end_idx=end,
-                    metadata={"chunk_size": chunk_size},
-                ))
-
-            if end >= text_len:
-                break
-            start = max(1, end - overlap)
-        return chunks
+        return list(self._chunk_by_size_iter(doc_id, text, chunk_size, overlap, level))
 
     def _chunk_by_size_iter(
         self,
@@ -561,7 +555,7 @@ class TextChunker(Chunker):
                 end_idx=start_idx,
                 metadata={"type": "semantic"},
             ))
-        return chunks
+        return enforce_budget(chunks)
 
 
 class _BgeM3LlamaAdapter:
@@ -602,13 +596,9 @@ class _BgeM3LlamaAdapter:
                     [text], priority="background").dense[0].tolist()
 
             def _get_text_embeddings(self, texts: _List[str]) -> _List[_List[float]]:
-                batch_size = max(1, int(getattr(self._embedder, "_EMBED_BATCH", 8)))
-                dense: _List[_List[float]] = []
-                for start in range(0, len(texts), batch_size):
-                    result = self._embedder.embed_texts(
-                        list(texts[start:start + batch_size]), priority="background")
-                    dense.extend(vector.tolist() for vector in result.dense)
-                return dense
+                from core.indexing.embedders import embed_in_pieces
+                result = embed_in_pieces(self._embedder, list(texts), "background")
+                return [vector.tolist() for vector in result.dense]
 
             def _get_query_embedding(self, query: str) -> _List[float]:
                 return self._get_text_embedding(query)
@@ -667,13 +657,21 @@ class SemanticSectionChunker(SectionAwareChunker):
     # L3=512-char paragraphs. Aligns retrieval signal with paper-level
     # summary (title alone was too sparse for hybrid scoring).
     L1_SUMMARY_TOKENS = 500
+    # An abstract longer than this is not an abstract: ``## Abstract`` with no heading after it
+    # makes the whole body "the abstract" (one measured L1 of 19,424 tokens). It is capped to the
+    # first L1_SUMMARY_TOKENS tokens, like a paper with no abstract heading. Real abstracts are a
+    # few hundred tokens, so none of them reaches this.
+    L1_ABSTRACT_MAX_TOKENS = 1024
+    # A title longer than this is not a title. A paper whose title is not an H1 can carry a later
+    # whole-line H1 (measured: ICML 2026 doc 105830, an appendix table of contents of 3,600
+    # characters) that the first-H1 rule took as the title, pushing the L1 into two pieces.
+    L1_TITLE_MAX_TOKENS = 128
     L1_SECTION_NAME = "title_summary"
     # Filter L2 chunks below this size — semantic split occasionally emits
     # 1-10 char tail nodes (sentence boundary artifacts) that embed to noise.
     MIN_CHUNK_CHARS = 40
 
     _semantic_parser_cache: Any = None
-    _tokenizer_cache: Any = None
 
     def __init__(
         self,
@@ -794,21 +792,10 @@ class SemanticSectionChunker(SectionAwareChunker):
             chunks.append(self._make_chunk(doc_id, piece, section_name))
         return chunks
 
-    @classmethod
-    def _get_tokenizer(cls):
-        if cls._tokenizer_cache is not None:
-            return cls._tokenizer_cache
-        import os
-        from transformers import AutoTokenizer
-        # Offline GPU boxes (the 4090 migration) keep bge-m3 in a local
-        # modelscope cache, not the HF hub. Honor BGE_M3_PATH — same env the
-        # embedder/reranker already use — so AutoTokenizer loads from disk
-        # instead of trying (and failing) to reach huggingface.co under
-        # HF_HUB_OFFLINE=1. Falls back to the hub repo-id when the env is unset.
-        model_ref = os.environ.get("BGE_M3_PATH") or "BAAI/bge-m3"
-        cls._tokenizer_cache = AutoTokenizer.from_pretrained(model_ref)
-        _logger.info("semantic_chunker.tokenizer.loaded model=%s", model_ref)
-        return cls._tokenizer_cache
+    @staticmethod
+    def _get_tokenizer():
+        # The embedding profile's own tokenizer (BGE_M3_PATH aware, loaded once per process).
+        return load_tokenizer(get_profile())
 
     @staticmethod
     def _extract_abstract(text: str) -> Optional[str]:
@@ -825,6 +812,29 @@ class SemanticSectionChunker(SectionAwareChunker):
         body = _HTML_TAG_RE.sub("", body)
         body = re.sub(r"\s+", " ", body).strip()
         return body or None
+
+    @classmethod
+    def _summary_head(cls, text: str, max_tokens: Optional[int] = None) -> str:
+        """The first ``max_tokens`` (default ``L1_SUMMARY_TOKENS``) bge-m3 tokens of ``text``, decoded.
+
+        ``truncation`` cuts after the whole text is tokenized, so only a bounded prefix is handed
+        over: the first L1_SUMMARY_TOKENS tokens come from far fewer characters."""
+        tokenizer = cls._get_tokenizer()
+        token_ids = tokenizer.encode(
+            text[:SEGMENT_CHARS],
+            add_special_tokens=False,
+            truncation=True,
+            max_length=max_tokens or cls.L1_SUMMARY_TOKENS,
+        )
+        return tokenizer.decode(token_ids, skip_special_tokens=True).strip()
+
+    @staticmethod
+    def _clean_title(raw: Optional[str]) -> Optional[str]:
+        title = _HTML_TAG_RE.sub("", raw).strip() if raw else None
+        return re.sub(r"\s+", " ", title) if title else None
+
+    def _is_title_length(self, title: Optional[str]) -> bool:
+        return bool(title) and not tokens_over_limit([title], self.L1_TITLE_MAX_TOKENS, get_profile())
 
     def _build_l1_chunk(
         self,
@@ -847,28 +857,27 @@ class SemanticSectionChunker(SectionAwareChunker):
             return None
 
         title_m = re.search(r"^\s*#\s+(.+?)\s*$", text, re.MULTILINE)
-        title_raw = title_m.group(1).strip() if title_m else title_hint
-        title = _HTML_TAG_RE.sub("", title_raw).strip() if title_raw else None
-        if title:
-            title = re.sub(r"\s+", " ", title)
+        title = self._clean_title(title_m.group(1)) if title_m else None
+        if title_m and not self._is_title_length(title):
+            title_m, title = None, None          # a whole-line H1 of something else, not the title
+        if title is None:
+            title = self._clean_title(title_hint)
+            if title and not self._is_title_length(title):
+                title = self._summary_head(title, self.L1_TITLE_MAX_TOKENS - 2) or None   # 2 = specials
 
         # Prefer abstract path
         abstract = self._extract_abstract(text)
-        if abstract:
+        if abstract and not tokens_over_limit([abstract], self.L1_ABSTRACT_MAX_TOKENS, get_profile()):
             summary = abstract
             path = "abstract"
+        elif abstract:
+            summary = self._summary_head(abstract)
+            path = "abstract_capped"
         else:
             body = text[title_m.end():].lstrip() if title_m else text.lstrip()
             if not body:
                 body = title or ""
-            tokenizer = self._get_tokenizer()
-            token_ids = tokenizer.encode(
-                body,
-                add_special_tokens=False,
-                truncation=True,
-                max_length=self.L1_SUMMARY_TOKENS,
-            )
-            summary = tokenizer.decode(token_ids, skip_special_tokens=True).strip()
+            summary = self._summary_head(body)
             path = "n_tokens_fallback"
 
         content = f"{title}\n\n{summary}" if title else summary
@@ -915,7 +924,10 @@ class SemanticSectionChunker(SectionAwareChunker):
         )
         if l1 is None:
             return l2_chunks
-        return [l1, *l2_chunks]
+        # The L2 chunks passed the budget in the parent; the L1 summary is at most
+        # L1_ABSTRACT_MAX_TOKENS (or L1_SUMMARY_TOKENS when capped) plus the title, so only a
+        # title of absurd length could still need the budget.
+        return [*enforce_budget([l1]), *l2_chunks]
 
 
 def create_chunker(
