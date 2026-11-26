@@ -1,0 +1,2 @@
+# Downloaded binaries (fetched on Arc, scp'd to 4090) — never commit.
+dist/
