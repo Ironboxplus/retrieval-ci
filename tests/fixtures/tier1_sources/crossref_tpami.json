@@ -1,0 +1,673 @@
+{
+ "status": "ok",
+ "message-type": "work-list",
+ "message-version": "1.0.0",
+ "message": {
+  "facets": {},
+  "total-results": 5,
+  "items": [
+   {
+    "DOI": "10.1109/tpami.2023.3296600",
+    "title": [
+     "OPAL: Occlusion Pattern Aware Loss for Unsupervised Light Field Disparity Estimation"
+    ],
+    "volume": "46",
+    "page": "681-694",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0000-0003-1066-6642",
+      "authenticated-orcid": false,
+      "given": "Peng",
+      "family": "Li",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Tsinghua University, Beijing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0009-0006-9795-8208",
+      "authenticated-orcid": false,
+      "given": "Jiayin",
+      "family": "Zhao",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Tsinghua University, Beijing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0009-0002-0548-6735",
+      "authenticated-orcid": false,
+      "given": "Jingyao",
+      "family": "Wu",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Tsinghua University, Beijing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-6532-9550",
+      "authenticated-orcid": false,
+      "given": "Chao",
+      "family": "Deng",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Tsinghua University, Beijing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-8097-1397",
+      "authenticated-orcid": false,
+      "given": "Yuqi",
+      "family": "Han",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Tsinghua University, Beijing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0003-2792-8469",
+      "authenticated-orcid": false,
+      "given": "Haoqian",
+      "family": "Wang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Tsinghua University, Beijing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-3818-5069",
+      "authenticated-orcid": false,
+      "given": "Tao",
+      "family": "Yu",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Tsinghua University, Beijing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "type": "journal-article",
+    "published": {
+     "date-parts": [
+      [
+       2024,
+       2
+      ]
+     ]
+    }
+   },
+   {
+    "DOI": "10.1109/tpami.2023.3329725",
+    "title": [
+     "PFENet++: Boosting Few-Shot Semantic Segmentation With the Noise-Filtered Context-Aware Prior Mask"
+    ],
+    "volume": "46",
+    "page": "1273-1289",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0000-0002-2365-4950",
+      "authenticated-orcid": false,
+      "given": "Xiaoliu",
+      "family": "Luo",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Chongqing University of Technology, Chongqing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0003-2698-6923",
+      "authenticated-orcid": false,
+      "given": "Zhuotao",
+      "family": "Tian",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Chinese University of Hong Kong, Hong Kong"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-9891-4203",
+      "authenticated-orcid": false,
+      "given": "Taiping",
+      "family": "Zhang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Chongqing University, Chongqing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-6406-4810",
+      "authenticated-orcid": false,
+      "given": "Bei",
+      "family": "Yu",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Chinese University of Hong Kong, Hong Kong"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-6887-130X",
+      "authenticated-orcid": false,
+      "given": "Yuan Yan",
+      "family": "Tang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "University of Macau, Macau, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-1246-553X",
+      "authenticated-orcid": false,
+      "given": "Jiaya",
+      "family": "Jia",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Chinese University of Hong Kong, Hong Kong"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "type": "journal-article",
+    "published": {
+     "date-parts": [
+      [
+       2024,
+       2
+      ]
+     ]
+    }
+   },
+   {
+    "DOI": "10.1109/tpami.2023.3328397",
+    "title": [
+     "False Correlation Reduction for Offline Reinforcement Learning"
+    ],
+    "volume": "46",
+    "page": "1199-1211",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0000-0002-6088-7534",
+      "authenticated-orcid": false,
+      "given": "Zhihong",
+      "family": "Deng",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Faculty of Engineering and Information Technology, Australian Artificial Intelligence Institute, University of Technology Sydney, Ultimo, NSW, Australia"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0009-0003-9217-543X",
+      "authenticated-orcid": false,
+      "given": "Zuyue",
+      "family": "Fu",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Department of Industrial Engineering and Management Sciences, Northwestern University, Evanston, IL, USA"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-1654-4681",
+      "authenticated-orcid": false,
+      "given": "Lingxiao",
+      "family": "Wang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Department of Industrial Engineering and Management Sciences, Northwestern University, Evanston, IL, USA"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Zhuoran",
+      "family": "Yang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Department of Statistics and Data Science, Yale University, New Haven, CT, USA"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-8379-9385",
+      "authenticated-orcid": false,
+      "given": "Chenjia",
+      "family": "Bai",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Shanghai Artificial Intelligence Laboratory, Shanghai, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-5348-0632",
+      "authenticated-orcid": false,
+      "given": "Tianyi",
+      "family": "Zhou",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Department of Computer Science and UMIACS, University of Maryland, College Park, MD, USA"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Zhaoran",
+      "family": "Wang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Department of Industrial Engineering and Management Sciences, Northwestern University, Evanston, IL, USA"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-5301-7779",
+      "authenticated-orcid": false,
+      "given": "Jing",
+      "family": "Jiang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Faculty of Engineering and Information Technology, Australian Artificial Intelligence Institute, University of Technology Sydney, Ultimo, NSW, Australia"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "type": "journal-article",
+    "published": {
+     "date-parts": [
+      [
+       2024,
+       2
+      ]
+     ]
+    }
+   },
+   {
+    "DOI": "10.1109/tpami.2013.84",
+    "title": [
+     "Contextualized Trajectory Parsing with Spatio-Temporal Graph"
+    ],
+    "page": "1-1",
+    "author": [
+     {
+      "given": "Xiaobai",
+      "family": "Liu",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "Huazhong University of Science Technology, China and University of California at Los Angeles, Los Angeles"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Liang",
+      "family": "Lin",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Sun Yat-sen University, Guangzhou"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     },
+     {
+      "given": "Hai",
+      "family": "Jin",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Huazhong University of Science Technology, China"
+       }
+      ],
+      "role": [
+       {
+        "role": "author",
+        "vocabulary": "crossref"
+       }
+      ]
+     }
+    ],
+    "type": "journal-article",
+    "published": {
+     "date-parts": [
+      [
+       2024
+      ]
+     ]
+    }
+   },
+   {
+    "DOI": "10.1109/tpami.2023.3341723",
+    "title": [
+     "Editorial: Learning With Fewer Labels in Computer Vision"
+    ],
+    "volume": "46",
+    "page": "1319-1326",
+    "author": [
+     {
+      "ORCID": "https://orcid.org/0000-0002-2011-2873",
+      "authenticated-orcid": false,
+      "given": "Li",
+      "family": "Liu",
+      "sequence": "first",
+      "affiliation": [
+       {
+        "name": "University of Edinburgh, Edinburgh, U.K."
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0003-4867-7486",
+      "authenticated-orcid": false,
+      "given": "Timothy",
+      "family": "Hospedales",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "University of Edinburgh, Edinburgh, U.K."
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "given": "Yann",
+      "family": "LeCun",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "New York University, New York, NY, USA"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0001-9421-463X",
+      "authenticated-orcid": false,
+      "given": "Mingsheng",
+      "family": "Long",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Tsinghua University, Beijing, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-4516-9729",
+      "authenticated-orcid": false,
+      "given": "Jiebo",
+      "family": "Luo",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "University of Rochester, Rochester, NY, USA"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0002-9163-2761",
+      "authenticated-orcid": false,
+      "given": "Wanli",
+      "family": "Ouyang",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Shanghai AI Laboratory, Shanghai, China"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0003-2263-6731",
+      "authenticated-orcid": false,
+      "given": "Matti",
+      "family": "Pietikäinen",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "Center for Machine Vision and Signal Analysis, University of Oulu, Oulu, Finland"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     },
+     {
+      "ORCID": "https://orcid.org/0000-0003-3307-9723",
+      "authenticated-orcid": false,
+      "given": "Tinne",
+      "family": "Tuytelaars",
+      "sequence": "additional",
+      "affiliation": [
+       {
+        "name": "KU Leuven, Leuven, Belgium"
+       }
+      ],
+      "role": [
+       {
+        "vocabulary": "crossref",
+        "role": "author"
+       }
+      ]
+     }
+    ],
+    "type": "journal-article",
+    "published": {
+     "date-parts": [
+      [
+       2024,
+       3
+      ]
+     ]
+    }
+   }
+  ],
+  "items-per-page": 200,
+  "query": {
+   "start-index": 0,
+   "search-terms": null
+  }
+ }
+}

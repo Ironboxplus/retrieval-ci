@@ -1,0 +1,138 @@
+{
+ "paper": "jmlr-2022-19-297",
+ "page": 12,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     501,
+     78,
+     716,
+     102
+    ],
+    "block_content": "LEWIS AND GROSSETTI"
+   },
+   {
+    "block_id": 1,
+    "block_label": "chart",
+    "block_bbox": [
+     308,
+     182,
+     912,
+     543
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 2,
+    "block_label": "figure_title",
+    "block_bbox": [
+     174,
+     576,
+     1049,
+     660
+    ],
+    "block_content": "Figure 2: Standardized  $ OpTop_{J}^{K} $ statistics for Aggregate DTW-TWW Stability for LDA models ranging from 2 to 200 topics. The test identifies 92 as the optimal number of topics for the case study corpus."
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     722,
+     1046,
+     777
+    ],
+    "block_content": "the standardized  $ OpTop_J^K $ chi-square statistic tracks the perplexity measure but has the advantage of being a parametric test that assesses the goodness-of-fit."
+   },
+   {
+    "block_id": 4,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     173,
+     806,
+     710,
+     832
+    ],
+    "block_content": "6.2 Addressing Topic Stability — Tests 2 and 3"
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     845,
+     1050,
+     1140
+    ],
+    "block_content": "To provide a comprehensive picture of individual topic stability, Figure 3 illustrates the  $ TWW_k^K $ statistics associated with Test 2 for higher dimensional models that range from 93 to 200 topics relative to the identified optimal 92-topic model. Intuitively, we are looking for a substantially flat plot. As we can see from Figure 3, the vast majority is indeed flat with some exceptions given by “ridges”. These identify certain topic models that appear to be dissimilar. A so-called “ridge” reflects the  $ TWW_k^K $ statistics for a model with  $ \\tilde{K} $ topics. Visually, a topic model with 157 topics has the relatively largest  $ TWW_k^K $ statistics. Even though this models appear to be different from a 92-topic model, the chi-square statistics are small in an absolute sense, i.e., they are not significantly different from zero. As one moves along the  $ \\tilde{K} $-topic model axis, one can see that there is no evidence of persistent dissimilarity across models."
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     1143,
+     1050,
+     1333
+    ],
+    "block_content": "Finally, we are able to visualize and evaluate aggregate $K$ topic stability. In other words, we formally test if the corpus displays aggregate $K$ topic stability. Figure 4 shows the $\\mathbf{TWW}^{\\mathbf{K}}$ statistics associated with Test 3. To enhance comparability, we normalize the test statistics by scaling them by their respective means. The scaled means rapidly approach 1.0 — a benchmark that is well below the one-standard deviation cutoff of 1.414. One can see that, relative to the optimal 92-topic model, one cannot reject the hypothesis of topic stability at conventional significance levels as the number of topics increase."
+   },
+   {
+    "block_id": 7,
+    "block_label": "footnote",
+    "block_bbox": [
+     179,
+     1367,
+     1048,
+     1412
+    ],
+    "block_content": "8. A chi-square distributed random variable has a mean equal to the number of degrees of freedom and a variance equal to 2 times the number of degrees of freedom."
+   },
+   {
+    "block_id": 8,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1450,
+     625,
+     1469
+    ],
+    "block_content": "12"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['1.414']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 6,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.975,
+   "numbers_unknown": 1,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.999,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

@@ -17,6 +17,7 @@ from core.db import get_db_session
 from core.db.models import Document, Chunk, DocumentStatus
 from config import settings
 from app.models.schemas import Chunk as SchemaChunk
+from core.indexing.embedding_profile import current_embed_fp
 
 if TYPE_CHECKING:
     from core.indexing.chunker import Chunker
@@ -98,8 +99,9 @@ class IndexService:
     @property
     def qdrant_store(self) -> "QdrantStore":
         if self._qdrant_store is None:
-            from core.storage.qdrant_store import QdrantStore
-            self._qdrant_store = QdrantStore(collection_name=self._collection_name)
+            # `papers` resolves to the routed papers/arxiv/reviews corpus.
+            from core.storage.corpus_store import paper_store
+            self._qdrant_store = paper_store(self._collection_name)
         return self._qdrant_store
 
     chroma_store = qdrant_store
@@ -192,7 +194,8 @@ class IndexService:
                 "title": title or "",
                 "source": source or "",
                 "doc_id": str_doc_id,
-                **(metadata or {})
+                **(metadata or {}),
+                "embed_fp": current_embed_fp(),
             }
 
             for chunk in chunks:

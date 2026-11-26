@@ -192,12 +192,12 @@ export function buildSyntheticStageNodes(
  * neither source has anything to report yet.
  */
 export function reachedStageLabel(
-  nodes: { name: string; subtask_key: string | null; status: string }[],
+  nodes: { name: string; subtask_key?: string | null; key?: string | null; status: string }[],
   events: { stage?: string | null }[],
   taskType: string,
 ): string {
   const lastReachedNode = [...nodes].reverse().find((n) => n.status !== 'pending');
-  if (lastReachedNode) return workflowNodeLabel(lastReachedNode.subtask_key, taskType, lastReachedNode.name);
+  if (lastReachedNode) return workflowNodeLabel(lastReachedNode.subtask_key ?? lastReachedNode.key, taskType, lastReachedNode.name);
   const lastStagedEvent = [...events].reverse().find((e) => e.stage);
   if (lastStagedEvent?.stage) return stageLabel(lastStagedEvent.stage);
   return '';

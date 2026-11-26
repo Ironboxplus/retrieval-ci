@@ -9,7 +9,7 @@ from typing import Protocol
 
 from app.services.public_code.source_catalog import PublicCodeSource, PublicCodeSourceSelector
 from core.code_kb.models import CodeChunk
-from core.code_kb.vector_records import CodeChunkVectorRecord
+from core.code_kb.vector_records import CodeChunkVectorRecord, fit_records_to_budget
 from core.indexing.embedders import embed_texts
 from core.indexing.revision_manifest import RevisionFile, RevisionManifest
 
@@ -227,14 +227,14 @@ class PublicCodeIndexService:
                     message="reading and AST chunking source file",
                 ))
                 source_text = self._source_reader.read_source(source, file)
-                for chunk_ordinal, chunk in enumerate(
-                    self._chunk_fn(file.path, source_text, language=file.language)
-                ):
-                    pending_records.append(_vector_record(
-                        chunk,
-                        language=file.language,
-                        chunk_ordinal=chunk_ordinal,
-                    ))
+                # A chunk over the token budget becomes several records, so the file's
+                # records are fixed up as a whole before they are batched.
+                for record in fit_records_to_budget([
+                    _vector_record(chunk, language=file.language, chunk_ordinal=chunk_ordinal)
+                    for chunk_ordinal, chunk in enumerate(
+                        self._chunk_fn(file.path, source_text, language=file.language))
+                ]):
+                    pending_records.append(record)
                     if len(pending_records) >= self._batch_size:
                         _emit_progress(progress_cb, PublicCodeIndexProgress(
                             source_id=source_id,
