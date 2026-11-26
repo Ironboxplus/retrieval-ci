@@ -1,0 +1,8 @@
+# Optional deps for medical corpus prep + CF minimal FO (Arc only).
+# Core project already has httpx.
+#
+#   .\.venv\Scripts\python.exe -m pip install -r scripts/medical/requirements-medical.txt
+#
+selenium-driverless>=1.9
+# optional TLS fingerprint for soft/HTTP paths in TurnstileBypass:
+# curl_cffi>=0.6
