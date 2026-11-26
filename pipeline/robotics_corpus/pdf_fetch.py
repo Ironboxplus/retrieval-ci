@@ -11,6 +11,7 @@ from typing import Optional
 
 import httpx
 
+from pipeline.http_retry import exponential_backoff_seconds
 from pipeline.medical_corpus.cf_bypass import CfBypassResult, solve_cloudflare_for_url_sync
 from pipeline.medical_corpus.shield import classify_http_shield, retry_delay_seconds
 from pipeline.paper_crawler.runtime_files import build_write_in_progress_path, is_valid_pdf_artifact
@@ -215,7 +216,9 @@ def download_pdf(
                     "pdf download attempt=%s paper=%s err=%s",
                     attempt, record.paper_id, exc,
                 )
-                time.sleep(min(30.0, 1.5 * (2 ** (attempt - 1))))
+                # Only the wait curve is shared: the loop rotates candidate URLs and
+                # swaps headers and cookies after a Cloudflare solve.
+                time.sleep(exponential_backoff_seconds(attempt))
 
     record.download_status = "blocked" if cf_tried else "failed"
     record.download_error = last_error or "unknown download failure"

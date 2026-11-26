@@ -147,14 +147,12 @@ def test_semantic_chunker_invokes_llama_index_semantic_splitter_for_long_section
     assert len(chunks) >= 1
 
 
-def test_semantic_embed_adapter_yields_between_bounded_background_batches():
+def test_semantic_embed_adapter_embeds_in_one_background_call():
     import numpy as np
     from types import SimpleNamespace
     from core.indexing.chunker import _BgeM3LlamaAdapter
 
     class BatchSpyEmbedder:
-        _EMBED_BATCH = 3
-
         def __init__(self):
             self.calls = []
 
@@ -167,9 +165,8 @@ def test_semantic_embed_adapter_yields_between_bounded_background_batches():
     adapter = _BgeM3LlamaAdapter.build(embedder)
     dense = adapter._get_text_embeddings([f"sentence {index}" for index in range(8)])
 
-    assert embedder.calls == [
-        ("background", 3), ("background", 3), ("background", 2),
-    ]
+    # the service schedules by priority and the client batches: one call, not 3-text pieces
+    assert embedder.calls == [("background", 8)]
     assert len(dense) == 8
 
 

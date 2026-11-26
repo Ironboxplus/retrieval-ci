@@ -20,11 +20,16 @@ from core.storage.qdrant_operations import (
     retry_qdrant_operation,
 )
 from core.storage.qdrant_scope_filters import build_scope_pair_filter
-from core.storage.qdrant_store import QdrantStore, sparse_dict_to_qdrant
+from core.storage.qdrant_store import (
+    QDRANT_COLLECTION_ON_DISK,
+    QdrantStore,
+    sparse_dict_to_qdrant,
+)
 
 
 PUBLIC_CODE_COLLECTION = "public_code_chunks"
-_SEARCH_FILTER_FIELDS = ("source_id", "revision", "domain", "path", "language")
+# ``embed_fp`` is not a search filter: "which points are stale" is a must_not on it.
+_SEARCH_FILTER_FIELDS = ("source_id", "revision", "domain", "path", "language", "embed_fp")
 
 
 class PublicCodeVectorStore:
@@ -58,6 +63,7 @@ class PublicCodeVectorStore:
                 field_names=_SEARCH_FILTER_FIELDS,
                 retry=retry_qdrant_operation,
                 existing_schema=schema,
+                on_disk=QDRANT_COLLECTION_ON_DISK,
             )
         except Exception:
             self._missing_search_indexes = set(_SEARCH_FILTER_FIELDS)

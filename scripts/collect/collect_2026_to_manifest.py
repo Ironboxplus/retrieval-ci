@@ -11,6 +11,10 @@ Usage:
     python scripts/collect_2026_to_manifest.py --conf ICLR --year 2026
     python scripts/collect_2026_to_manifest.py --conf AAAI --year 2026
     python scripts/collect_2026_to_manifest.py --conf EMNLP --year 2026 --announced-snapshot
+    python scripts/collect/collect_2026_to_manifest.py --target JMLR:2024 --target VLDB:2025
+
+Several --target slices are collected in one run with one manifest backup.
+Sources marked open_access_only keep only papers with a resolved open PDF.
 """
 from __future__ import annotations
 
@@ -18,7 +22,6 @@ import argparse
 import shutil
 import sys
 import time
-from dataclasses import asdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 from pipeline.paper_crawler.ccf_a_main_corpus import (
     MainConferenceCorpusBuilder,
     OfficialProceedingsClient,
+    collect_slice,
     normalize_title_key,
 )
 from pipeline.paper_crawler.runtime_files import (
@@ -85,8 +89,15 @@ def announced_prior_year_replay(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--conf", required=True, help="Conference name (e.g. CVPR, ICLR, AAAI)")
-    parser.add_argument("--year", type=int, required=True)
+    parser.add_argument("--conf", help="Conference name (e.g. CVPR, ICLR, AAAI)")
+    parser.add_argument("--year", type=int)
+    parser.add_argument(
+        "--target",
+        action="append",
+        default=[],
+        metavar="CONF:YEAR",
+        help="Slice to collect; repeatable. Combined with --conf/--year when both are given.",
+    )
     parser.add_argument("--limit", type=int, default=0,
                         help="Cap collected papers (0 = no cap). Useful for smoke.")
     parser.add_argument(
@@ -102,23 +113,36 @@ def main() -> int:
         action="store_true",
         help="Explicitly replace publisher PDF URLs with resolved OA copies.",
     )
+    parser.add_argument(
+        "--corpus-root",
+        type=Path,
+        default=None,
+        help="Corpus root whose manifests/paper_manifest.json is merged (default: the canonical corpus).",
+    )
     args = parser.parse_args()
+    targets = parse_targets(args.target, args.conf, args.year)
+    if not targets:
+        parser.error("give --conf and --year, or at least one --target CONF:YEAR")
+    if args.announced_snapshot and len(targets) != 1:
+        parser.error("--announced-snapshot takes exactly one slice")
 
     # 强制走代理（无直连回退）：外网采集必须经 10808。代理只在 Arc 上 → 采集跑在 Arc。
     # 代理不可达时显式失败，不静默改直连（见 config.ProxySettings）。
     proxy_url = settings.proxy.http_proxy
-    builder = MainConferenceCorpusBuilder(proxy_url=proxy_url)
+    builder = MainConferenceCorpusBuilder(corpus_root=args.corpus_root, proxy_url=proxy_url)
     manifest_path = builder.manifest_path
     print(f"[{time.strftime('%H:%M:%S')}] manifest_path={manifest_path} proxy={proxy_url or 'direct'}")
 
     sources = builder.sources
-    if args.conf not in sources:
-        print(f"[!] unknown conference {args.conf!r}; known: {sorted(sources)}", file=sys.stderr)
-        return 2
+    for conf, year in targets:
+        if conf not in sources:
+            print(f"[!] unknown conference {conf!r}; known: {sorted(sources)}", file=sys.stderr)
+            return 2
+        if not sources[conf].supports_year(year):
+            print(f"[!] {conf} source does not support year {year}", file=sys.stderr)
+            return 2
+    args.conf, args.year = targets[0]
     source = sources[args.conf]
-    if not source.supports_year(args.year):
-        print(f"[!] {args.conf} source does not support year {args.year}", file=sys.stderr)
-        return 2
 
     if args.announced_snapshot:
         collect_announced = getattr(source, "collect_announced_papers", None)
@@ -163,71 +187,84 @@ def main() -> int:
     existing = load_json_with_recovery(manifest_path, default_value=[])
     print(f"           manifest has {len(existing):,} existing entries")
 
-    backup_path = manifest_path.with_suffix(f".bak.{args.conf.lower()}-{args.year}-{int(time.time())}")
+    slug = "-".join(f"{conf.lower()}-{year}" for conf, year in targets)[:80]
+    backup_path = manifest_path.with_suffix(f".bak.{sanitize_slug(slug)}-{int(time.time())}")
     shutil.copy2(manifest_path, backup_path)
     print(f"           backup -> {backup_path.name}")
 
-    print(f"[{time.strftime('%H:%M:%S')}] collecting {args.conf} {args.year} ...")
-    t0 = time.perf_counter()
+    collected: dict[tuple[str, int], list] = {}
     client = OfficialProceedingsClient(proxy_url=proxy_url)
     try:
-        new_papers = source.collect_papers(args.year, client)
-        resolution = maybe_resolve_open_access(
-            source,
-            new_papers,
-            client,
-            enabled=args.resolve_open_access,
-        )
-        if resolution is not None:
-            print(f"           open-access resolution: {resolution}")
+        for index, (conf, year) in enumerate(targets):
+            if index:
+                time.sleep(3.0)  # one listing request burst per slice, spaced
+            print(f"[{time.strftime('%H:%M:%S')}] collecting {conf} {year} ...")
+            t0 = time.perf_counter()
+            papers, report = collect_slice(
+                sources[conf], year, client, resolve_open_access=args.resolve_open_access,
+            )
+            if args.limit:
+                papers = papers[: args.limit]
+            collected[(conf, year)] = papers
+            print(f"           {conf} {year}: {report} in {time.perf_counter() - t0:.1f}s")
     finally:
         client.close()
-    elapsed = time.perf_counter() - t0
-    print(f"           collected {len(new_papers):,} papers in {elapsed:.1f}s")
-    if args.limit:
-        new_papers = new_papers[: args.limit]
-        print(f"           limit applied: {len(new_papers):,}")
 
-    # Merge by paper_id. A full slice collection replaces stale target-slice
-    # entries (for example, ICML 2026 all-events schedule rows that are no
-    # longer in the main-conference papers page). Limited smoke runs must not
-    # delete existing rows.
-    target_conf = args.conf.upper()
-    removed_stale = 0
-    if args.limit:
-        kept_existing = existing
-    else:
-        kept_existing = []
-        for record in existing:
-            record_conf = (record.get("conference") or record.get("venue") or "").upper()
-            if record_conf == target_conf and record.get("year") == args.year:
-                removed_stale += 1
-                continue
-            kept_existing.append(record)
-
-    by_id = {p["paper_id"]: p for p in kept_existing}
-    added = 0
-    updated = 0
-    for paper in new_papers:
-        d = asdict(paper)
-        # Match the field convention used by other manifest entries.
-        d.setdefault("conference", paper.conference)
-        d.setdefault("year", paper.year)
-        if paper.paper_id in by_id:
-            updated += 1
-        else:
-            added += 1
-        by_id[paper.paper_id] = d
-
-    merged = list(by_id.values())
+    merged, counts = merge_slices(existing, collected, replace_slices=not args.limit)
     print(
-        f"           merged: removed {removed_stale} stale target-slice entries, "
-        f"+{added} new, {updated} updated, total {len(merged):,}"
+        f"           merged: removed {counts['removed_stale']} stale target-slice entries, "
+        f"+{counts['added']} new, {counts['updated']} updated, total {len(merged):,}"
     )
-
     write_json_atomic(manifest_path, merged)
     print(f"[{time.strftime('%H:%M:%S')}] wrote {manifest_path.name}")
     return 0
+
+
+def parse_targets(raw_targets: list[str], conf: str | None, year: int | None) -> list[tuple[str, int]]:
+    targets: list[tuple[str, int]] = []
+    if conf and year:
+        targets.append((conf, int(year)))
+    for raw in raw_targets:
+        name, sep, raw_year = raw.rpartition(":")
+        if not sep or not name or not raw_year.isdigit():
+            raise SystemExit(f"--target must look like CONF:YEAR, got {raw!r}")
+        if (name, int(raw_year)) not in targets:
+            targets.append((name, int(raw_year)))
+    return targets
+
+
+def sanitize_slug(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "-." else "_" for ch in value)
+
+
+def merge_slices(existing: list[dict], collected: dict, *, replace_slices: bool) -> tuple[list[dict], dict]:
+    """Merge collected papers by paper_id.
+
+    A full slice collection replaces stale target-slice entries (for example,
+    ICML 2026 all-events schedule rows that are no longer in the main-conference
+    papers page). Limited smoke runs must not delete existing rows.
+    """
+    targets = {(conf.upper(), year) for conf, year in collected}
+    removed_stale = 0
+    kept_existing = []
+    for record in existing:
+        record_conf = (record.get("conference") or record.get("venue") or "").upper()
+        if replace_slices and (record_conf, record.get("year")) in targets:
+            removed_stale += 1
+            continue
+        kept_existing.append(record)
+
+    by_id = {p["paper_id"]: p for p in kept_existing}
+    added = updated = 0
+    for papers in collected.values():
+        for paper in papers:
+            record = paper.to_manifest_record()
+            if paper.paper_id in by_id:
+                updated += 1
+            else:
+                added += 1
+            by_id[paper.paper_id] = record
+    return list(by_id.values()), {"removed_stale": removed_stale, "added": added, "updated": updated}
 
 
 if __name__ == "__main__":

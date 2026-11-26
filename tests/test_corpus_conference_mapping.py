@@ -64,6 +64,33 @@ def test_new_venues_do_not_raise(new_venue):
     assert p.conference is not None
 
 
+def test_every_registry_title_has_its_own_enum_member():
+    """A registry venue that falls back to OTHER is written to SQL as venue "Other"."""
+    from pipeline.paper_crawler.ccf_a_main_corpus import load_conference_registry
+
+    for entry in load_conference_registry():
+        title = entry["name"]
+        p = _make_record(title).to_runtime_paper()
+        assert p.conference.value == title, f"{title} maps to {p.conference!r}"
+
+
+def test_doi_reaches_runtime_paper_and_manifest_only_when_set():
+    with_doi = _make_record("TPAMI")
+    with_doi.doi = "10.1109/TPAMI.2024.3356232"
+    assert with_doi.to_runtime_paper().doi == "10.1109/TPAMI.2024.3356232"
+    assert with_doi.to_manifest_record()["doi"] == "10.1109/TPAMI.2024.3356232"
+    assert "doi" not in _make_record("CVPR").to_manifest_record()
+
+
+def test_registry_venue_tier_lookup():
+    from pipeline.paper_crawler.ccf_a_main_corpus import registry_venue_tier
+
+    assert registry_venue_tier("ECCV") == "CCF-B"
+    assert registry_venue_tier("IJCAI") == "CCF-B"
+    assert registry_venue_tier("TPAMI") == "CCF-A"
+    assert registry_venue_tier("MadeUpVenue9999") is None
+
+
 def test_unknown_conference_falls_back_to_other():
     """Truly unknown conference names should fall back, not raise."""
     r = _make_record("MadeUpVenue9999")

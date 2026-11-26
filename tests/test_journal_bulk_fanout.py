@@ -47,9 +47,9 @@ def _repository(database_path: Path) -> JournalRepository:
             super().__init__(session_factory=session_factory)
             self.inventory_reads = 0
 
-        def all_live_doc_files(self, *, owner_user_id):
+        def live_doc_files_in_scopes(self, **kwargs):
             self.inventory_reads += 1
-            return super().all_live_doc_files(owner_user_id=owner_user_id)
+            return super().live_doc_files_in_scopes(**kwargs)
 
     return InventoryCountingRepository()
 
@@ -340,3 +340,100 @@ def test_production_vector_store_flattens_scope_groups_into_waiting_qdrant_batch
     assert {point.payload["entry_id"] for point in points} == {"entry-parent", "entry-child"}
     assert {point.payload["project_slug"] for point in points} == {"C:/Repo", "C:/Repo/Docs"}
     assert len({point.id for point in points}) == 280
+
+
+def _scope_group(scope: str, entry_id: str, count: int) -> JournalChunkUpsert:
+    chunks = [JournalTextChunk(
+        chunk_id=f"{entry_id}-chunk-{index}", entry_id=entry_id,
+        chunk_index=index, level=2, content=f"content {scope} {index}")
+        for index in range(count)]
+    return JournalChunkUpsert(
+        chunks=chunks, project_id=7, project_slug=scope, entry_id=entry_id,
+        owner_user_id="owner-a", client="mcp", source_kind="doc", tags=[],
+        dense_vectors=[[float(index), 1.0] for index in range(count)],
+    )
+
+
+def test_production_vector_store_reports_written_count_after_each_waiting_batch():
+    boundary = _RecordingQdrantBoundary()
+    vectors = JournalVectorStore(collection_name="journal_chunks_test", store=boundary)
+    seen: list[tuple[int, int, int]] = []
+
+    def on_batch(written: int, total: int) -> None:
+        # Called only after that batch's wait=True upsert returned.
+        seen.append((written, total, len(boundary.batches)))
+
+    assert vectors.upsert_chunk_groups([
+        _scope_group("C:/Repo", "entry-parent", 600),
+        _scope_group("C:/Repo/Docs", "entry-child", 20),
+    ], on_batch=on_batch) == 620
+    assert seen == [(256, 620, 1), (512, 620, 2), (620, 620, 3)]
+
+
+class _ProgressVectorStore(RecordingBatchVectorStore):
+    """Grouped store that honours the optional per-batch callback like the real one."""
+
+    def upsert_chunk_groups(self, groups, *, on_batch=None):
+        written = super().upsert_chunk_groups(groups)
+        if on_batch is not None:
+            on_batch(written // 2, written)
+            on_batch(written, written)
+        return written
+
+
+class _LegacyVectorStore:
+    """Old test/local adapter: per-group ``upsert_chunks`` only."""
+
+    def __init__(self) -> None:
+        self.upserts = 0
+
+    def upsert_chunks(self, chunks, **kwargs):
+        self.upserts += 1
+        return len(chunks)
+
+    def delete_by_entry_ids(self, entry_ids):
+        return 0
+
+
+def _bulk_service(tmp_path: Path, vectors):
+    return JournalService(
+        repository=_repository(tmp_path / "journal.sqlite"), vector_store=vectors,
+        embed_fn=CountingEmbedder())
+
+
+def test_bulk_index_threads_write_progress_into_the_grouped_vector_write(tmp_path: Path):
+    doc = tmp_path / "a.md"
+    doc.write_text("# A\n\n" + "alpha beta gamma " * 40, encoding="utf-8")
+    service = _bulk_service(tmp_path, _ProgressVectorStore())
+    seen: list[tuple[int, int]] = []
+
+    result = service.index_docs_bulk(
+        project_slug=str(tmp_path), owner_user_id="owner-a", client="mcp",
+        files=[_bulk_item(doc, "a.md")], write_progress=lambda w, t: seen.append((w, t)))
+
+    assert seen and seen[-1] == (result["chunks"], result["chunks"])
+    assert [w for w, _ in seen] == sorted(w for w, _ in seen)
+
+
+def test_bulk_index_without_write_progress_never_passes_the_callback_to_the_store(tmp_path: Path):
+    doc = tmp_path / "a.md"
+    doc.write_text("# A\n\nsome content", encoding="utf-8")
+    vectors = RecordingBatchVectorStore()   # upsert_chunk_groups(self, groups): no on_batch
+    result = _bulk_service(tmp_path, vectors).index_docs_bulk(
+        project_slug=str(tmp_path), owner_user_id="owner-a", client="mcp",
+        files=[_bulk_item(doc, "a.md")])
+    assert result["indexed"] > 0 and vectors.groups
+
+
+def test_bulk_index_reports_write_progress_once_for_the_legacy_per_group_store(tmp_path: Path):
+    doc = tmp_path / "a.md"
+    doc.write_text("# A\n\nsome content", encoding="utf-8")
+    vectors = _LegacyVectorStore()
+    seen: list[tuple[int, int]] = []
+
+    result = _bulk_service(tmp_path, vectors).index_docs_bulk(
+        project_slug=str(tmp_path), owner_user_id="owner-a", client="mcp",
+        files=[_bulk_item(doc, "a.md")], write_progress=lambda w, t: seen.append((w, t)))
+
+    assert vectors.upserts >= 1
+    assert seen == [(result["chunks"], result["chunks"])]

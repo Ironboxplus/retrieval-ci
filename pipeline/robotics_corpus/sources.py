@@ -13,6 +13,7 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
+from pipeline.http_retry import retry_after_from
 from pipeline.robotics_corpus.models import RoboticsPaperRecord, RoboticsVenue, sanitize_id_component
 from pipeline.robotics_corpus.proxy import RoboticsProxyConfig, load_robotics_proxy_from_settings
 
@@ -155,11 +156,8 @@ class RoboticsHttpClient:
                 if response.status_code in {404, 410}:
                     response.raise_for_status()
                 if response.status_code == 429:
-                    retry_after = response.headers.get("retry-after")
-                    try:
-                        sleep_s = max(60.0, float(retry_after)) if retry_after else 60.0 * attempt
-                    except ValueError:
-                        sleep_s = 60.0 * attempt
+                    retry_after = retry_after_from(response, default=None)
+                    sleep_s = 60.0 * attempt if retry_after is None else max(60.0, retry_after)
                     last_error = httpx.HTTPStatusError(
                         f"429 Too Many Requests for {url}",
                         request=response.request,

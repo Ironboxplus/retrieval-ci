@@ -6,6 +6,7 @@ import asyncio
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 
 from app.api.identity import resolve_owner
+from app.services.code_kb.analysis_store import claim_scope_notice
 from app.services.index_catalog.service import get_index_catalog_service
 from app.services.journal import get_journal_service
 from app.services.journal.jobs import JournalBulkIndexJob, get_journal_index_queue
@@ -34,7 +35,8 @@ def _bulk_job_out(job: JournalBulkIndexJob) -> JournalBulkIndexJobOut:
         status=job.status.value, files_total=job.files_total, files_done=job.files_done,
         chunks_total=job.chunks_total, chunks_done=job.chunks_done, indexed=job.indexed,
         progress=job.progress, queue_position=job.queue_position, error=job.error,
-        created_at=job.created_at, started_at=job.started_at, finished_at=job.finished_at)
+        created_at=job.created_at, started_at=job.started_at, finished_at=job.finished_at,
+        skipped_binary=job.skipped_binary)
 
 
 def _attach_gateway_identity(
@@ -83,7 +85,7 @@ async def bulk_index_journal_docs(
 
 
 @router.get("/bulk-index/jobs/{job_id}", response_model=JournalBulkIndexJobOut)
-async def get_bulk_journal_index_job(
+def get_bulk_journal_index_job(
     job_id: str, request: Request,
     user_id: str | None = Header(default=None, alias="X-Retrival-User-Id"),
 ):
@@ -217,4 +219,9 @@ async def search_journal(
 ):
     user_id = resolve_owner(request, user_id)
     body = body.model_copy(update={"owner_user_id": user_id})
-    return await asyncio.to_thread(get_journal_service().search, body)
+    response = await asyncio.to_thread(get_journal_service().search, body)
+    # The scope that holds the data: the resolved ancestor when a subdirectory search
+    # was redirected, otherwise the requested one.
+    notice = await asyncio.to_thread(
+        claim_scope_notice, user_id, response.resolved_scope or body.project_slug)
+    return response.model_copy(update={"scope_notice": notice}) if notice else response

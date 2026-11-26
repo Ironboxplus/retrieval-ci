@@ -1,0 +1,202 @@
+{
+ "paper": "vldb-2022-p375-konstantinidis",
+ "page": 4,
+ "attempt": 2,
+ "scale": 2.7777777777777777,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "figure_title",
+    "block_bbox": [
+     445,
+     231,
+     1249,
+     261
+    ],
+    "block_content": "Table 1: User Consent and its mapping to negative consent constraints."
+   },
+   {
+    "block_id": 1,
+    "block_label": "table",
+    "block_bbox": [
+     144,
+     292,
+     1552,
+     640
+    ],
+    "block_content": "<table><tr><td>User Consent</td><td>Negative Constraint</td></tr><tr><td>Patient 1312 does not want to share her phone number (\\( 5^{th} \\) attribute of the Patients relation)</td><td>\\( N_{1}(x_{5}) \\leftarrow \\text{Patients}(1312, x_{2}, x_{3}, x_{4}, x_{5}, x_{6}, x_{7}) \\)</td></tr><tr><td>Patient 1312 does not want to share her any combination of her attributes (\\( N_{2} \\)). \\( N_{2} \\) actually subsumes \\( N_{3} \\) and \\( N_{4} \\) which dissalow Name and Disease respectively</td><td>\\( N_{2}() \\leftarrow \\text{Patients}(1312, x_{2}, x_{3}, x_{4}, x_{5}, x_{6}, x_{7}) \\)\\( N_{3}(x_{2}) \\leftarrow \\text{Patients}(1312, x_{2}, x_{3}, x_{4}, x_{5}, x_{6}, x_{7}) \\)\\( N_{4}(x_{7}) \\leftarrow \\text{Patients}(1312, x_{2}, x_{3}, x_{4}, x_{5}, x_{6}, x_{7}) \\)</td></tr><tr><td>Patients 4872 and 2321 do not want to share the association of their Birthdate together with their Disease</td><td>\\( N_{5}(x_{4}, x_{7}) \\leftarrow \\text{Patients}(4872, x_{2}, x_{3}, x_{4}, x_{5}, x_{6}, x_{7}) \\)\\( N_{6}(x_{4}, x_{7}) \\leftarrow \\text{Patients}(2321, x_{2}, x_{3}, x_{4}, x_{5}, x_{6}, x_{7}) \\)</td></tr><tr><td>Do not share patient IDs when their disease is being cross checked against the Insurance table</td><td>\\( N_{7}(x_{1}) \\leftarrow \\text{Patients}(x_{1}, x_{2}, x_{3}, x_{4}, x_{5}, x_{6}, x_{7}) \\land \\text{Insurance}(x_{7}, x_{8}) \\)</td></tr></table>"
+   },
+   {
+    "block_id": 2,
+    "block_label": "figure_title",
+    "block_bbox": [
+     139,
+     677,
+     819,
+     770
+    ],
+    "block_content": "Table 2: An annotated database I with 4 relations, showing the identifier annotations on the left of each tuple, and example queries/constraints with their annotated answers."
+   },
+   {
+    "block_id": 3,
+    "block_label": "table",
+    "block_bbox": [
+     144,
+     803,
+     833,
+     1355
+    ],
+    "block_content": "<table><tr><td rowspan=\"5\"></td><td colspan=\"6\">B</td><td colspan=\"5\">C</td><td colspan=\"2\">D</td></tr><tr><td rowspan=\"4\">\\( a_1: \\boxed{1} \\)</td><td>\\( b_1: \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{2} \\)</td><td>\\( \\boxed{2} \\)</td><td>\\( \\boxed{3} \\)</td><td>\\( c_1: \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{5} \\)</td><td>\\( \\boxed{5} \\)</td><td>\\( \\boxed{6} \\)</td><td>\\( d_1: \\)</td></tr><tr><td>\\( b_2: \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( c_2: \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{5} \\)</td><td>\\( \\boxed{6} \\)</td><td>\\( \\boxed{6} \\)</td><td>\\( d_2: \\)</td></tr><tr><td>\\( b_3: \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{4} \\)</td><td>\\( \\boxed{2} \\)</td><td>\\( \\boxed{2} \\)</td><td>\\( \\boxed{3} \\)</td><td>\\( c_3: \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{5} \\)</td><td>\\( \\boxed{5} \\)</td><td>\\( \\boxed{5} \\)</td><td>\\( d_3: \\)</td></tr><tr><td>\\( b_4: \\)</td><td>\\( \\boxed{1} \\)</td><td>\\( \\boxed{4} \\)</td><td>\\( \\boxed{4} \\)</td><td>\\( \\boxed{5} \\)</td><td>\\( \\boxed{6} \\)</td><td></td><td></td><td></td><td></td><td></td><td></td></tr><tr><td colspan=\"3\">\\( q_1() \\leftarrow B(1, 1, 2, 2, 3) \\)\\( q_1^\\lambda(I) = \\{ &lt; &gt;^{b_1} \\} \\)</td><td colspan=\"11\">\\( N_0() \\leftarrow B(x, y, z, z, v), B(x, x, x, y, y) \\)\\( N_0^\\lambda(I) = \\{ &lt; &gt;^{b_1, b_2}, &lt; &gt;^{b_2} \\} \\)</td></tr><tr><td colspan=\"14\">\\( q_2(x_1, 3) \\leftarrow A(x_1), B(x_1, x_2, x_3, x_3, 3), D(x_3, x_4) \\)\\( q_2^\\lambda(I) = \\{ &lt; 1^{a_1, b_1}, 3^{b_1} &gt;, &lt; 1^{a_1, b_3}, 3^{b_3} &gt; \\} \\)</td></tr><tr><td colspan=\"14\">\\( q_3(x_1, x_4) \\leftarrow B(x_1, x_2, x_3, x_3, x_4), C(x_1, x_5, x_5, x_6) \\)\\( q_3^\\lambda(I) = \\{ &lt; 1^{b_1, c_1}, 3^{b_1} &gt;, &lt; 1^{b_2, c_1}, 1^{b_2} &gt;, &lt; 1^{b_3, c_1}, 3^{b_3} &gt;, &lt; 1^{b_1, c_3}, 3^{b_1} &gt;, &lt; 1^{b_2, c_3}, 1^{b_2} &gt;, &lt; 1^{b_3, c_3}, 3^{b_3} &gt; \\} \\)</td></tr><tr><td colspan=\"14\">\\( q_5(x_1) \\leftarrow A(x_1), B(x_1, x_2, x_3, x_3, x_4), C(x_1, x_5, x_5, x_6) \\)\\( q_5^\\lambda(I) = \\{ &lt; 1^{a_1, b_1, c_1} &gt;, &lt; 1^{a_1, b_2, c_1} &gt;, &lt; 1^{a_1, b_3, c_1} &gt;, &lt; 1^{a_1, b_1, c_3} &gt;, &lt; 1^{a_1, b_2, c_3} &gt;, &lt; 1^{a_1, b_3, c_3} &gt; \\} \\)</td></tr><tr><td colspan=\"14\">\\( q_6(z_1) \\leftarrow B(z_1, z_2, z_2, z_3, z_4), C(z_1, z_5, z_6, z_6), D(z_1, z_6) \\)\\( q_6^\\lambda(I) = \\{ &lt; 1^{b_2, c_3} &gt;, &lt; 1^{b_4, c_3} &gt; \\} \\)</td></tr></table>"
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     139,
+     1403,
+     821,
+     1463
+    ],
+    "block_content": "entire result tuple (for boolean queries where the result tuple is empty we do annotate it in its entirety)."
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     142,
+     1465,
+     821,
+     1524
+    ],
+    "block_content": "Consider for example query \\( q_{2} \\) and database \\( I \\) in Table 2. This query has the following four different homomorphisms on \\( I \\):"
+   },
+   {
+    "block_id": 6,
+    "block_label": "table",
+    "block_bbox": [
+     144,
+     1524,
+     773,
+     1689
+    ],
+    "block_content": "<table><tr><td colspan=\"2\">homomorphism</td><td>annotation</td></tr><tr><td>\\( h_1 \\)</td><td>\\( \\{x_1 \\to 1, x_2 \\to 1, x_3 \\to 2, x_4 \\to 7\\} \\)</td><td>\\( \\langle 1^{\\{a_1, b_1\\}}, 3^{\\{b_1\\}}\\rangle \\)</td></tr><tr><td>\\( h_2 \\)</td><td>\\( \\{x_1 \\to 1, x_2 \\to 1, x_3 \\to 2, x_4 \\to 8\\} \\)</td><td>\\( \\langle 1^{\\{a_1, b_1\\}}, 3^{\\{b_1\\}}\\rangle \\)</td></tr><tr><td>\\( h_3 \\)</td><td>\\( \\{x_1 \\to 1, x_2 \\to 4, x_3 \\to 2, x_4 \\to 7\\} \\)</td><td>\\( \\langle 1^{\\{a_1, b_3\\}}, 3^{\\{b_3\\}}\\rangle \\)</td></tr><tr><td>\\( h_4 \\)</td><td>\\( \\{x_1 \\to 1, x_2 \\to 4, x_3 \\to 2, x_4 \\to 8\\} \\)</td><td>\\( \\langle 1^{\\{a_1, b_3\\}}, 3^{\\{b_3\\}}\\rangle \\)</td></tr></table>"
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     139,
+     1698,
+     821,
+     1909
+    ],
+    "block_content": "For each homomorphism, we annotate a value in the result tuple with the identifiers of the tuples (in the image of the homomorphism) that this value appears in. For  \\( q_{2} \\) , this gives rise to two different annotated answer tuples. Note that different homomorphisms do not always give different annotated tuples since the images of atoms that do not contain head terms (such as D in  \\( q_{2} \\) ) do not participate in the annotations of the result tuples."
+   },
+   {
+    "block_id": 8,
+    "block_label": "text",
+    "block_bbox": [
+     142,
+     1911,
+     821,
+     1973
+    ],
+    "block_content": "Note that in provenance semirings [29], we annotate the tuples of a query by constructing a monomial for each homomorphism and"
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     872,
+     682,
+     1555,
+     833
+    ],
+    "block_content": "“summing up” all monomials to a polynomial. In effect, according to [29] the polynomial annotation for the result  \\( \\langle1,3\\rangle \\)  of  \\( q_{2} \\)  would be  \\( a_{1}b_{1}d_{2} + a_{1}b_{1}d_{3} + a_{1}b_{3}d_{2} + a_{1}b_{3}d_{3} \\) . For presentation purposes, and because we want to ignore  \\( d_{2}, d_{3} \\)  labels that are not projected, we choose to “break” this down to its different monomials."
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     872,
+     836,
+     1555,
+     1053
+    ],
+    "block_content": "For boolean queries we will use all image identifiers to label the entire (empty) answer tuple. Shown in Table 2 the boolean query \\( q_{1} \\) has a single annotated (empty) answer tuple on \\( I \\), while constraint \\( N_{0} \\) will have two annotated answer tuples: tuple \\( < >^{b_{1},b_{2}} \\) for the homomorphism \\( \\{x,y\\to 1,z\\to 2,v\\to 3\\} \\) that maps the two different atoms of \\( N_{0} \\) to \\( b_{1} \\) and \\( b_{2} \\) respectively, and \\( < >^{b_{2}} \\) for the homomorphism \\( \\{x,y,z,v\\to 1\\} \\) that maps both atoms of \\( N \\) to \\( b_{2} \\)."
+   },
+   {
+    "block_id": 11,
+    "block_label": "text",
+    "block_bbox": [
+     873,
+     1086,
+     1557,
+     1317
+    ],
+    "block_content": "Definition 3.2. For all CQs \\( q(x_1, x_2, ..., x_n) \\), instances \\( D \\), homomorphisms \\( h \\) from \\( q \\) to \\( D \\), with \\( h(\\langle x_1, x_2, ..., x_n \\rangle) = \\vec{t} = \\langle t_1, t_2, ..., t_n \\rangle \\), an annotated answer tuple of \\( q \\) over \\( D \\) via \\( h \\), is \\( \\langle t_1^{L_1}, t_2^{L_2}, ..., t_n^{L_n} \\rangle \\), denoted also \\( \\vec{t}^L \\) with \\( \\vec{L} = \\langle L_1, L_2, ..., L_n \\rangle \\), where each \\( L_i \\) is the set of labels \\( L_i = \\{\\lambda(h(\\alpha)) | \\alpha \\in atoms(body(q)) \\text{s.t. } x_i \\in terms(\\alpha)\\} \\). If \\( q \\) is boolean we annotate an entire (empty) result tuple with \\( L = \\{\\lambda(h(\\alpha)) | \\alpha \\in atoms(body(q))\\} \\), and we denote it \\( \\vec{t}^L \\)."
+   },
+   {
+    "block_id": 12,
+    "block_label": "text",
+    "block_bbox": [
+     872,
+     1348,
+     1557,
+     1566
+    ],
+    "block_content": "The annotated answer of q over D, denoted  \\( q^{\\lambda}(D) \\) , is the set of all annotated answer tuples of q over D. Table 2 shows a number of example queries with their annotated answers. We will generally write  \\( \\vec{\\tau}^{L} \\)  for an annotated answer tuple, to either mean that L is a set of identifiers (for boolean queries) or vector of sets (for non-boolean). Given annotated answer tuple  \\( \\vec{t} = \\vec{\\tau}^{L} \\)  we define  \\( base(\\vec{t}) = \\vec{\\tau} \\) . For  \\( \\Gamma \\)  a set of annotated tuples,  \\( base(\\Gamma) = \\{base(\\vec{t}) | \\vec{t} \\in \\Gamma\\} \\) ."
+   },
+   {
+    "block_id": 13,
+    "block_label": "text",
+    "block_bbox": [
+     872,
+     1566,
+     1557,
+     1931
+    ],
+    "block_content": "Next, we use annotated tuples to define the overlap between two queries (or a query and a constraint). Intuitively, our semantics will want to eliminate all base tuples from a query answer for which all corresponding annotated answer tuples are violating (common to) some consent constraint; or dually, return those tuples which can be obtained by at least one legitimate way with respect to annotations. Given two annotated answer tuples with the same base,  \\( \\vec{t_{1}} = \\vec{\\tau}^{L_{1}} \\)  and  \\( \\vec{t_{2}} = \\vec{\\tau}^{L_{2}} \\) , their annotations intersect, denoted  \\( \\vec{t_{1}} \\sqcap \\vec{t_{2}} \\) , if  \\( L_{1} \\cap L_{2} \\neq \\emptyset \\) . When  \\( L_{1}, L_{2} \\)  are vectors  \\( L_{1} = \\langle L_{11}, L_{12}, ..., L_{1n} \\rangle \\)  and  \\( L_{2} = \\langle L_{21}, L_{22}, ..., L_{2n} \\rangle \\) , then  \\( L_{1} \\cap L_{2} \\neq \\emptyset \\)  means  \\( L_{1i} \\cap L_{2i} \\neq \\emptyset \\)  for all  \\( i \\in [1, n] \\) . Two queries are overlapping if they have some annotation intersected tuples on some database, per the next definition."
+   },
+   {
+    "block_id": 14,
+    "block_label": "number",
+    "block_bbox": [
+     822,
+     2092,
+     875,
+     2118
+    ],
+    "block_content": "378"
+   }
+  ],
+  "width": 1700.0,
+  "height": 2200.0,
+  "page_index": 0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "table: only 0% of the words in the table region are in its cells (< 90%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 93,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 1.0,
+   "numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.0,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 1.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

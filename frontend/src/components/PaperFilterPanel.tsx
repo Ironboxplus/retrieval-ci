@@ -57,9 +57,11 @@ export interface PaperFilterPanelProps {
   expanded?: boolean;
   /** Title shown in the panel header. Default 高级筛选. */
   title?: string;
+  /** Show only the 年份 row (no venue rows, no venue counter). Default `false`. */
+  yearsOnly?: boolean;
 }
 
-export function PaperFilterPanel({ value, onChange, expanded = true, title = '高级筛选' }: PaperFilterPanelProps) {
+export function PaperFilterPanel({ value, onChange, expanded = true, title = '高级筛选', yearsOnly = false }: PaperFilterPanelProps) {
   const { token } = theme.useToken();
   const { data: confData } = useConferences();
   const { data: distData } = useDistribution();
@@ -115,7 +117,7 @@ export function PaperFilterPanel({ value, onChange, expanded = true, title = '�
               <Space size={6}>
                 <FilterOutlined style={{ color: token.colorPrimary, fontSize: 13 }} />
                 <Typography.Text strong style={{ fontSize: 12, color: token.colorText }}>{title}</Typography.Text>
-                {value.venues.length > 0 && (
+                {!yearsOnly && value.venues.length > 0 && (
                   <Tag style={{ borderRadius: 10, background: token.colorPrimaryBg, color: token.colorPrimary, border: 'none', fontSize: 11, margin: 0 }}>
                     {value.venues.length} 会议
                   </Tag>
@@ -126,17 +128,18 @@ export function PaperFilterPanel({ value, onChange, expanded = true, title = '�
                   </Tag>
                 )}
               </Space>
-              {(value.venues.length + value.years.length) > 0 && (
+              {((yearsOnly ? 0 : value.venues.length) + value.years.length) > 0 && (
                 <Button
                   type="link"
                   size="small"
                   style={{ fontSize: 11, padding: 0, height: 20 }}
-                  onClick={() => patch({ venues: [], years: [] })}
+                  onClick={() => patch(yearsOnly ? { years: [] } : { venues: [], years: [] })}
                 >清空全部</Button>
               )}
             </Row>
 
             {/* Venues */}
+            {!yearsOnly && (
             <div style={{ marginBottom: 12 }}>
               <Space orientation="vertical" size={6} style={{ width: '100%' }}>
                 {venueGroups.map((g) => {
@@ -252,6 +255,7 @@ export function PaperFilterPanel({ value, onChange, expanded = true, title = '�
                 })}
               </Space>
             </div>
+            )}
 
             {/* Years — same leading row-header-chip + tag-row structure as
                 each venue category row above, instead of a floating
@@ -357,6 +361,7 @@ export function PaperFilterPanel({ value, onChange, expanded = true, title = '�
                   </Space>
                 </Col>
               </Row>
+              {!yearsOnly && (
               <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-2 text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1.5">
                   <span className="rounded bg-muted px-1.5 text-muted-foreground/60 line-through">CCS</span>
@@ -368,6 +373,7 @@ export function PaperFilterPanel({ value, onChange, expanded = true, title = '�
                 </span>
                 <span>左侧色条 = 该会议在结果分布图中的颜色</span>
               </div>
+              )}
             </div>
           </Card>
         </motion.div>

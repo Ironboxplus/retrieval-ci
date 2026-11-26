@@ -146,7 +146,7 @@ def test_get_code_index_queue_constructs_one_worker_for_parallel_first_calls(mon
     result_lock = threading.Lock()
 
     class SlowQueue:
-        def __init__(self):
+        def __init__(self, **_kwargs):
             # Releases the GIL long enough for the unlocked implementation to let every
             # concurrent caller observe `_QUEUE is None` before any assignment wins.
             time.sleep(0.03)

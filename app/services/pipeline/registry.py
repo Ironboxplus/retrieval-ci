@@ -10,14 +10,15 @@ from typing import List
 
 from loguru import logger
 
+from app.services.pipeline.arxiv_stages import ArxivStageContext, build_arxiv_pipeline
 from app.services.pipeline.context import StageContext
+from app.services.pipeline.download_batch import DownloadBatchContext, build_download_batch_pipeline
 from app.services.pipeline.spec import StageSpec
 from app.services.pipeline.stages import (
+    make_cleanup_stage,
     make_download_stage,
-    make_embed_stage,
-    make_embed_stage_local,
-    make_extract_stage,
-    make_extract_stage_local,
+    make_embed_stage_for,
+    make_extract_stage_for,
     make_ingest_stage,
     make_preindex_stage,
 )
@@ -27,7 +28,7 @@ from app.services.pipeline.upload_stages import (
 )
 
 # Canonical stage order. Exposed for callers that need the keys without building.
-STAGE_KEYS = ["download", "extract", "preindex", "embed", "ingest"]
+STAGE_KEYS = ["download", "extract", "preindex", "embed", "ingest", "cleanup"]
 
 # Upload pipeline: a single local file already on disk, so no `download`, and
 # preindex+embed+ingest collapse into one local `index` stage — IndexService.
@@ -38,20 +39,24 @@ UPLOAD_STAGE_KEYS = ["extract", "index"]
 
 
 def build_ingest_pipeline(ctx: StageContext) -> List[StageSpec]:
-    """Build the full [download, extract, preindex, embed, ingest] pipeline.
+    """Build the full [download, extract, preindex, embed, ingest, cleanup] pipeline.
 
-    extract + embed branch on ctx.execution_mode: "local" (self-hosted, GPU work
-    via run_local on this box, W106) vs "remote" (default — KSS-style ssh + SMB +
-    ship.sh). download / preindex / ingest run local in BOTH modes."""
-    local = ctx.execution_mode == "local"
-    extract = make_extract_stage_local(ctx) if local else make_extract_stage(ctx)
-    embed = make_embed_stage_local(ctx) if local else make_embed_stage(ctx)
+    extract + embed branch on ctx.execution_mode (make_*_stage_for): "local"
+    (default — self-hosted, GPU work via run_local on this box, W106), "host" (an
+    ssh host from the registry, deploy/compute88/embed_hosts.json) or "remote"
+    (retired KSS-style ssh + SMB + ship.sh, only when named). download / preindex /
+    ingest run local in every mode."""
+    if isinstance(ctx, ArxivStageContext):
+        return build_arxiv_pipeline(ctx)
+    if isinstance(ctx, DownloadBatchContext):
+        return build_download_batch_pipeline(ctx)
     specs = [
         make_download_stage(ctx),
-        extract,
+        make_extract_stage_for(ctx),
         make_preindex_stage(ctx),
-        embed,
+        make_embed_stage_for(ctx),
         make_ingest_stage(ctx),
+        make_cleanup_stage(ctx),
     ]
     logger.info(
         f"registry.build_ingest_pipeline venue={ctx.venue} year={ctx.year} "

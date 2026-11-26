@@ -1,0 +1,53 @@
+[
+ {
+  "paper_id": "ijcv-2024-s11263-024-02053-3",
+  "pdf": "arxiv-ijcv-2024-02053-3-p1.pdf",
+  "title": "I2DFormer+: Learning Image to Document Summary Attention for Zero-Shot Image Classification",
+  "authors": [
+   "Muhammad Ferjad Naeem",
+   "Yongqin Xian",
+   "Luc Van Gool",
+   "Federico Tombari"
+  ],
+  "conference": "IJCV",
+  "year": 2024,
+  "arxiv_id": "2209.10304",
+  "doi": "10.1007/s11263-024-02053-3",
+  "note": "rejected by task 974; the fuzzy rule alone would accept it"
+ },
+ {
+  "paper_id": "tpami-2024-3133897",
+  "pdf": "arxiv-tpami-2024-3133897-p1.pdf",
+  "title": "MgSvF: Multi-Grained Slow versus Fast Framework for Few-Shot Class-Incremental Learning",
+  "authors": [
+   "Hanbin Zhao",
+   "Yongjian Fu",
+   "Mintong Kang",
+   "Qi Tian",
+   "Fei Wu",
+   "Xi Li"
+  ],
+  "conference": "TPAMI",
+  "year": 2024,
+  "arxiv_id": "2006.15524",
+  "doi": "10.1109/tpami.2021.3133897",
+  "note": "rejected by task 974; the fuzzy rule alone would accept it"
+ },
+ {
+  "paper_id": "ijcv-2024-s11263-024-02149-w",
+  "pdf": "arxiv-ijcv-2024-02149-w-p1.pdf",
+  "title": "Learning Temporal Variations for 4D Point Cloud Segmentation",
+  "authors": [
+   "Hanyu Shi",
+   "Jiacheng Wei",
+   "Hao Wang",
+   "Fayao Liu",
+   "Guosheng Lin"
+  ],
+  "conference": "IJCV",
+  "year": 2024,
+  "arxiv_id": "2207.04673",
+  "doi": "10.1007/s11263-024-02149-w",
+  "note": "rejected by task 974; the fuzzy rule alone would accept it"
+ }
+]

@@ -13,8 +13,9 @@ import logging
 import time
 from copy import deepcopy
 from config import settings
+from core.retrieval.reranker import rerank_backend_of
 
-from app.models.schemas import SearchResult
+from app.models.schemas import PREPRINT_TIER, SearchResult
 from core.storage.qdrant_store import (
     QdrantRetrievalCancelledError,
     sparse_dict_to_qdrant,
@@ -34,6 +35,14 @@ class SearchRequest:
     # Default search EXCLUDES them (they're a different content type); set
     # include_reviews=True to mix them in, or source_type="review" for review-only.
     include_reviews: bool = False
+    # arXiv preprints (venue_tier=preprint) also share `papers` and are searched
+    # through their own API; default search leaves them out. A request already
+    # scoped by venue_tier / paper_id / doc_id / venue=arXiv is not narrowed.
+    include_preprints: bool = False
+    # Withdrawn arXiv papers (payload `withdrawn=true`, `arxiv` collection only) are
+    # left out of search; include_withdrawn=True keeps them, and a request scoped to
+    # paper_id / doc_id always finds them.
+    include_withdrawn: bool = False
     filters: dict[str, Any] = field(default_factory=dict)
     # True (default): collapse multi-chunk hits from one paper to its single
     # best-scoring chunk (W3 anti-flooding). False ("chunk mode"): return the
@@ -56,6 +65,9 @@ class PipelineMetrics:
     rerank_model_calls: int = 0
     rerank_batches: int | None = 0
     rerank_pairs: int = 0
+    # online / local / mixed from the reranker; "skipped" when no rerank ran; None when the
+    # reranker does not report a backend.
+    rerank_backend: str | None = None
 
 
 @dataclass
@@ -65,6 +77,38 @@ class SearchResponse:
     mode: str
     total: int = 0
     metrics: PipelineMetrics = field(default_factory=PipelineMetrics)
+
+
+_PREPRINT_SCOPE_KEYS = ("venue_tier", "paper_id", "doc_id")
+# Asking for a paper by id must find it even if it was withdrawn.
+_WITHDRAWN_SCOPE_KEYS = ("paper_id", "doc_id")
+
+
+def _names_arxiv(venue: Any) -> bool:
+    venues = venue if isinstance(venue, list) else [venue]
+    return any(isinstance(v, str) and v.lower() == "arxiv" for v in venues)
+
+
+def retrieve_filters(request: SearchRequest) -> dict[str, Any]:
+    """The retrieve-stage filter dict for QdrantStore._build_filter: the free-form
+    filters plus source_type, level and the default review/preprint/withdrawn
+    exclusions."""
+    item = deepcopy(request.filters or {})
+    if request.source_type:
+        item["source_type"] = request.source_type
+    elif not request.include_reviews:
+        # Keep review chunks out of normal results (they share the collection).
+        item.setdefault("__exclude__", {})["source_type"] = ["review"]
+    scoped = any(k in item for k in _PREPRINT_SCOPE_KEYS) or _names_arxiv(item.get("venue"))
+    if not request.include_preprints and not scoped:
+        item.setdefault("__exclude__", {})["venue_tier"] = [PREPRINT_TIER]
+    if not request.include_withdrawn and not any(k in item for k in _WITHDRAWN_SCOPE_KEYS):
+        # A scalar, not a list: bool goes to MatchValue (QdrantStore._build_filter).
+        # CorpusStore.route sends it to the `arxiv` collection only.
+        item.setdefault("__exclude__", {})["withdrawn"] = True
+    if request.level is not None:
+        item["level"] = request.level
+    return item
 
 
 class SearchPipeline:
@@ -90,14 +134,7 @@ class SearchPipeline:
 
         # Merge all retrieve-stage filters (source_type, level, free-form) into a
         # single payload-equality dict consumed by QdrantStore._build_filter.
-        filter_dict = dict(request.filters or {})
-        if request.source_type:
-            filter_dict["source_type"] = request.source_type
-        elif not request.include_reviews:
-            # Keep review chunks out of normal results (they share the collection).
-            filter_dict.setdefault("__exclude__", {})["source_type"] = ["review"]
-        if request.level is not None:
-            filter_dict["level"] = request.level
+        filter_dict = retrieve_filters(request)
 
         retrieve_k = request.top_k * 5 if self._reranker else request.top_k
 
@@ -124,11 +161,13 @@ class SearchPipeline:
         candidates_before = len(results)
 
         rerank_ms = 0.0
+        rerank_backend: str | None = "skipped"
         if self._reranker and results:
             # Rerank entire candidate pool — early truncation here starves the
             # paper-level dedup below, since a single high-relevance paper can
             # legitimately occupy many top chunks (BGE behavior, not a bug).
             results = self._reranker.rerank(request.query, results, top_k=len(results))
+            rerank_backend = rerank_backend_of(self._reranker)
             rerank_ms = (time.perf_counter() - t_retrieve) * 1000
 
         if request.dedup_by_paper:
@@ -137,9 +176,10 @@ class SearchPipeline:
 
         t_end = time.perf_counter()
         _logger.info(
-            "search.done mode=%s dedup_by_paper=%s candidates=%d returned=%d rerank_ms=%.0f",
+            "search.done mode=%s dedup_by_paper=%s candidates=%d returned=%d rerank_ms=%.0f"
+            " rerank_backend=%s",
             request.mode, request.dedup_by_paper, candidates_before,
-            len(results), rerank_ms,
+            len(results), rerank_ms, rerank_backend,
         )
 
         metrics = PipelineMetrics(
@@ -149,6 +189,7 @@ class SearchPipeline:
             total_ms=round((t_end - t0) * 1000, 1),
             candidates_before_rerank=candidates_before,
             candidates_after_rerank=len(results),
+            rerank_backend=rerank_backend,
             mode=request.mode,
         )
 
@@ -226,14 +267,7 @@ class SearchPipeline:
 
         filters = []
         for request in requests:
-            item = deepcopy(request.filters or {})
-            if request.source_type:
-                item["source_type"] = request.source_type
-            elif not request.include_reviews:
-                item.setdefault("__exclude__", {})["source_type"] = ["review"]
-            if request.level is not None:
-                item["level"] = request.level
-            filters.append(item)
+            filters.append(retrieve_filters(request))
         depths = [request.top_k * 5 if self._reranker else request.top_k
                   for request in requests]
         if len(set(depths)) != 1:
@@ -287,6 +321,7 @@ class SearchPipeline:
         output = []
         for request, results in zip(requests, result_groups):
             candidates_before = len(results)
+            rerank_backend: str | None = "skipped"
             if self._reranker and results:
                 if should_cancel is not None and should_cancel():
                     raise QdrantRetrievalCancelledError(
@@ -302,6 +337,7 @@ class SearchPipeline:
                     top_k=len(results),
                     should_cancel=should_cancel,
                 )
+                rerank_backend = rerank_backend_of(self._reranker)
                 rerank_model_calls += 1
             rerank_completed += candidates_before
             if progress_callback is not None:
@@ -332,6 +368,7 @@ class SearchPipeline:
                     rerank_model_calls=rerank_model_calls,
                     rerank_batches=(None if self._reranker and rerank_pairs else 0),
                     rerank_pairs=rerank_pairs,
+                    rerank_backend=rerank_backend,
                 ),
             ))
         return output
@@ -360,14 +397,7 @@ class SearchPipeline:
         embed_ms = round((t_embed - t0) * 1000, 1)
         yield {"stage": "embed", "embed_ms": embed_ms}
 
-        filter_dict = dict(request.filters or {})
-        if request.source_type:
-            filter_dict["source_type"] = request.source_type
-        elif not request.include_reviews:
-            # Keep review chunks out of normal results (they share the collection).
-            filter_dict.setdefault("__exclude__", {})["source_type"] = ["review"]
-        if request.level is not None:
-            filter_dict["level"] = request.level
+        filter_dict = retrieve_filters(request)
 
         retrieve_k = request.top_k * 5 if self._reranker else request.top_k
 
@@ -395,14 +425,17 @@ class SearchPipeline:
                "candidates": candidates_before, "mode": request.mode}
 
         rerank_ms = 0.0
+        rerank_backend: str | None = "skipped"
         if self._reranker and results:
             # Rerank entire candidate pool (no early truncation) so the
             # paper-level dedup below has full headroom.
             results = self._reranker.rerank(request.query, results, top_k=len(results))
+            rerank_backend = rerank_backend_of(self._reranker)
             rerank_ms = round((time.perf_counter() - t_retrieve) * 1000, 1)
             yield {"stage": "rerank", "rerank_ms": rerank_ms,
                    "candidates_before": candidates_before,
-                   "candidates_after": len(results)}
+                   "candidates_after": len(results),
+                   "rerank_backend": rerank_backend}
         else:
             yield {"stage": "rerank", "rerank_ms": 0.0,
                    "candidates_before": candidates_before,
@@ -424,6 +457,7 @@ class SearchPipeline:
             "total_ms": round((t_end - t0) * 1000, 1),
             "candidates_before_rerank": candidates_before,
             "candidates_after_rerank": len(results),
+            "rerank_backend": rerank_backend,
             "mode": request.mode,
         }
         yield {"stage": "results", "results": results,
