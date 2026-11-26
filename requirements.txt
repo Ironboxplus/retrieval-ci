@@ -1,0 +1,73 @@
+# =========================================================================
+# retrival — Multimodal Document Retrieval System
+# Pinned to versions in active use (sweep: 2026-05-16).
+# Python 3.13 + Windows-tested. Most packages also work on Linux.
+# Removed (legacy, no longer imported):
+#   chromadb / llama-index / whoosh / langgraph / langchain-core
+# =========================================================================
+
+# --- Web framework + task queue ---------------------------------------------
+fastapi>=0.135.0
+uvicorn[standard]>=0.44.0
+watchfiles>=1.1
+python-multipart>=0.0.24
+prometheus-fastapi-instrumentator>=8.0.0  # /metrics for Prometheus (W128 observability)
+sqlalchemy>=2.0.49
+huey>=2.6.0
+pydantic>=2.12.0
+pydantic-settings>=2.13.0
+python-dotenv>=1.0.0
+
+# --- Vector store + embeddings (BGE-M3 hybrid: dense+sparse) ----------------
+qdrant-client>=1.18.0
+FlagEmbedding>=1.4.0
+transformers>=4.57.0
+sentence-transformers>=5.3.0           # legacy SentenceTransformer embedder fallback
+torch>=2.8.0                            # CUDA build: see pytorch.org for index URL
+
+# --- Text chunking + content tooling ----------------------------------------
+langchain-text-splitters>=1.1.0
+beautifulsoup4>=4.14.0
+lxml>=5.4.0
+pypdf>=6.9.0
+PyMuPDF>=1.23.0                         # `import fitz`
+chardet>=5.2.0
+
+# --- HTTP / async / file ----------------------------------------------------
+httpx>=0.28.0
+zstandard>=0.22.0                       # request/response compression (app/api/compression.py)
+aiohttp>=3.13.0
+aiohttp-socks>=0.11.0,<0.13.0
+aiofiles>=24.1.0
+requests>=2.32.0
+urllib3>=2.5.0
+filelock>=3.29.0
+pathspec>=0.12.1
+psutil>=7.2.0
+
+# --- Data processing (remote embed ingest pipeline) -------------------------
+numpy>=2.1.0
+pyarrow>=21.0.0                         # parquet for D3/D5 ingest
+
+# --- Logging / CLI / utils --------------------------------------------------
+loguru>=0.7.0
+click>=8.3.0
+tqdm>=4.67.0
+PyYAML>=6.0.0
+
+# --- Paper crawler (optional but bundled in repo) ---------------------------
+# Disable if you only need the retrieval API:
+arxiv>=2.1.0
+openreview-py>=1.51.0
+scholarly>=1.7.0
+playwright>=1.58.0                      # for browser-based crawlers
+browser-use>=0.12.0                     # higher-level scraping; pulls langchain
+marker-pdf>=1.10.0                      # legacy PDF→MD (kept; MinerU is preferred)
+
+# --- Code KB (structure-aware chunking over tree-sitter grammars) -----------
+chonkie[code]>=1.6                      # maintained CodeChunker; bundles grammars, no
+                                        # runtime download (replaced astchunk, W155:
+                                        # astchunk 0.1.0 held stale Node refs → segfault)
+
+# --- Dev / test -------------------------------------------------------------
+pytest>=9.0.0

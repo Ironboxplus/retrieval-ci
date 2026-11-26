@@ -1,0 +1,15 @@
+# Grafana dashboard provider — loads JSON dashboards from disk on the 4090.
+# The path is ABSOLUTE on the 4090 (rsync target). Bump if the install dir moves.
+apiVersion: 1
+
+providers:
+  - name: retrieval
+    orgId: 1
+    folder: Retrieval
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /data/arc/monitoring/grafana/dashboards
+      foldersFromFilesStructure: false
