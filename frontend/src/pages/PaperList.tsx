@@ -12,12 +12,14 @@ import {
   Input,
   Button,
   Result,
+  Switch,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePaperBrowse, usePaperTags } from '../api/hooks/usePapers';
 import { useAuthUI } from '../stores/authStore';
 import type { PaperBrowseParams, PaperBrief } from '../types';
+import { withdrawnMarks } from './withdrawnModel';
 
 export default function PaperList() {
   const [filters, setFilters] = useState<PaperBrowseParams>({
@@ -51,9 +53,16 @@ export default function PaperList() {
       title: '标题',
       dataIndex: 'title',
       ellipsis: true,
-      render: (t: string, r: PaperBrief) => (
-        <Link to={`/papers/${r.paper_id}`}>{t}</Link>
-      ),
+      render: (t: string, r: PaperBrief) => {
+        const marks = withdrawnMarks(r);
+        return (
+          <Space size={4}>
+            <Link to={`/papers/${r.paper_id}`}>{t}</Link>
+            {marks.withdrawn && <Tag color="red">已撤稿</Tag>}
+            {marks.versionLabel && <Tag>{marks.versionLabel}</Tag>}
+          </Space>
+        );
+      },
     },
     {
       title: '会议',
@@ -124,6 +133,16 @@ export default function PaperList() {
                 label: t,
               }))}
             />
+          </Col>
+          <Col>
+            <Space size={4}>
+              <Typography.Text type="secondary">包含撤稿</Typography.Text>
+              <Switch
+                size="small"
+                checked={!!filters.include_withdrawn}
+                onChange={(v) => updateFilter({ include_withdrawn: v || undefined })}
+              />
+            </Space>
           </Col>
           <Col flex="auto">
             <Input.Search

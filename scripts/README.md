@@ -72,17 +72,6 @@ Flow: `SQL chunks → jsonl.gz (dump) → kss 8× RTX 3090 (worker) → parquet 
 | `real-pdf-download-smoke` | [smoke/smoke_download_real_pdf.py](smoke/smoke_download_real_pdf.py) | 使用既有真实 PDF 启动真实 origin + forwarding proxy，验证并发聚合限速、字节一致性和临时产物清理；禁止生成占位 PDF |
 | `journal-qdrant-smoke` | [smoke/smoke_journal_qdrant.py](smoke/smoke_journal_qdrant.py) | Temporary Qdrant server + `journal_smoke` collection; verifies JournalVectorStore upsert/search/delete without touching production `papers` |
 
-### `test` — CLI test suites
-
-These are *standalone* CLI runners, not pytest. For pytest see [tests/](../tests/).
-
-| Command | Script | Coverage |
-|---|---|---|
-| `api`      | [test_api.py](test_api.py)           | 106 API tests |
-| `e2e`      | [test_e2e.py](test_e2e.py)           | 24 end-to-end |
-| `services` | [test_services.py](test_services.py) | 51 service-layer |
-| `stress`   | [test_stress.py](test_stress.py)     | Load/stress |
-
 ### `ops` — Maintenance & monitoring
 
 | Command | Script | Purpose |
@@ -128,7 +117,6 @@ python scripts/retrival.py qdrant progress --samples 3 --interval 60
 
 # Verify everything still works after a change
 python scripts/retrival.py verify live-apis
-python scripts/retrival.py test api
 ```
 
 ---

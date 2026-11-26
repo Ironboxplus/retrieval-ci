@@ -20,11 +20,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from pipeline.paper_crawler.runtime_files import write_text_atomic  # noqa: E402
+
 DEFAULT_MANIFEST = (
     ROOT / "data" / "papers" / "ccf_a_main_conference_corpus" / "manifests" / "paper_manifest.json"
 )
@@ -81,10 +86,8 @@ def main() -> int:
         return 0
 
     bak = mp.with_suffix(f".json.bak.merge.{int(time.time())}")
-    tmp = mp.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(base, ensure_ascii=False, indent=1), encoding="utf-8")
-    mp.rename(bak)
-    tmp.rename(mp)
+    shutil.copy2(mp, bak)
+    write_text_atomic(mp, json.dumps(base, ensure_ascii=False, indent=1))
     print(f"[execute] wrote {mp}  (backup: {bak.name})")
     return 0
 

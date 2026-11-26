@@ -1,12 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseCreatedAt, parseStartedAt, relativeTimeFrom, formatDuration, formatDateTime } from './taskTime';
+import { parseCreatedAt, parseTimestamp, instantMs, relativeTimeFrom, formatDuration, formatDateTime, formatClock } from './taskTime';
 
-// Production fact (F1-f, confirmed on .88): `created_at` is UTC with no zone
-// suffix; `started_at` is local time, also with no zone suffix. The same
-// naive wall-clock string must be interpreted differently depending on
-// which field it came from, or every task looks like it started 8h before
-// it was created.
+// Task timestamps carry an explicit offset; `parseCreatedAt` still reads the
+// naive, UTC-written strings other endpoints send.
 describe('parseCreatedAt', () => {
   it('treats a naive (no-zone) string as UTC', () => {
     const d = parseCreatedAt('2026-09-20T10:00:00');
@@ -29,27 +26,20 @@ describe('parseCreatedAt', () => {
   });
 });
 
-describe('parseStartedAt', () => {
-  it('treats a naive string as local wall-clock time', () => {
-    const d = parseStartedAt('2026-09-20T10:00:00');
-    // Constructing with the same local-time fields must match exactly —
-    // this is timezone-independent because both sides use the local ctor.
-    expect(d.getTime()).toBe(new Date(2026, 8, 20, 10, 0, 0).getTime());
+describe('parseTimestamp / instantMs', () => {
+  it('reads the offset', () => {
+    expect(parseTimestamp('2026-09-20T18:00:00+08:00').toISOString()).toBe('2026-09-20T10:00:00.000Z');
+    expect(instantMs('2026-09-20T10:00:00Z')).toBe(Date.UTC(2026, 8, 20, 10));
   });
 
-  it('respects an explicit Z suffix (already unambiguous)', () => {
-    const d = parseStartedAt('2026-09-20T10:00:00Z');
-    expect(d.toISOString()).toBe('2026-09-20T10:00:00.000Z');
+  it('orders by instant, not by string', () => {
+    // 10:00+08:00 is 02:00Z, earlier than 05:00Z although it sorts later as text.
+    expect(instantMs('2026-09-20T10:00:00+08:00')).toBeLessThan(instantMs('2026-09-20T05:00:00Z'));
   });
-});
 
-describe('created_at vs started_at: the documented 8h production drift', () => {
-  it('the same naive string parses to different instants for the two fields', () => {
-    // Only meaningful off UTC — skip in a UTC test runner (offset 0 makes
-    // parseCreatedAt and parseStartedAt legitimately agree).
-    if (new Date().getTimezoneOffset() === 0) return;
-    const raw = '2026-09-20T10:00:00';
-    expect(parseCreatedAt(raw).getTime()).not.toBe(parseStartedAt(raw).getTime());
+  it('sorts a missing or invalid value before everything', () => {
+    expect(instantMs(undefined)).toBe(0);
+    expect(instantMs('nope')).toBe(0);
   });
 });
 
@@ -95,5 +85,11 @@ describe('formatDuration', () => {
 describe('formatDateTime', () => {
   it('pads to YYYY-MM-DD HH:mm in local time', () => {
     expect(formatDateTime(new Date(2026, 8, 3, 7, 5))).toBe('2026-09-03 07:05');
+  });
+});
+
+describe('formatClock', () => {
+  it('pads to HH:mm:ss in local time', () => {
+    expect(formatClock(new Date(2026, 8, 3, 7, 5, 9))).toBe('07:05:09');
   });
 });

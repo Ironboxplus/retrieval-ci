@@ -1,7 +1,30 @@
 # retrieval-mcp
 
-Current release: **0.5.7** (2026-10-13), 35 tools. Platform architecture:
+Current release: **0.5.15** (2026-11-21), 35 tools. Platform architecture:
 [../overview.md](../overview.md).
+
+`0.5.15` (2026-11-21): every gitignore check fails closed. When git cannot answer (timeout, corrupt index, any error other than "not a git repository"), the watcher no longer treats every touched path as allowed: the batch becomes a reconcile that reports the failure and is retried after the interval, and an explicit `index_code` reports the error. A directory event lists its files with `git ls-files` instead of sending every file under it to one `git check-ignore`, and `check-ignore` runs in batches of 2,000 paths. A line window that is all blank no longer becomes an empty chunk (the backend rejected the whole batch with HTTP 422). A burst of 128,000 ignored files in one project had grown the daemon to 77 GB.
+
+`0.5.14` (2026-11-15): automatic indexing (the filesystem watcher and auto-refresh) runs at most once per 5 minutes per scope; changes inside the interval go out as one batch, and explicit `index_code` calls are never throttled. The backend raises the floor of the policy's `min_check_interval_s` to 300 s.
+
+`0.5.13` (2026-11-13): `index_code` also indexes documentation files (`.md` `.mdx` `.markdown` `.rst` `.adoc` `.txt`) in the same walk. They go through the Journal document pipeline and are searched with `journal_search`; auto-refresh keeps them fresh too. `journal_index_dir` is deprecated and will be removed in the next release. No backend change.
+
+`0.5.12` (2026-11-09): after a code index changes files, the server checks the changed
+files for duplicated code in the background; the next `search_code`, `journal_search` or
+`index_code_status(job_id)` of that scope shows the summary once at the top (the server
+decides who gets it; the client stores nothing). Needs the matching backend.
+
+`0.5.11` (2026-11-09): the initialize instructions became a rule: the first search in a
+task must be a Retrieval MCP call (`search_code` keyword mode replaces grep), shell search
+tools come after it, with three named exceptions. Tools and schemas are unchanged.
+
+`0.5.10` (2026-11-04): fewer whole-scope reads. Hash baselines use the lean inventory
+(`lean=true`), an unchanged `journal_index_dir` returns before reporting, incremental
+`index_code` sends its removals, and `index_inventory(project=)` filters on the server.
+
+`0.5.9` (2026-11-04): opt-in sync of Claude Code / Codex conversations into Journal
+(`RETRIEVAL_JOURNAL_CONVERSATIONS`); deja and the zstd decoder are provisioned by the
+plugin itself. See "Claude Code / Codex conversations in Journal" below.
 
 `0.5.7` (2026-10-13): the incremental-index file identity is the plain SHA-256 of
 the file again. 0.5.6 had folded a hard-coded chunker generation into it, which
@@ -309,6 +332,47 @@ Historical mixed-case Windows scopes are included through bounded catalog aliase
 supplies basename, directory, `**`, and exact-file matching semantics.
 Windows extended-length/device spellings (`\\?\`, `\\.\`) are rejected with guidance
 to use the equivalent ordinary drive or UNC path, preventing duplicate scope identities.
+
+## Claude Code / Codex conversations in Journal (opt-in)
+
+Set `RETRIEVAL_JOURNAL_CONVERSATIONS=1` and `journal_search` / `journal_index_dir` start a
+background sync of that scope's Claude Code and Codex conversations into Journal. Neither
+tool waits for it; the output gets one extra line, e.g.
+`Conversations: last sync 2 min ago — 3 segment(s) from 1 session(s) uploaded`.
+Search them with `journal_search(path_glob=".conversations/")`; hits show as
+`[doc/claude]` / `[doc/codex]`.
+
+Parsing, project attribution and secret redaction are done by the
+[deja-vu](https://github.com/vshulcz/deja-vu) CLI (MIT). Nothing needs installing: on the
+first sync the plugin downloads the pinned deja release for your platform (Windows,
+Linux, macOS; x64/arm64) from GitHub, refuses it unless its sha256 matches the hash
+pinned in the plugin (copied from the release's `checksums.txt`), and keeps it in the
+plugin state directory. Codex's `.jsonl.zst` rollouts are decompressed through a small
+`zstd` shim backed by the plugin's own `zstandard` dependency (a real `zstd` on `PATH`
+still takes precedence). A `deja` already on `PATH` is not used, so the JSON contract is
+always the pinned version's. The plugin only reads deja's `--json` output and keeps its
+own index under the plugin state directory, so your own deja index is untouched. The
+first run downloads deja and builds that index (about two to three minutes for a large
+history) while searches continue normally.
+
+| Var | Default | Notes |
+|-----|---------|-------|
+| `RETRIEVAL_JOURNAL_CONVERSATIONS` | unset (off) | `1` = main sessions only; `agents` = also spawned sub-agent sessions; unset or `0` = off. |
+| `RETRIEVAL_DEJA_BIN` | pinned download | Full path to a deja binary to use instead (offline machines). |
+
+What is stored: `user` and `assistant` text in full, each shell command as one
+`$ command` line (at most 200 characters), and `edit` / `wrote` as the file path only.
+File lists, tool output and compaction summaries are dropped. A session becomes docs
+titled `.conversations/<claude|codex>/<YYYY-MM-DD>_<session-id>/<NNN>.md`, cut into
+segments of roughly 8,000 characters at a user turn; a finished segment never changes,
+so a growing session re-uploads only its last segment. Secrets deja redacts are masked
+before upload, plus `pypi-` tokens, which deja 0.23.5 misses.
+
+Cost: each scope keeps a small state file in the plugin state directory. A sync with
+nothing new sends no HTTP request at all, runs at most once per 60 seconds per scope,
+and never calls inventory or stats endpoints. Deleting a transcript locally does not
+remove its already uploaded segments, and a recursive `journal_index_dir` leaves
+`.conversations/` alone.
 
 ## Config (env)
 

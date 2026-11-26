@@ -1,0 +1,182 @@
+{
+ "paper": "jmlr-2022-21-023",
+ "page": 26,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     512,
+     78,
+     705,
+     102
+    ],
+    "block_content": "GUO AND PERKOVÍ"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     184,
+     1049,
+     271
+    ],
+    "block_content": "computed by only summing over those estimable $k^{\\prime}$s; the same metric $\\mathcal{E}^{*}$ of $\\mathcal{G}$-regression is also computed for comparison. As a baseline, we also compute $\\mathcal{E}$ from naively estimating $s_{k}^{(ij)}$ with just $s_{k}$."
+   },
+   {
+    "block_id": 2,
+    "block_label": "figure_title",
+    "block_bbox": [
+     262,
+     299,
+     960,
+     326
+    ],
+    "block_content": "Table 3: Normalized squared errors of predicting gene double knockouts"
+   },
+   {
+    "block_id": 3,
+    "block_label": "table",
+    "block_bbox": [
+     262,
+     344,
+     959,
+     531
+    ],
+    "block_content": "<table><tr><td rowspan=\"2\">edge removed from cycle</td><td rowspan=\"2\">$ \\not\\exists $ adj.0</td><td colspan=\"2\">$ \\mathcal{E}^{*} $</td><td colspan=\"3\">$ \\mathcal{E} $</td></tr><tr><td>adj.0</td><td>$ \\mathcal{G} $-reg</td><td>IDA.R</td><td>$ \\mathcal{G} $-reg</td><td>baseline</td></tr><tr><td>5  $ \\rightarrow $ 6</td><td>36%</td><td>43%</td><td>35%</td><td>46%</td><td>30%</td><td>81%</td></tr><tr><td>6  $ \\rightarrow $ 8</td><td>42%</td><td>29%</td><td>32%</td><td>33%</td><td>26%</td><td>81%</td></tr><tr><td>8  $ \\rightarrow $ 7</td><td>60%</td><td>39%</td><td>35%</td><td>45%</td><td>44%</td><td>81%</td></tr><tr><td>7  $ \\rightarrow $ 5</td><td>46%</td><td>40%</td><td>33%</td><td>45%</td><td>34%</td><td>81%</td></tr></table>"
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     590,
+     1048,
+     699
+    ],
+    "block_content": "Table 3 reports the results, where the column ‘≠ adj.0’ lists the percentage of effects not estimable by the adjustment estimator. In almost all the cases,  $ \\mathcal{G} $-regression dominates all the contending estimators. In this example, even though both the causal graph and the linear SEM are misspecified, one can still witness some usefulness of our estimator."
+   },
+   {
+    "block_id": 5,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     175,
+     736,
+     340,
+     762
+    ],
+    "block_content": "8. Discussion"
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     782,
+     1049,
+     1081
+    ],
+    "block_content": "We have proposed  $ \\mathcal{G} $-regression based on recursive least squares to estimate a total causal effect from observational data, under linearity and causal sufficiency assumptions.  $ \\mathcal{G} $-regression is applicable to estimating every identified total effect, under either point intervention or joint intervention. Further, via a new semiparametric efficiency theory, we have shown that the estimator achieves the efficiency bound within a restricted, yet reasonably large, class of estimators, including covariate adjustment and other regular estimators based on the sample covariance. Note that the restriction on the class of estimators is motivated by computational simplicity and numerical stability as mentioned in the Introduction. To construct confidence intervals and conduct hypothesis tests, bootstrap can be easily applied to estimate the asymptotic covariance of our estimator. This is implemented in R package \\textit{eff2}."
+   },
+   {
+    "block_id": 7,
+    "block_label": "image",
+    "block_bbox": [
+     335,
+     1100,
+     548,
+     1284
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 8,
+    "block_label": "figure_title",
+    "block_bbox": [
+     410,
+     1299,
+     441,
+     1327
+    ],
+    "block_content": "(a)"
+   },
+   {
+    "block_id": 9,
+    "block_label": "image",
+    "block_bbox": [
+     676,
+     1101,
+     888,
+     1284
+    ],
+    "block_content": ""
+   },
+   {
+    "block_id": 10,
+    "block_label": "figure_title",
+    "block_bbox": [
+     750,
+     1299,
+     781,
+     1327
+    ],
+    "block_content": "(b)"
+   },
+   {
+    "block_id": 11,
+    "block_label": "figure_title",
+    "block_bbox": [
+     171,
+     1351,
+     1047,
+     1406
+    ],
+    "block_content": "Figure 4: (a) and (b) lead to the same  $ \\mathcal{G} $-regression estimator of  $ \\tau_{AY} $. The independence between  $ O_1 $ and  $ O_2 $ in (a) is dropped in (b)."
+   },
+   {
+    "block_id": 12,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1450,
+     625,
+     1470
+    ],
+    "block_content": "26"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['0']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 17,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 0.925,
+   "omission_min_coverage": 0.981,
+   "numbers_unknown": 1,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.997,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 1
+  }
+ }
+}

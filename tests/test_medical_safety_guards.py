@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -232,9 +233,43 @@ def test_execute_download_cli_fail_closes_outside_dot88_but_dry_run_keeps_its_no
     )
 
     assert execute.returncode != 0
-    assert "medical PDF execution is disabled on Windows" in (execute.stderr + execute.stdout)
+    # pipeline/medical_corpus/executor.py words the refusal per platform.
+    refusal = ("medical PDF execution is disabled on Windows" if os.name == "nt"
+               else "medical PDF execution is disabled outside compute .88")
+    assert refusal in (execute.stderr + execute.stdout)
     assert dry_run.returncode != 0  # no manifest is expected in a fresh directory
-    assert "medical PDF execution is disabled on Windows" not in (dry_run.stderr + dry_run.stdout)
+    assert refusal not in (dry_run.stderr + dry_run.stdout)
+
+
+def test_medical_executor_is_compute88_or_a_declared_github_actions_runner() -> None:
+    """The CLI downloads on .88 or on a GitHub Actions runner that says so; nowhere else."""
+    from app.services.medical_corpus.service import designated_medical_executor
+
+    assert designated_medical_executor({"MEDICAL_DOWNLOAD_HOST": "10.100.100.88"}, "posix") == "compute88"
+    actions = {"MEDICAL_DOWNLOAD_HOST": "github-actions", "GITHUB_ACTIONS": "true"}
+    assert designated_medical_executor(actions, "posix") == "github-actions"
+    with pytest.raises(RuntimeError, match="outside compute .88"):  # not on a runner
+        designated_medical_executor({"MEDICAL_DOWNLOAD_HOST": "github-actions"}, "posix")
+    with pytest.raises(RuntimeError, match="outside compute .88"):  # a runner that did not opt in
+        designated_medical_executor({"GITHUB_ACTIONS": "true"}, "posix")
+    with pytest.raises(RuntimeError, match="outside compute .88"):  # the Task service stays on .88
+        designated_medical_executor(actions, "posix", allow_actions=False)
+    with pytest.raises(RuntimeError, match="disabled on Windows"):
+        designated_medical_executor(actions, "nt")
+
+
+def test_actions_cli_execution_keeps_the_proxy_but_takes_its_own_absolute_root(tmp_path: Path, monkeypatch) -> None:
+    from pipeline.medical_corpus import executor as service
+    from pipeline.medical_corpus.proxy import DEFAULT_PROXY_URL, MedicalProxyConfig
+
+    monkeypatch.setattr(service, "designated_medical_executor", lambda **_: "github-actions")
+    proxy = MedicalProxyConfig(http_proxy=DEFAULT_PROXY_URL, https_proxy=DEFAULT_PROXY_URL)
+    assert service.require_designated_medical_cli_execution(tmp_path, proxy) == tmp_path
+    with pytest.raises(ValueError, match="absolute"):
+        service.require_designated_medical_cli_execution(Path("relative/medical"), proxy)
+    other = MedicalProxyConfig(http_proxy="http://127.0.0.1:9999", https_proxy="http://127.0.0.1:9999")
+    with pytest.raises(RuntimeError, match="requires proxy"):
+        service.require_designated_medical_cli_execution(tmp_path, other)
 
 
 def test_durable_low_disk_pipeline_fails_instead_of_promoting_limited_batch(

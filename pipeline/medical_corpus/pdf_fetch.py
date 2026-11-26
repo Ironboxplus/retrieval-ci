@@ -17,8 +17,10 @@ from pipeline.download_control import (
     DEFAULT_DOWNLOAD_BYTES_PER_SECOND,
     DEFAULT_STREAM_CHUNK_BYTES,
 )
+from pipeline.http_retry import exponential_backoff_seconds
 from pipeline.medical_corpus.cf_bypass import CfBypassResult, solve_cloudflare_for_url_sync
 from pipeline.medical_corpus.models import MedicalPaperRecord, sanitize_id_component
+from pipeline.medical_corpus.pmc_oa import PMC_OA_BUCKET_URL, fetch_jats, jats_path_for, resolve_pmc_oa
 from pipeline.medical_corpus.proxy import MedicalProxyConfig, load_medical_proxy_from_settings
 from pipeline.medical_corpus.shield import classify_http_shield, retry_delay_seconds
 from pipeline.paper_crawler.runtime_files import build_write_in_progress_path, is_valid_pdf_artifact
@@ -153,7 +155,7 @@ def _read_prefix_and_remainder(
     return b"".join(prefix_parts), iterator
 
 
-def download_pdf(
+def _download_pdf_from_url(
     record: MedicalPaperRecord,
     *,
     pdf_root: Path,
@@ -170,7 +172,7 @@ def download_pdf(
     abort_event: threading.Event | None = None,
     disk_guard: DownloadDiskReservationProbe | None = None,
 ) -> MedicalPaperRecord:
-    """Download one PDF when ``execute=True``; otherwise only plan + annotate.
+    """Download ``record.pdf_url`` when ``execute=True``; otherwise only plan + annotate.
 
     Never silently bypasses the proxy. On CF/403/HTML-challenge, optionally
     invokes TurnstileBypass (minimal headless) once, then retries with cookies.
@@ -353,8 +355,11 @@ def download_pdf(
         except Exception as exc:
             last_error = f"{type(exc).__name__}: {exc}"
             logger.warning("pdf download attempt=%s paper=%s err=%s", attempt, record.paper_id, exc)
+            # Not a tenacity.Retrying loop: between attempts this one swaps headers
+            # and cookies after a Cloudflare solve and some outcomes retry without
+            # waiting, so only the wait curve is shared.
             _wait_with_abort(
-                min(30.0, 1.5 * (2 ** (attempt - 1))),
+                exponential_backoff_seconds(attempt),
                 abort_event=abort_event,
                 should_cancel=should_cancel,
             )
@@ -362,3 +367,54 @@ def download_pdf(
     record.download_status = "failed"
     record.download_error = last_error or "unknown download failure"
     return record
+
+
+def download_pdf(
+    record: MedicalPaperRecord,
+    *,
+    pdf_root: Path,
+    proxy: MedicalProxyConfig | None = None,
+    execute: bool = False,
+    allow_cf_bypass: bool = True,
+    pmc_oa_base_url: str | None = PMC_OA_BUCKET_URL,
+    **kwargs,
+) -> MedicalPaperRecord:
+    """Download one PDF, from the PMC OA bucket when it has the article.
+
+    The bucket copy comes first (no Cloudflare; the JATS XML is fetched beside
+    it). An article missing from the bucket, or a bucket transfer that fails,
+    falls back to the catalogue ``pdf_url`` with the usual shield handling.
+    ``pmc_oa_base_url=None`` skips the bucket.
+    """
+    proxy = proxy or load_medical_proxy_from_settings()
+    common = dict(pdf_root=pdf_root, proxy=proxy, execute=execute, **kwargs)
+    plan = plan_pdf_fetch(record, pdf_root=pdf_root)
+    if not (execute and pmc_oa_base_url and record.pmcid and plan.action == "would_download"):
+        return _download_pdf_from_url(record, allow_cf_bypass=allow_cf_bypass, **common)
+
+    notes: list[str] = []
+    try:
+        article = resolve_pmc_oa(record.pmcid, proxy=proxy, base_url=pmc_oa_base_url)
+    except Exception as exc:  # noqa: BLE001 - the catalogue URL is still there
+        article = None
+        notes.append(f"pmc-oa lookup failed: {type(exc).__name__}: {exc}")
+    if article is None:
+        notes = notes or ["pmc-oa: not in the bucket"]
+    else:
+        bucket_record = MedicalPaperRecord.from_dict(record.to_dict())
+        bucket_record.pdf_url = article.pdf_url
+        out = _download_pdf_from_url(bucket_record, allow_cf_bypass=False, **common)
+        if out.download_status == "downloaded":
+            out.pdf_url = record.pdf_url
+            out.notes = list(out.notes) + [f"pdf from {article.pdf_url}"]
+            jats = jats_path_for(Path(out.pdf_path))
+            try:
+                out.jats_sha256, _ = fetch_jats(article, jats, proxy=proxy)
+                out.jats_path = str(jats)
+            except Exception as exc:  # noqa: BLE001 - the PDF stands; it gets converted instead
+                out.notes.append(f"no JATS: {type(exc).__name__}: {exc}")
+            return out
+        notes.append(f"pmc-oa {article.pdf_url}: {out.download_status} {out.download_error}")
+    out = _download_pdf_from_url(record, allow_cf_bypass=allow_cf_bypass, **common)
+    out.notes = notes + list(out.notes)
+    return out
