@@ -1,0 +1,210 @@
+{
+ "count": 7,
+ "next": null,
+ "previous": null,
+ "results": [
+  {
+   "id": 4745,
+   "name": "TR-MoE: Temporal Reliability-Aware Mixture-of-Experts for Robust Tracking",
+   "authors": [
+    {
+     "fullname": "Tianle Wang"
+    },
+    {
+     "fullname": "Xiangyang Yang"
+    },
+    {
+     "fullname": "Jihua Zhu"
+    },
+    {
+     "fullname": "Binrui Liu"
+    },
+    {
+     "fullname": "Yanzhao Li"
+    },
+    {
+     "fullname": "Shuiwang Li"
+    }
+   ],
+   "decision": "Accept Poster",
+   "eventtype": "Poster",
+   "event_type": "Poster",
+   "virtualsite_url": "/virtual/2026/poster/4745",
+   "sourceid": 7293,
+   "sourceurl": "https://openreview.net/group?id=thecvf.com/ECCV/2026/Conference",
+   "paper_pdf_url": "https://media.eventhosts.cc/Conferences/ECCV2026/pdfs/7293.pdf",
+   "url": null
+  },
+  {
+   "id": 5832,
+   "name": "Volume Transformer: Revisiting Vanilla Transformers for 3D Scene Understanding",
+   "authors": [
+    {
+     "fullname": "Kadir Yilmaz"
+    },
+    {
+     "fullname": "Adrian Kruse"
+    },
+    {
+     "fullname": "Tristan Höfer"
+    },
+    {
+     "fullname": "Daan de Geus"
+    },
+    {
+     "fullname": "Bastain Leibe"
+    }
+   ],
+   "decision": "Accept Poster",
+   "eventtype": "Poster",
+   "event_type": "Poster",
+   "virtualsite_url": "/virtual/2026/poster/5832",
+   "sourceid": 13401,
+   "sourceurl": "https://openreview.net/group?id=thecvf.com/ECCV/2026/Conference",
+   "paper_pdf_url": "https://media.eventhosts.cc/Conferences/ECCV2026/pdfs/13401.pdf",
+   "url": "https://yilmazkadir.github.io/Volt/"
+  },
+  {
+   "id": 4784,
+   "name": "Reflection-Aware Reasoning for Non-Line-of-Sight Pedestrian Localization",
+   "authors": [
+    {
+     "fullname": "Byeonggyu Park"
+    },
+    {
+     "fullname": "Mingu Jeon"
+    },
+    {
+     "fullname": "Seong-Woo Kim"
+    }
+   ],
+   "decision": "Accept Poster",
+   "eventtype": "Poster",
+   "event_type": "Poster",
+   "virtualsite_url": "/virtual/2026/poster/4784",
+   "sourceid": 7443,
+   "sourceurl": "https://openreview.net/group?id=thecvf.com/ECCV/2026/Conference",
+   "paper_pdf_url": "https://media.eventhosts.cc/Conferences/ECCV2026/pdfs/7443.pdf",
+   "url": "https://bingurrr.github.io/reflection-aware-nlos/"
+  },
+  {
+   "id": 4540,
+   "name": "Egocentric Procedure Parsing",
+   "authors": [
+    {
+     "fullname": "Anubhav Anubhav"
+    },
+    {
+     "fullname": "Archit Kambhamettu"
+    },
+    {
+     "fullname": "Vatsal Agarwal"
+    },
+    {
+     "fullname": "Pulkit Kumar"
+    },
+    {
+     "fullname": "Abhinav Shrivastava"
+    }
+   ],
+   "decision": "Accept Poster",
+   "eventtype": "Poster",
+   "event_type": "Poster",
+   "virtualsite_url": "/virtual/2026/poster/4540",
+   "sourceid": 6402,
+   "sourceurl": "https://openreview.net/group?id=thecvf.com/ECCV/2026/Conference",
+   "paper_pdf_url": "https://media.eventhosts.cc/Conferences/ECCV2026/pdfs/6402.pdf",
+   "url": null
+  },
+  {
+   "id": 3829,
+   "name": "Kirin: Animal Motion Generation from In-the-Wild Video",
+   "authors": [
+    {
+     "fullname": "Brian Nlong Zhao"
+    },
+    {
+     "fullname": "Zhuoyang Pan"
+    },
+    {
+     "fullname": "James Rehg"
+    },
+    {
+     "fullname": "Jiajun Wu"
+    },
+    {
+     "fullname": "Elliott (Shangzhe) Wu"
+    }
+   ],
+   "decision": "Accept Poster",
+   "eventtype": "Poster",
+   "event_type": "Poster",
+   "virtualsite_url": "/virtual/2026/poster/3829",
+   "sourceid": 3300,
+   "sourceurl": "https://openreview.net/group?id=thecvf.com/ECCV/2026/Conference",
+   "paper_pdf_url": "https://media.eventhosts.cc/Conferences/ECCV2026/pdfs/3300.pdf",
+   "url": null
+  },
+  {
+   "id": 6170,
+   "name": "Volume Transformer: Revisiting Vanilla Transformers for 3D Scene Understanding",
+   "authors": [
+    {
+     "fullname": "Kadir Yilmaz"
+    },
+    {
+     "fullname": "Adrian Kruse"
+    },
+    {
+     "fullname": "Tristan Höfer"
+    },
+    {
+     "fullname": "Daan de Geus"
+    },
+    {
+     "fullname": "Bastain Leibe"
+    }
+   ],
+   "decision": null,
+   "eventtype": "Oral",
+   "event_type": "Oral",
+   "virtualsite_url": "/virtual/2026/oral/6170",
+   "sourceid": -13401,
+   "sourceurl": "https://openreview.net/group?id=thecvf.com/ECCV/2026/Conference",
+   "paper_pdf_url": "https://media.eventhosts.cc/Conferences/ECCV2026/pdfs/13401.pdf",
+   "url": null
+  },
+  {
+   "id": 6065,
+   "name": "TR-MoE: Temporal Reliability-Aware Mixture-of-Experts for Robust Tracking",
+   "authors": [
+    {
+     "fullname": "Tianle Wang"
+    },
+    {
+     "fullname": "Xiangyang Yang"
+    },
+    {
+     "fullname": "Jihua Zhu"
+    },
+    {
+     "fullname": "Binrui Liu"
+    },
+    {
+     "fullname": "Yanzhao Li"
+    },
+    {
+     "fullname": "Shuiwang Li"
+    }
+   ],
+   "decision": null,
+   "eventtype": "Spotlight",
+   "event_type": "Spotlight",
+   "virtualsite_url": "/virtual/2026/spotlight/6065",
+   "sourceid": -7293,
+   "sourceurl": "https://openreview.net/group?id=thecvf.com/ECCV/2026/Conference",
+   "paper_pdf_url": "https://media.eventhosts.cc/Conferences/ECCV2026/pdfs/7293.pdf",
+   "url": null
+  }
+ ]
+}

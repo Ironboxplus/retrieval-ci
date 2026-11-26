@@ -23,7 +23,11 @@ from app.services.scope_paths import file_abspath as _abspath
 from app.services.scope_paths import is_windows_scope
 from app.services.scope_paths import path_matches as _path_matches
 
-from app.services.code_kb.duplicates import scan_duplicates
+from app.services.code_kb.duplicates import (
+    DuplicateScanResult,
+    ScopeChangedDuringScan,
+    scan_duplicates,
+)
 from app.services.code_kb.schemas import (
     CodeDeleteResponse,
     CodeDuplicateChunk,
@@ -41,9 +45,13 @@ from app.services.code_kb.schemas import (
 )
 from app.services.code_kb.vector_store import CodeChunkPoint, CodeVectorStore, point_id
 from core.code_kb.duplicate_rollup import DEFAULT_EXCLUDE_GLOBS, ChunkRef
+from core.code_kb.vector_records import fit_records_to_budget
 
 logger = logging.getLogger("code_kb.service")
 _OWNER_LOCK_STRIPES = 256
+# A manual duplicate scan that is overtaken by an index write starts over; a scope that
+# is rewritten this often is not in a state any scan can describe.
+_SCAN_ATTEMPTS = 3
 
 # embed_fn(texts) -> one dense vector per text
 EmbedFn = Callable[[Sequence[str]], list[list[float]]]
@@ -55,7 +63,10 @@ MutationCb = Callable[[], None]
 ScopeMutationCb = Callable[[str], None]
 MutationGuard = Callable[[], AbstractContextManager[None]]
 
-EMBED_BATCH = 128  # chunks per embed_fn call; small enough for steady progress ticks
+# Chunks per progress/upsert batch, not a model batch size: the shared embedder splits
+# background work into its own pieces (core.indexing.embedders.embed_in_pieces).
+EMBED_BATCH = 128
+_ENUMERATE: Any = object()  # _fan_out_sync sentinel: "owned_index not computed yet"
 
 
 def _elapsed_ms(start: float) -> float:
@@ -124,6 +135,45 @@ def _last_flagged(items: Iterator) -> Iterator[tuple[object, bool]]:
 def _duplicate_chunk(ref: ChunkRef) -> CodeDuplicateChunk:
     return CodeDuplicateChunk(path=ref.path, start_line=ref.start_line,
                               end_line=ref.end_line, label=ref.label)
+
+
+class _ScopeScanGuard:
+    """`duplicates.ScanGuard` over this service's owner fence and per-scope write epochs.
+
+    ``batch()`` holds the owner fence for ONE query batch, exactly as a search does, and
+    refuses to start if any scope spelling was written to since the guard was created.
+    ``finish()`` is the same check plus ``still_complete`` (e.g. the durable snapshot
+    marker), evaluated while the fence is held so no writer can slip in between the check
+    and the verdict. Embedding and the writers' own work happen outside the fence, so
+    this is how a long scan sees "the scope changed under me" without freezing the owner.
+    """
+
+    def __init__(self, service: "CodeKBService", owner_user_id: str,
+                 projects: Sequence[str],
+                 still_complete: Callable[[], bool] | None) -> None:
+        self._service = service
+        self._owner = owner_user_id
+        self._projects = list(dict.fromkeys(projects))
+        self._still_complete = still_complete
+        with service.scope_snapshot(owner_user_id=owner_user_id):
+            self._epochs = service._write_epochs(owner_user_id, self._projects)
+
+    def _verify(self) -> None:
+        if self._service._write_epochs(self._owner, self._projects) != self._epochs:
+            raise ScopeChangedDuringScan(
+                "the scope was written to while the scan was running")
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        with self._service.scope_snapshot(owner_user_id=self._owner):
+            self._verify()
+            yield
+
+    def finish(self) -> None:
+        with self._service.scope_snapshot(owner_user_id=self._owner):
+            self._verify()
+            if self._still_complete is not None and not self._still_complete():
+                raise ScopeChangedDuringScan("the scope is no longer a completed snapshot")
 
 
 @dataclass(frozen=True)
@@ -215,14 +265,16 @@ def _stable_retrieval_order(query: str, hits: list[CodeHit]) -> list[CodeHit]:
 
 
 def _chunk_points(files: Sequence[CodeFileIn]) -> list[CodeChunkPoint]:
-    return [
+    """The points of ``files``' chunks, one file after the other. A chunk whose embed text is
+    over the token budget becomes several points, so a file can yield more points than chunks."""
+    return fit_records_to_budget([
         CodeChunkPoint(
             rel_path=file.rel_path, language=file.language,
             start_line=chunk.start_line, end_line=chunk.end_line, label=chunk.label,
             content=chunk.content, code=chunk.code, chunk_ordinal=chunk_ordinal,
         )
         for file in files for chunk_ordinal, chunk in enumerate(file.chunks)
-    ]
+    ])
 
 
 class CodeKBService:
@@ -235,6 +287,10 @@ class CodeKBService:
         self.vector_store = vector_store or CodeVectorStore()
         self._reranker = reranker
         self._owner_locks = [threading.RLock() for _ in range(_OWNER_LOCK_STRIPES)]
+        # (owner, scope) -> number of write steps that finished. Only ever changed while
+        # that owner's fence is held, so a scan that read it under the fence and reads it
+        # again later knows whether anything wrote in between (see _ScopeScanGuard).
+        self._write_epochs_by_scope: dict[tuple[str, str], int] = {}
         # Only the fully-default path can do a single BGE-M3 pass for dense+sparse.
         # If a caller injected either fn (tests), honour exactly what they gave us:
         # dense from embed_fn, sparse from sparse_embed_fn (may be absent → dense-only).
@@ -257,8 +313,33 @@ class CodeKBService:
             yield
 
     @contextmanager
+    def _scope_write(self, owner_user_id: str, project: str) -> Iterator[None]:
+        """The owner fence around ONE write step to ``project``'s vectors.
+
+        The step counts as a write even if it raises: a half-applied batch is still a
+        change a concurrent scan must not mistake for the scope it started reading."""
+        with self.scope_snapshot(owner_user_id=owner_user_id):
+            try:
+                yield
+            finally:
+                key = (owner_user_id, project)
+                self._write_epochs_by_scope[key] = self._write_epochs_by_scope.get(key, 0) + 1
+
+    def _write_epochs(self, owner_user_id: str, projects: Sequence[str]) -> tuple[int, ...]:
+        return tuple(self._write_epochs_by_scope.get((owner_user_id, project), 0)
+                     for project in projects)
+
+    def scan_guard(
+        self, *, owner_user_id: str, projects: Sequence[str],
+        still_complete: Callable[[], bool] | None = None,
+    ) -> _ScopeScanGuard:
+        """A per-batch fence for a long read-only scan of ``projects`` (all spellings of
+        one scope). Create it immediately before the scan starts."""
+        return _ScopeScanGuard(self, owner_user_id, projects, still_complete)
+
+    @contextmanager
     def _write_window(self, guard: MutationGuard,
-                      owner_user_id: str) -> Iterator[None]:
+                      owner_user_id: str, project: str) -> Iterator[None]:
         """Hold both write fences for ONE mutation step. Neither may span embedding.
 
         `mutation_guard` is the job queue's per-scope generation lock, which
@@ -275,7 +356,7 @@ class CodeKBService:
         partially written scope is reported as partial rather than completed.
         """
         with guard():
-            with self.scope_snapshot(owner_user_id=owner_user_id):
+            with self._scope_write(owner_user_id, project):
                 yield
 
     def _reranker_or_default(self):
@@ -359,46 +440,76 @@ class CodeKBService:
         (path, language, lines, label, content, code) equal the incoming chunk; it must
         also carry a sparse vector whenever this service would produce one. Re-indexing
         after the 2026-10-13 chunker fix resends every file, yet only the chunks whose
-        text actually changed need the embedding model."""
+        text actually changed need the embedding model.
+
+        A second pass keys on the embedded text instead of the id: a line shift moves a
+        chunk's start_line (so its id and line payload change) but not its text, and the
+        stored vector of the same text under a current embedding profile is copied into the
+        new point. Both passes only read; the old points are still there because every
+        caller upserts this batch first and prunes afterwards."""
         items = _chunk_points(files)
+        require_sparse = (self.vector_store.supports_sparse
+                          and (self._dual or self.sparse_embed_fn is not None))
         reused = self.vector_store.reusable_vectors(
             owner_user_id=owner_user_id, project=project, items=items,
-            require_sparse=self.vector_store.supports_sparse
-            and (self._dual or self.sparse_embed_fn is not None))
+            require_sparse=require_sparse)
         dense: list = [hit[0] if hit else None for hit in reused]
         sparse: list = [hit[1] if hit else None for hit in reused]
         missing = [index for index, hit in enumerate(reused) if hit is None]
+        by_id = len(items) - len(missing)
+        by_content = 0
         if missing:
-            new_dense, new_sparse = self._embed(
-                [items[index].content for index in missing], priority="background")
+            found = self.vector_store.reusable_vectors_by_content(
+                owner_user_id=owner_user_id, project=project,
+                paths=sorted({item.rel_path for item in items}),
+                texts=[items[index].content for index in missing],
+                require_sparse=require_sparse)
+            for index in missing:
+                hit = found.get(items[index].content)
+                if hit is not None:
+                    dense[index], sparse[index] = hit
+                    by_content += 1
+            missing = [index for index in missing if dense[index] is None]
+        if missing:
+            # Identical chunk texts share one embedding; each keeps its own point.
+            texts = list(dict.fromkeys(items[index].content for index in missing))
+            new_dense, new_sparse = self._embed(texts, priority="background")
             aligned = bool(new_sparse) and len(new_sparse) == len(new_dense)
-            for position, index in enumerate(missing):
+            position_of = {text: position for position, text in enumerate(texts)}
+            for index in missing:
+                position = position_of[items[index].content]
                 dense[index] = new_dense[position]
                 sparse[index] = new_sparse[position] if aligned else None
-        if len(missing) < len(items):
-            logger.info("code_kb embed: owner=%s project=%s reused %d/%d chunk vectors",
-                        owner_user_id, project, len(items) - len(missing), len(items))
+        if by_id or by_content:
+            logger.info(
+                "code_kb embed: owner=%s project=%s chunks=%d reused_by_id=%d "
+                "reused_by_content=%d embedded=%d",
+                owner_user_id, project, len(items), by_id, by_content, len(missing))
         return files, items, dense, (sparse if any(sparse) else None)
 
     def _duplicate_candidates(
         self, *, owner_user_id: str, project: str,
     ) -> dict[str, list[tuple[str, str]]] | None:
-        """abspath -> [(other_project, other_rel)] for this owner's OTHER scopes.
+        """abspath -> [(other_project, other_rel)] for this owner's OTHER scopes that
+        can hold the same physical file as ``project``.
 
-        Enumerates every file the owner has indexed under every scope — 150+ scopes
-        in production — so it must be computed ONCE per index run and reused across
-        batches. Returns None if enumeration fails; fan-out is then skipped, because
-        the primary index has already succeeded and a partial candidate set would
-        silently leave some duplicate scopes stale.
+        Only scopes equal to, an ancestor of, or a descendant of ``project`` are
+        enumerated (``related_to``): rel paths never contain ``..``, so no other scope
+        can resolve to the same absolute path, and facetting the owner's unrelated
+        scopes (236 in production) cost ~50 s per job. Still computed ONCE per index run
+        and reused across batches. Returns None if enumeration fails; fan-out is then
+        skipped, because the primary index has already succeeded and a partial candidate
+        set would silently leave some duplicate scopes stale.
         """
         try:
-            owned = self.vector_store.list_owner_files(owner_user_id=owner_user_id)
+            owned = self.vector_store.list_owner_files(
+                owner_user_id=owner_user_id, related_to=project, exclude_project=project)
         except Exception:
             logger.exception("code_kb fan-out: list_owner_files failed — skipping cross-scope sync")
             return None
         by_abs: dict[str, list[tuple[str, str]]] = {}
         for proj2, rel2 in owned:
-            if proj2 == project:
+            if proj2 == project:  # already excluded upstream; kept for other stores
                 continue
             by_abs.setdefault(_abspath(proj2, rel2), []).append((proj2, rel2))
         return by_abs
@@ -407,7 +518,7 @@ class CodeKBService:
                       files, items: list[CodeChunkPoint], dense: list[list[float]],
                       sparse: list[dict[str, float]] | None,
                       deleted_paths: set[str] | None = None,
-                      owned_index: dict[str, list[tuple[str, str]]] | None = None,
+                      owned_index: Any = _ENUMERATE,
                       before_target_mutation_cb: ScopeMutationCb | None = None,
                       target_mutation_failed_cb: ScopeMutationCb | None = None) -> int:
         """方案2 — cross-scope write-time sync. For every file just indexed under `project`,
@@ -422,8 +533,9 @@ class CodeKBService:
         deleted_paths = deleted_paths or set()
         if not files and not deleted_paths:
             return 0
+        # _ENUMERATE = not computed yet; None = computed and failed (skip, don't retry).
         by_abs = (self._duplicate_candidates(owner_user_id=owner_user_id, project=project)
-                  if owned_index is None else owned_index)
+                  if owned_index is _ENUMERATE else owned_index)
         if by_abs is None:  # enumeration failed; primary index already succeeded
             return 0
         if not by_abs:
@@ -432,13 +544,16 @@ class CodeKBService:
             str,
             tuple[list[CodeChunkPoint], list[list[float]], list[dict[str, float]] | None],
         ] = {}
-        idx = 0
+        # A chunk over the token budget became several items, so a file's items are found
+        # by path, not by counting its chunks.
+        positions: dict[str, list[int]] = {}
+        for position, item in enumerate(items):
+            positions.setdefault(item.rel_path, []).append(position)
         for f in files:
-            n = len(f.chunks)
-            file_items = items[idx:idx + n]
-            file_dense = dense[idx:idx + n]
-            file_sparse = sparse[idx:idx + n] if sparse is not None else None
-            idx += n
+            picked = positions.get(f.rel_path, [])
+            file_items = [items[i] for i in picked]
+            file_dense = [dense[i] for i in picked]
+            file_sparse = [sparse[i] for i in picked] if sparse is not None else None
             desired_by_path[f.rel_path] = (file_items, file_dense, file_sparse)
         for rel_path in deleted_paths:
             desired_by_path.setdefault(rel_path, ([], [], None))
@@ -451,7 +566,7 @@ class CodeKBService:
                 continue
             for proj2, rel2 in targets:
                 try:
-                    with self.scope_snapshot(owner_user_id=owner_user_id):
+                    with self._scope_write(owner_user_id, proj2):
                         # Discovery may be stale after a concurrent explicit delete. Re-check
                         # under the target scope lock and never recreate a file whose points
                         # are now gone.
@@ -527,17 +642,16 @@ class CodeKBService:
         dup = 0
         new_ids: set = set()
         fence = _MutationFence(before_mutation_cb)
-        window = partial(self._write_window, guard, owner_user_id)
+        window = partial(self._write_window, guard, owner_user_id, request.project)
         with window():
-            existing_paths = self.vector_store.list_paths(
-                owner_user_id=owner_user_id, project=request.project)
-            # Captured before any upsert of ours, or the prune below would see
-            # this run's own points as pre-existing.
-            before_ids = self.vector_store.list_point_ids_for_paths(
+            # One scroll, captured before any upsert of ours (or the prune below would
+            # see this run's own points as pre-existing). Qdrant is the truth for what a
+            # full rebuild must delete, so this does not use the catalog.
+            before_ids, existing_paths = self.vector_store.list_point_ids_and_paths(
                 owner_user_id=owner_user_id, project=request.project)
         # Once per run, never per batch: this enumerates every file in every scope
-        # this owner has. Outside the fence — it is a read, and it is the expensive
-        # part of fan-out.
+        # related to this project (equal/ancestor/descendant). Outside the fence — it is
+        # a read, and it is the expensive part of fan-out.
         owned_index = self._duplicate_candidates(
             owner_user_id=owner_user_id, project=request.project)
 
@@ -611,7 +725,9 @@ class CodeKBService:
         """Update only what changed. Correctness invariant (the one the user flagged):
         the result MUST equal a full reindex of the current tree. Guaranteed by —
           1. `manifest` = every path that currently exists; any indexed path absent from
-             it is deleted (removed-file reconciliation). manifest=None → additive only.
+             it is deleted (removed-file reconciliation). manifest=None → additive only
+             (plus explicit `removed_paths`; with `removed_paths_complete` those ARE the
+             removals and the catalog, not Qdrant, is the baseline they were diffed against).
           2. each changed file is upserted first, then stale point ids are pruned, so a
              failed upsert preserves the previous complete file while a successful shrink
              leaves no orphan chunks.
@@ -622,7 +738,22 @@ class CodeKBService:
         # became empty (produced no chunks), so emptied files don't linger.
         changed_paths = {f.rel_path for f in request.files}
         removed = set(request.removed_paths) - changed_paths
-        if request.manifest is not None:
+        if request.removed_paths_complete:
+            # The client already diffed its tree against this scope's catalog inventory, so
+            # `removed_paths` is the whole deletion set: no Qdrant path facet (cost grows
+            # with the project's points) just to rediscover it. The safety valve below
+            # keeps its meaning with the catalog as the baseline.
+            catalog = self.vector_store.catalog_paths(
+                owner_user_id=owner_user_id, project=project)
+            keep = (set(request.manifest) if request.manifest is not None
+                    else catalog - removed)
+            if catalog and keep.isdisjoint(catalog):
+                raise ValueError(
+                    f"incremental removals would delete all {len(catalog)} cataloged paths of "
+                    f"project={project} and keep none of them — refusing to delete the whole "
+                    f"project. Use DELETE /api/code?project={project} to clear it, or a full "
+                    f"reindex of the new tree to replace it.")
+        elif request.manifest is not None:
             keep = set(request.manifest)
             existing = self.vector_store.list_paths(owner_user_id=owner_user_id, project=project)
             # Delete-safety valve (like rsync --max-delete): an empty manifest, or one that
@@ -648,7 +779,7 @@ class CodeKBService:
         dup = 0
         new_ids: set = set()
         fence = _MutationFence(before_mutation_cb)
-        window = partial(self._write_window, guard, owner_user_id)
+        window = partial(self._write_window, guard, owner_user_id, project)
         affected_paths = changed_paths | removed
         with window():
             # Captured before any upsert of ours, or the prune would treat this
@@ -732,30 +863,60 @@ class CodeKBService:
         *,
         owner_user_id: str,
         project_filter: str | list[str] | None,
+        path_prefix: str | None = None,
     ) -> _PathGlobResolution:
-        """Resolve a path_glob to an exact push-down path set plus diagnostic counts.
+        """Resolve a path_glob and/or a resolved subdirectory prefix to an exact push-down
+        path set plus diagnostic counts.
 
         ``paths=None`` means no filter and preserves the normal no-enumeration search
         path. An empty list means the supplied relative filter selected no indexed file;
         callers can explain that precisely instead of misdiagnosing a missing scope.
+        With a prefix the glob is relative to that directory and ``indexed_file_count``
+        is the number of indexed files below it.
         """
-        if not request.path_glob:
+        if not request.path_glob and not path_prefix:
             return _PathGlobResolution(paths=None, indexed_file_count=None)
-        if request.project:
-            candidate = self.vector_store.list_paths(
-                owner_user_id=owner_user_id, project=project_filter)
-        else:
-            candidate = self.vector_store.list_owner_paths(owner_user_id=owner_user_id)
         case_sensitive = not is_windows_scope(request.project or "")
+        # The prefix is only passed when set: every search without one keeps the
+        # vector store's original call shape.
+        extra = {"path_prefix": path_prefix} if path_prefix else {}
+        paths, count = self.vector_store.matching_paths(
+            owner_user_id=owner_user_id, project=project_filter,
+            pattern=request.path_glob, case_sensitive=case_sensitive, **extra)
         return _PathGlobResolution(
-            paths=[p for p in candidate if _path_matches(
-                p, request.path_glob, case_sensitive=case_sensitive)],
-            indexed_file_count=len(candidate),
+            paths=paths,
+            indexed_file_count=count,
+        )
+
+    @staticmethod
+    def _empty_path_notice(
+        request: CodeSearchRequest, glob: _PathGlobResolution, path_prefix: str | None,
+    ) -> str:
+        """Why a path filter selected no file, naming the layer that is actually empty."""
+        indexed = glob.indexed_file_count or 0
+        if path_prefix and indexed == 0:
+            return (
+                f"Parent scope {request.project!r} has no indexed files under "
+                f"{path_prefix!r} (typically excluded by .gitignore, or never indexed). "
+                f"Index {path_prefix!r} on its own with index_code to search it."
+            )
+        if path_prefix:
+            return (
+                f"path_glob {request.path_glob!r} matched 0 of {indexed} indexed file(s) "
+                f"under {path_prefix!r} in scope {request.project!r}. path_glob is "
+                f"relative to {path_prefix!r}, not to the scope root."
+            )
+        return (
+            f"path_glob {request.path_glob!r} matched 0 of "
+            f"{indexed} indexed file(s) in scope "
+            f"{request.project!r}. path_glob is scope-relative; use "
+            "'conversion/**', not an absolute repository path."
         )
 
     def search(self, request: CodeSearchRequest, *, owner_user_id: str,
                project_aliases: Sequence[str] | None = None,
-               excluded_projects: Sequence[str] | None = None) -> CodeSearchResponse:
+               excluded_projects: Sequence[str] | None = None,
+               path_prefix: str | None = None) -> CodeSearchResponse:
         """Search code with strict keyword semantics and bounded scope diagnostics.
 
         ``project_aliases`` comes from the compact catalog scope list only for legacy
@@ -766,6 +927,11 @@ class CodeKBService:
         ``must_not`` on ``project`` instead of narrowing the positive filter, so a
         scope that predates the catalog marker (and so has no durable row to put on an
         allow-list) is still correctly excluded.
+
+        ``path_prefix`` restricts the search to one scope-relative directory: the route
+        sets it when the requested directory had no index of its own and was mapped onto
+        its indexed ancestor (``request.project`` is then that ancestor). ``path_glob``
+        stays relative to the directory the caller named.
         """
         total_start = time.perf_counter()
         if not request.query.strip():
@@ -778,21 +944,22 @@ class CodeKBService:
             alias for alias in dict.fromkeys(project_aliases or ())
             if alias and alias != request.project
         ]
+        resolved = {
+            "resolved_scope": request.project if path_prefix else None,
+            "resolved_path_prefix": path_prefix,
+        }
         glob = self._resolve_path_glob_paths(
-            request, owner_user_id=owner_user_id, project_filter=project_filter)
+            request, owner_user_id=owner_user_id, project_filter=project_filter,
+            path_prefix=path_prefix)
         if glob.paths is not None and not glob.paths:
             return CodeSearchResponse(
                 hits=[], total=0, requested_mode=request.mode, effective_mode=request.mode,
-                notice=(
-                    f"path_glob {request.path_glob!r} matched 0 of "
-                    f"{glob.indexed_file_count or 0} indexed file(s) in scope "
-                    f"{request.project!r}. path_glob is scope-relative; use "
-                    "'conversion/**', not an absolute repository path."
-                ),
+                notice=self._empty_path_notice(request, glob, path_prefix),
                 path_glob_matched_files=0,
                 indexed_file_count=glob.indexed_file_count,
                 scope_aliases=legacy_aliases,
                 timings_ms=CodeSearchTimingsMs(total=_elapsed_ms(total_start)),
+                **resolved,
             )
 
         embed_start = time.perf_counter()
@@ -818,6 +985,7 @@ class CodeKBService:
                 scope_aliases=legacy_aliases,
                 timings_ms=CodeSearchTimingsMs(
                     embed=embed_ms, total=_elapsed_ms(total_start)),
+                **resolved,
             )
 
         mode = request.mode if sparse_available else "dense"
@@ -868,6 +1036,7 @@ class CodeKBService:
             timings_ms=CodeSearchTimingsMs(
                 embed=embed_ms, retrieve=retrieve_ms, rerank=rerank_ms,
                 total=_elapsed_ms(total_start)),
+            **resolved,
         )
 
     def _rerank(self, query: str, hits: list[CodeHit]) -> list[CodeHit]:
@@ -919,29 +1088,48 @@ class CodeKBService:
     ) -> CodeDuplicateScanResponse:
         """Report file pairs in one scope that share near-duplicate chunks.
 
-        Read-only, but it takes the same owner fence as search: an in-place scope
-        rewrite would otherwise let the scan see a file's old and new chunks at
-        once and report the file as a duplicate of itself under two paths.
+        Read-only. An in-place scope rewrite would let a scan see a file's old and new
+        chunks at once and report the file as a duplicate of itself under two paths, so
+        the scan must not straddle a write. It does not hold the owner fence to
+        guarantee that: a scope of 17,839 chunks takes over two minutes to scan, and
+        holding the fence that long froze every search and index write of the owner.
+        It takes the fence per query batch and checks a per-scope write epoch instead
+        (:meth:`scan_guard`); a scan overtaken by a write starts over.
 
         Windows scopes match paths case-insensitively for exclusions, matching the
         path_glob semantics in :meth:`search`.
         """
         project_filter = self._project_filter(request.project, project_aliases)
+        scopes = list(dict.fromkeys(
+            scope for scope in [request.project, *(project_aliases or ())] if scope))
         globs = (DEFAULT_EXCLUDE_GLOBS if request.exclude_globs is None
                  else tuple(request.exclude_globs))
-        with self.scope_snapshot(owner_user_id=owner_user_id):
-            result = scan_duplicates(
-                self.vector_store,
-                owner_user_id=owner_user_id,
-                project=project_filter,
-                threshold=request.threshold,
-                min_shared_chunks=request.min_shared_chunks,
-                max_pairs=request.max_pairs,
-                max_examples=request.max_examples,
-                exclude_globs=globs,
-                max_chunks=request.max_chunks,
-                case_sensitive=not is_windows_scope(request.project),
-            )
+        result = None
+        for _ in range(_SCAN_ATTEMPTS):
+            try:
+                result = scan_duplicates(
+                    self.vector_store,
+                    owner_user_id=owner_user_id,
+                    project=project_filter,
+                    threshold=request.threshold,
+                    min_shared_chunks=request.min_shared_chunks,
+                    max_pairs=request.max_pairs,
+                    max_examples=request.max_examples,
+                    exclude_globs=globs,
+                    max_chunks=request.max_chunks,
+                    case_sensitive=not is_windows_scope(request.project),
+                    guard=self.scan_guard(owner_user_id=owner_user_id, projects=scopes),
+                )
+                break
+            except ScopeChangedDuringScan:
+                logger.info("code_kb duplicate scan overtaken by an index write; restarting "
+                            "owner=%s project=%s", owner_user_id, request.project)
+        if result is None:
+            # An empty list would read as "no duplicates", which this scan never established.
+            result = DuplicateScanResult(notice=(
+                f"the scope was re-indexed while this scan was running, on {_SCAN_ATTEMPTS} "
+                "attempts in a row, so no consistent report could be produced. Retry once "
+                "the index job has finished."))
         aliases = [
             alias for alias in dict.fromkeys(project_aliases or ())
             if alias and alias != request.project
@@ -989,10 +1177,16 @@ class CodeKBService:
         projects = list(dict.fromkeys(
             candidate for candidate in [project, *(project_aliases or ())] if candidate))
         with self.scope_snapshot(owner_user_id=owner_user_id):
-            n = sum(
-                self.vector_store.delete_project(owner_user_id=owner_user_id, project=scope)
-                for scope in projects
-            )
+            try:
+                n = sum(
+                    self.vector_store.delete_project(owner_user_id=owner_user_id, project=scope)
+                    for scope in projects
+                )
+            finally:
+                for scope in projects:
+                    key = (owner_user_id, scope)
+                    self._write_epochs_by_scope[key] = (
+                        self._write_epochs_by_scope.get(key, 0) + 1)
         aliases = [scope for scope in projects if scope != project]
         logger.info(
             "code_kb delete: owner=%s project=%s aliases=%d removed=%d",

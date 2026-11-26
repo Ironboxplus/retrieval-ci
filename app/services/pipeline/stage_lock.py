@@ -22,30 +22,64 @@ Why this design
 
 Implementation
 --------------
-This is a thin wrapper over `threading.Lock` (one lock per resource key,
-lazily created). Acquire polls with a small timeout so we stay responsive to
-the abort event without spinning. `threading.Lock` is not strictly FIFO under
-contention; for our load (≤ a handful of concurrent pipelines) the difference
-is invisible. If strict FIFO becomes a requirement we can switch to a
-Semaphore + ordered queue without changing the call sites.
+One `threading.Condition` per resource key, the current holder (thread, re-entry
+count, owner) and a heap of waiters ordered by `(rank, seq)`. A free resource is
+granted only to the head of the heap:
+
+  - rank is `(0, priority)` when the caller passed a priority, else `(1,)`, so
+    prioritized waiters go before unprioritized ones and a smaller priority goes
+    first. `priority` must be comparable among callers of the same key (the
+    orchestrator always passes a tuple).
+  - seq is a process-wide arrival counter, so equal priorities and unprioritized
+    callers are FIFO.
+
+Waiters sleep on the condition for at most `poll_s` and re-check `abort`; an
+aborted waiter leaves the heap and wakes the rest. The same thread may re-enter
+a key it already holds (count, not queue).
+
+Why not an unordered lock: with a plain `threading.Lock` whoever polls first
+after a release wins. On 2026-11-13 twenty-three slice tasks queued their
+extract on one `gpu-local`; each release went to an arbitrary extract and three
+embeds (waiting 8-13 h, their papers already in SQL but without vectors) lost
+every time. Priority order lets the orchestrator grant a stage that may still
+be running on the resource first, then the oldest task, so pipelines finish in
+the order they started. This is the usual condition-variable + ordered wait
+queue (CPython's `queue.PriorityQueue` is built the same way).
 """
 from __future__ import annotations
 
+import heapq
+import itertools
 import threading
-from collections import defaultdict
 from contextlib import contextmanager
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
+
+# Process-wide arrival counter: the FIFO tie-break among equal ranks.
+_ARRIVALS = itertools.count()
+
+
+class _ResourceState:
+    __slots__ = ("cond", "waiters", "count", "thread", "owner")
+
+    def __init__(self) -> None:
+        self.cond = threading.Condition(threading.Lock())
+        self.waiters: list[tuple] = []  # heap of (rank, seq)
+        self.count = 0  # re-entry depth of the current holder; 0 = free
+        self.thread: Optional[int] = None  # holding thread's ident
+        self.owner: object = None
 
 
 class StageLockSet:
     def __init__(self) -> None:
-        # defaultdict gives lazy lock creation on first reference — no
-        # registration step needed for new resource keys. RLock instead of
-        # Lock so a refactor that accidentally re-enters a stage from the
-        # same thread won't self-deadlock (negligible overhead vs Lock).
-        self._locks: dict[str, threading.RLock] = defaultdict(threading.RLock)
-        self._owners: dict[str, object] = {}
-        self._meta = threading.Lock()  # guards _owners reads/writes
+        self._states: dict[str, _ResourceState] = {}
+        self._meta = threading.Lock()  # guards _states creation
+
+    def _state(self, resource: str) -> _ResourceState:
+        with self._meta:
+            state = self._states.get(resource)
+            if state is None:
+                state = self._states[resource] = _ResourceState()
+            return state
 
     def acquire(
         self,
@@ -54,39 +88,78 @@ class StageLockSet:
         *,
         poll_s: float = 0.25,
         owner: Optional[object] = None,
+        priority: Optional[Any] = None,
     ) -> bool:
-        """Block until `resource` is free or `abort` is set.
+        """Block until `resource` is granted to this caller or `abort` is set.
 
-        Returns True on acquisition, False on abort. Empty `resource` short-
-        circuits to True (free-for-all, no serialization)."""
+        Waiters are granted in `(priority, arrival)` order, prioritized before
+        unprioritized (see module docstring). Returns True on acquisition,
+        False on abort. Empty `resource` short-circuits to True (free-for-all,
+        no serialization)."""
         if not resource:
             return True
-        lock = self._locks[resource]
-        while not abort.is_set():
-            if lock.acquire(timeout=poll_s):
-                with self._meta:
-                    self._owners[resource] = owner if owner is not None else True
+        if abort.is_set():
+            return False  # aborted callers never take the resource, even re-entrantly
+        state = self._state(resource)
+        me = threading.get_ident()
+        with state.cond:
+            if state.count and state.thread == me:
+                state.count += 1  # re-entry from the holding thread
                 return True
-        return False
+            rank = (0, priority) if priority is not None else (1,)
+            ticket = (rank, next(_ARRIVALS))
+            heapq.heappush(state.waiters, ticket)
+            granted = False
+            try:
+                while not abort.is_set():
+                    if state.count == 0 and state.waiters[0] == ticket:
+                        heapq.heappop(state.waiters)
+                        state.count = 1
+                        state.thread = me
+                        state.owner = owner if owner is not None else True
+                        granted = True
+                        return True
+                    state.cond.wait(timeout=poll_s)
+                return False
+            finally:
+                if not granted:
+                    state.waiters.remove(ticket)
+                    heapq.heapify(state.waiters)
+                    state.cond.notify_all()  # the next head may now be grantable
 
     def release(self, resource: str) -> None:
         """Release `resource`. Safe on a key never acquired in this process."""
         if not resource:
             return
         with self._meta:
-            had_owner = self._owners.pop(resource, None) is not None
-        if not had_owner:
-            return  # nothing to release; defensive against finally-blocks
-        try:
-            self._locks[resource].release()
-        except RuntimeError:
-            # Already released (e.g. double release) — log-worthy but not fatal.
-            pass
+            state = self._states.get(resource)
+        if state is None:
+            return
+        with state.cond:
+            if state.count == 0:
+                return  # nothing to release; defensive against finally-blocks
+            state.count -= 1
+            if state.count == 0:
+                state.thread = None
+                state.owner = None
+                state.cond.notify_all()
 
     def holders(self) -> dict[str, object]:
         """Snapshot of current owners (resource_key → owner). For UI / events."""
         with self._meta:
-            return dict(self._owners)
+            states = list(self._states.items())
+        held: dict[str, object] = {}
+        for resource, state in states:
+            with state.cond:
+                if state.count:
+                    held[resource] = state.owner
+        return held
+
+    def _waiting(self, resource: str) -> int:
+        """Number of callers queued on `resource` (test introspection)."""
+        state = self._state(resource)
+        with state.cond:
+            return len(state.waiters)
 
     @contextmanager
     def hold(
@@ -96,6 +169,7 @@ class StageLockSet:
         *,
         owner: Optional[object] = None,
         poll_s: float = 0.25,
+        priority: Optional[Any] = None,
     ) -> Iterator[bool]:
         """Context manager: acquire on enter, release on exit (always).
 
@@ -107,7 +181,9 @@ class StageLockSet:
                     return "cancelled"
                 ... critical section ...
         """
-        acquired = self.acquire(resource, abort, poll_s=poll_s, owner=owner)
+        acquired = self.acquire(
+            resource, abort, poll_s=poll_s, owner=owner, priority=priority,
+        )
         try:
             yield acquired
         finally:

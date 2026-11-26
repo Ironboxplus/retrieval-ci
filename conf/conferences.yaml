@@ -149,6 +149,72 @@ conferences:
     track_type: main
     years: [2022, 2023, 2024, 2025, 2026]
 
+  - title: ECCV
+    description: European Conference on Computer Vision
+    sub: AI
+    rank:
+      ccf: B
+      core: A*
+      thcpl: A
+    dblp: eccv
+    # ecva.net/papers.php archives 2022/2024 (open access); 2026 comes from the
+    # virtual-site JSON with camera-ready PDFs on media.eventhosts.cc until ECVA
+    # archives it. Even years only.
+    source_class: EcvaProceedingsSource
+    track_type: main
+    years: [2022, 2024, 2026]
+
+  - title: TPAMI
+    description: IEEE Transactions on Pattern Analysis and Machine Intelligence (CCF-A journal)
+    sub: AI
+    rank:
+      ccf: A
+    dblp: pami
+    # Volume N = year 1978+N (vol 44 = 2022). Crossref listing; IEEE Xplore does
+    # not serve the proxy, so only papers with a matched open copy are collected.
+    source_class: CrossrefJournalSource
+    source_args:
+      conference_name: TPAMI
+      issn: 0162-8828
+      paper_id_prefix: tpami
+      volume_year_offset: 1978
+      doi_id: last_segment
+      # An arXiv copy whose journal_ref/comments name one of these is post-acceptance.
+      venue_aliases: [Pattern Analysis and Machine Intelligence, PAMI]
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: JMLR
+    description: Journal of Machine Learning Research (CCF-A journal, open access)
+    sub: AI
+    rank:
+      ccf: A
+    dblp: jmlr
+    # jmlr.org/papers/v{N}, volume N = year 1999+N.
+    source_class: JmlrVolumeSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: IJCV
+    description: International Journal of Computer Vision (CCF-A journal)
+    sub: AI
+    rank:
+      ccf: A
+    dblp: ijcv
+    # Volume N = year 1892+N (vol 130 = 2022). Springer open-access PDFs win over
+    # arXiv copies; closed articles without an open copy are not collected.
+    source_class: CrossrefJournalSource
+    source_args:
+      conference_name: IJCV
+      issn: 0920-5691
+      paper_id_prefix: ijcv
+      volume_year_offset: 1892
+      doi_id: suffix
+      open_access_hosts: [link.springer.com]
+      venue_aliases: [International Journal of Computer Vision]
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
   # ── DB 数据库/数据挖掘/内容检索 ──
 
   - title: KDD
@@ -213,18 +279,11 @@ conferences:
       thcpl: A
     dblp: vldb
     # VLDB papers are published in the PVLDB journal; volume N maps to year 2007+N.
-    # 2022 → vol 15, 2023 → vol 16, 2024 → vol 17, 2025 → vol 18.
-    source_class: DblpAcmProceedingsSource
-    source_args:
-      conference_name: VLDB
-      dblp_venue_key: vldb
-      dblp_toc_overrides:
-        2022: journals/pvldb/pvldb15
-        2023: journals/pvldb/pvldb16
-        2024: journals/pvldb/pvldb17
-        2025: journals/pvldb/pvldb18
+    # vldb.org/pvldb/volumes/{N} lists every paper with its PDF (open access).
+    # The DBLP route never worked: PVLDB DOIs are 10.14778/, not ACM's 10.1145/.
+    source_class: PvldbVolumeSource
     track_type: main
-    years: [2022, 2023, 2024, 2025]
+    years: [2022, 2023, 2024, 2025, 2026]
 
   # ── SC 网络与信息安全 ──
 
@@ -236,10 +295,18 @@ conferences:
       core: A*
       thcpl: A
     dblp: ccs
+    # DBLP answers with a bot challenge, so the listing is Crossref's exact
+    # container title (2024 is spelled "...2024 on ACM SIGSAC..."). 2026 is not
+    # published yet. PDFs need the ACM browser download on Arc.
     source_class: DblpAcmProceedingsSource
     source_args:
       conference_name: CCS
       dblp_venue_key: ccs
+      crossref_container_titles:
+        2022: Proceedings of the 2022 ACM SIGSAC Conference on Computer and Communications Security
+        2023: Proceedings of the 2023 ACM SIGSAC Conference on Computer and Communications Security
+        2024: Proceedings of the 2024 on ACM SIGSAC Conference on Computer and Communications Security
+        2025: Proceedings of the 2025 ACM SIGSAC Conference on Computer and Communications Security
     track_type: main
     years: [2022, 2023, 2024, 2025]
 
@@ -264,6 +331,30 @@ conferences:
       thcpl: A
     dblp: ndss
     source_class: NdssSymposiumSource
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: IEEE S&P
+    description: IEEE Symposium on Security and Privacy
+    sub: SC
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: sp
+    # IEEE CSDL proceedings (GraphQL listing). 2022-2024 are open access on CSDL;
+    # 2025/2026 only where an open copy matches by DOI and title.
+    source_class: IeeeCsdlProceedingsSource
+    source_args:
+      conference_name: IEEE S&P
+      paper_id_prefix: sp
+      proceeding_ids:
+        2022: 1wKCdeg89vq
+        2023: 1He7WWuJExG
+        2024: 1RjE8VKKk1y
+        2025: 21B7ONGXzZ6
+        2026: 2bojuokAJK8
+      venue_aliases: [Symposium on Security and Privacy, Oakland, IEEE SP]
     track_type: main
     years: [2022, 2023, 2024, 2025, 2026]
 
@@ -451,3 +542,43 @@ conferences:
       url_slug: atc
     track_type: main
     years: [2022, 2023, 2024, 2025]
+
+  # ── SE 软件工程/系统软件/程序设计语言 ──
+
+  - title: OSDI
+    description: USENIX Symposium on Operating Systems Design and Implementation
+    sub: SE
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: osdi
+    # USENIX open access; "Operational Systems Paper" is a proceedings track and
+    # is kept with venue_track=operational_systems_paper.
+    source_class: UsenixProceedingsSource
+    source_args:
+      conference_name: OSDI
+      url_slug: osdi
+    track_type: main
+    years: [2022, 2023, 2024, 2025, 2026]
+
+  - title: SOSP
+    description: ACM Symposium on Operating Systems Principles
+    sub: SE
+    rank:
+      ccf: A
+      core: A*
+      thcpl: A
+    dblp: sosp
+    # No SOSP in 2022. Crossref container titles; PDFs via the ACM browser download.
+    source_class: DblpAcmProceedingsSource
+    source_args:
+      conference_name: SOSP
+      dblp_venue_key: sosp
+      crossref_container_titles:
+        2023: Proceedings of the 29th Symposium on Operating Systems Principles
+        2024: Proceedings of the ACM SIGOPS 30th Symposium on Operating Systems Principles
+        2025: Proceedings of the ACM SIGOPS 31st Symposium on Operating Systems Principles
+        2026: Proceedings of the ACM SIGOPS 32nd Symposium on Operating Systems Principles
+    track_type: main
+    years: [2023, 2024, 2025, 2026]

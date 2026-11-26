@@ -1,18 +1,17 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { AnimatePresence, motion } from 'framer-motion';
 import axios from 'axios';
-import { AlertCircle, Check, Circle, Loader2, RefreshCw, X } from 'lucide-react';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import ConfirmButton from '../components/ConfirmButton';
+import { Bar, EventRow, MetaItem, SectionTitle, StageRow, StatusBadge } from '../components/TaskParts';
 import {
-  useTasks, useTaskEvents, useTaskWorkflow,
+  useTaskBoard, useTaskEvents, useTaskWorkflow,
   useCancelTask, useRetryTask,
 } from '../api/hooks/useTasks';
 import { useCrawlRecords } from '../api/hooks/useCrawl';
@@ -20,13 +19,15 @@ import { useDocumentDetail } from '../api/hooks/useDocuments';
 import { usePaperDetail } from '../api/hooks/usePapers';
 import type { TaskBrief, TaskEvent } from '../types';
 import { selectedTaskIdFromSearch } from './taskSelection';
-import { taskTypeLabel, taskSubject, taskDocId } from './taskBody';
+import { taskDisplayLabel, taskCanRetry, taskCanCancel, taskSubject, taskDocId } from './taskBody';
 import {
-  parseCreatedAt, parseStartedAt, relativeTimeFrom, formatDuration, formatDateTime,
+  parseTimestamp, relativeTimeFrom, formatDuration, formatDateTime,
 } from './taskTime';
-import { groupEventsBySubtask, buildSyntheticStageNodes, reachedStageLabel } from './taskFlow';
+import { groupEventsBySubtask, reachedStageLabel } from './taskFlow';
+import { buildStageItems } from './taskStageItems';
+import { styleOf } from './taskStatusStyle';
 import {
-  stageLabel, workflowNodeLabel, taskLevelEventLabel, taskStatusLabel, taskErrorLabel,
+  stageLabel, taskLevelEventLabel, taskStatusLabel, taskErrorLabel,
   pipelineProgressView,
 } from './taskStageLabels';
 import {
@@ -61,39 +62,12 @@ function useTaskSubjectDisplay(task: TaskBrief): TaskSubjectDisplay {
   return { text: taskSubject(task), muted: false };
 }
 
-// status -> [text colour, bar colour, tinted badge]
-const STATUS_STYLE: Record<string, { text: string; bar: string; badge: string; dot: string; line: string }> = {
-  running: { text: 'text-primary', bar: 'bg-primary', badge: 'border-primary/40 bg-primary/10 text-primary', dot: 'bg-primary', line: 'border-primary' },
-  pending: { text: 'text-muted-foreground', bar: 'bg-muted-foreground', badge: 'border-border bg-muted text-muted-foreground', dot: 'bg-muted-foreground', line: 'border-muted-foreground' },
-  completed: { text: 'text-success', bar: 'bg-success', badge: 'border-success/40 bg-success/10 text-success', dot: 'bg-success', line: 'border-success' },
-  failed: { text: 'text-destructive', bar: 'bg-destructive', badge: 'border-destructive/40 bg-destructive/10 text-destructive', dot: 'bg-destructive', line: 'border-destructive' },
-  timeout: { text: 'text-destructive', bar: 'bg-destructive', badge: 'border-destructive/40 bg-destructive/10 text-destructive', dot: 'bg-destructive', line: 'border-destructive' },
-  cancelled: { text: 'text-muted-foreground', bar: 'bg-muted-foreground/60', badge: 'border-border bg-muted text-muted-foreground', dot: 'bg-muted-foreground/60', line: 'border-muted-foreground' },
-};
-const styleOf = (status: string) => STATUS_STYLE[status] ?? STATUS_STYLE.pending;
-
 const COLUMN_LABEL: Record<LifecycleColumn, string> = {
   pending: '排队中', running: '运行中', completed: '已完成', failed: '失败 / 已取消',
 };
 const COLUMN_STATUS: Record<LifecycleColumn, string> = {
   pending: 'pending', running: 'running', completed: 'completed', failed: 'failed',
 };
-
-function StatusBadge({ status }: { status: string }) {
-  return (
-    <Badge variant="outline" className={cn('shrink-0 font-semibold', styleOf(status).badge)}>
-      {taskStatusLabel(status)}
-    </Badge>
-  );
-}
-
-function Bar({ pct, className }: { pct: number; className?: string }) {
-  return (
-    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-      <div className={cn('h-full rounded-full', className)} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
-    </div>
-  );
-}
 
 function taskPercent(task: TaskBrief): number | null {
   return task.total > 0 ? Math.round((task.progress / task.total) * 100) : null;
@@ -102,7 +76,7 @@ function taskPercent(task: TaskBrief): number | null {
 function taskDurationSeconds(task: TaskBrief): number | null {
   if (task.duration_seconds != null) return task.duration_seconds;
   if (task.started_at && task.completed_at) {
-    return (parseStartedAt(task.completed_at).getTime() - parseStartedAt(task.started_at).getTime()) / 1000;
+    return (parseTimestamp(task.completed_at).getTime() - parseTimestamp(task.started_at).getTime()) / 1000;
   }
   return null;
 }
@@ -119,7 +93,7 @@ function TaskCompactCard({ task, attempts }: { task: TaskBrief; attempts: number
   return (
     <MorphCard>
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold">{taskTypeLabel(task.task_type)}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">{taskDisplayLabel(task)}</span>
         <StatusBadge status={task.status} />
       </div>
       <div title={subject.text} className={cn('mt-1 truncate text-xs text-muted-foreground', subject.muted && 'italic')}>
@@ -148,7 +122,7 @@ function TaskCompactCard({ task, attempts }: { task: TaskBrief; attempts: number
         </div>
       )}
       <div className="mt-2.5 flex justify-between gap-2 border-t pt-2 text-[11px] text-muted-foreground">
-        <span>创建于 {relativeTimeFrom(parseCreatedAt(task.created_at))}{duration && <> · 耗时 {duration}</>}</span>
+        <span>创建于 {relativeTimeFrom(parseTimestamp(task.created_at))}{duration && <> · 耗时 {duration}</>}</span>
         {attempts > 1 && <span className="shrink-0">共 {attempts} 次尝试</span>}
       </div>
     </MorphCard>
@@ -173,110 +147,11 @@ function StackedTaskCard({ stack }: { stack: TaskStack<TaskBrief> }) {
   );
 }
 
-function EventRow({ event }: { event: TaskEvent }) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
-      className="grid grid-cols-[64px_1fr] gap-2 py-0.5 text-xs"
-    >
-      <span className="tabular-nums text-muted-foreground">{event.created_at?.slice(11, 19)}</span>
-      <span className={cn('break-words', event.level === 'error' ? 'text-destructive' : event.level === 'warning' ? 'text-warning' : '')}>
-        {event.message}
-      </span>
-    </motion.div>
-  );
-}
-
-interface StageItem {
-  key: string;
-  label: string;
-  status: string;
-  hollow?: boolean;
-  events: TaskEvent[];
-  progress?: number;
-  total?: number;
-}
-
-function StageIcon({ status, hollow }: { status: string; hollow?: boolean }) {
-  const base = 'grid size-6 shrink-0 place-items-center rounded-full border-2';
-  if (hollow || status === 'pending') return <span className={cn(base, 'border-border text-muted-foreground')}><Circle className="size-2" /></span>;
-  if (status === 'running') return <span className={cn(base, 'border-primary text-primary')}><Loader2 className="size-3.5 animate-spin" /></span>;
-  if (status === 'failed' || status === 'timeout') return <span className={cn(base, 'border-destructive bg-destructive text-white')}><AlertCircle className="size-3.5" /></span>;
-  if (status === 'cancelled') return <span className={cn(base, 'border-muted-foreground/60 text-muted-foreground')}><X className="size-3.5" /></span>;
-  return <span className={cn(base, 'border-success bg-success text-white')}><Check className="size-3.5" /></span>;
-}
-
-function StageRow({ stage, last, errorMessage, taskType }: { stage: StageItem; last: boolean; errorMessage?: string; taskType: string }) {
-  const [open, setOpen] = useState(false);
-  const pct = stage.total && stage.total > 0 ? Math.round(((stage.progress ?? 0) / stage.total) * 100) : null;
-  const doneLine = !stage.hollow && (stage.status === 'completed' || stage.status === 'skipped');
-  return (
-    <div className="grid grid-cols-[24px_1fr] gap-x-3">
-      <div className="flex flex-col items-center">
-        <StageIcon status={stage.status} hollow={stage.hollow} />
-        {!last && <div className={cn('my-1 w-0.5 flex-1 rounded-full', doneLine ? 'bg-success/60' : 'bg-border')} />}
-      </div>
-      <div className={cn('min-w-0', last ? 'pb-1' : 'pb-4')}>
-        <div className="flex items-baseline gap-2">
-          <span className={cn('text-sm font-medium', stage.hollow && 'text-muted-foreground')}>{stage.label}</span>
-          <span className={cn('text-xs', stage.hollow ? 'text-muted-foreground' : styleOf(stage.status).text)}>
-            {stage.hollow ? '未执行' : taskStatusLabel(stage.status)}
-          </span>
-        </div>
-        {pct != null && (
-          <div className="mt-1.5 flex max-w-sm items-center gap-2">
-            <Bar pct={pct} className={styleOf(stage.status).bar} />
-            <span className="text-[11px] tabular-nums text-muted-foreground">{stage.progress}/{stage.total}</span>
-          </div>
-        )}
-        {(stage.status === 'failed' || stage.status === 'timeout') && errorMessage && (
-          <div className="mt-1 text-xs text-destructive">{taskErrorLabel(errorMessage, taskType)}</div>
-        )}
-        {stage.events.length > 0 && (
-          <>
-            <button type="button" className="mt-1 text-xs text-primary hover:underline" onClick={() => setOpen((v) => !v)}>
-              {open ? '收起事件' : `查看 ${stage.events.length} 条事件`}
-            </button>
-            {open && (
-              <div className="mt-1 max-h-52 overflow-auto rounded-md bg-muted/50 px-2 py-1">
-                <AnimatePresence initial={false}>
-                  {stage.events.map((e) => <EventRow key={e.id} event={e} />)}
-                </AnimatePresence>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function useStageItems(
-  task: TaskBrief,
-  nodes: { id: number; name: string; subtask_key: string | null; status: string; progress: number; total: number }[],
-  events: TaskEvent[],
-): StageItem[] {
-  return useMemo<StageItem[]>(() => {
-    if (nodes.length > 0) {
-      const bySubtask = groupEventsBySubtask(events);
-      return nodes.map((n) => ({
-        key: String(n.id),
-        label: workflowNodeLabel(n.subtask_key, task.task_type, n.name),
-        status: n.status,
-        events: bySubtask.get(n.id) ?? [],
-        progress: n.progress,
-        total: n.total,
-      }));
-    }
-    return buildSyntheticStageNodes(events, task.status, task.task_type);
-  }, [nodes, events, task.task_type, task.status]);
-}
-
 function EarlierAttemptRow({ task, active, onSelect }: { task: TaskBrief; active: boolean; onSelect: () => void }) {
   const workflow = useTaskWorkflow(task.id);
   const events = useTaskEvents(task.id, false);
   const reached = reachedStageLabel(
-    (workflow.data?.nodes ?? []).map((n) => ({ name: n.name, subtask_key: n.subtask_key, status: n.status })),
+    (workflow.data?.nodes ?? []).map((n) => ({ name: n.name, subtask_key: n.subtask_key, key: n.key, status: n.status })),
     events.data?.events ?? [],
     task.task_type,
   );
@@ -292,22 +167,9 @@ function EarlierAttemptRow({ task, active, onSelect }: { task: TaskBrief; active
     >
       <StatusBadge status={task.status} />
       <span className="truncate text-muted-foreground">{reached && reached !== statusText ? `停在「${reached}」` : ''}</span>
-      <span className="tabular-nums text-muted-foreground">{formatDateTime(parseCreatedAt(task.created_at))}</span>
+      <span className="tabular-nums text-muted-foreground">{formatDateTime(parseTimestamp(task.created_at))}</span>
     </button>
   );
-}
-
-function MetaItem({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="text-sm tabular-nums">{children}</div>
-    </div>
-  );
-}
-
-function SectionTitle({ children }: { children: ReactNode }) {
-  return <h4 className="mb-2 text-sm font-semibold">{children}</h4>;
 }
 
 function TaskExpandedCard({ task, close, earlier = [] }: { task: TaskBrief; close: () => void; earlier?: TaskBrief[] }) {
@@ -322,7 +184,7 @@ function TaskExpandedCard({ task, close, earlier = [] }: { task: TaskBrief; clos
 
   const nodes = useMemo(() => workflow.data?.nodes ?? [], [workflow.data]);
   const eventList = useMemo(() => events.data?.events ?? [], [events.data]);
-  const stages = useStageItems(activeTask, nodes, eventList);
+  const stages = useMemo(() => buildStageItems(activeTask, nodes, eventList), [activeTask, nodes, eventList]);
   const taskLevelEvents = useMemo(
     () => (nodes.length > 0 ? (groupEventsBySubtask(eventList).get(null) ?? []) : [])
       .map((e) => ({ event: e, label: taskLevelEventLabel(e) }))
@@ -336,7 +198,7 @@ function TaskExpandedCard({ task, close, earlier = [] }: { task: TaskBrief; clos
   return (
     <div className="p-6">
       <div className="flex items-center gap-2.5 pr-8">
-        <h3 className="text-lg font-semibold">{taskTypeLabel(activeTask.task_type)}</h3>
+        <h3 className="text-lg font-semibold">{taskDisplayLabel(activeTask)}</h3>
         <StatusBadge status={activeTask.status} />
         {viewedId != null && (
           <button type="button" className="ml-auto text-xs text-primary hover:underline" onClick={() => setViewedId(null)}>
@@ -347,9 +209,9 @@ function TaskExpandedCard({ task, close, earlier = [] }: { task: TaskBrief; clos
       <p className={cn('mt-0.5 text-sm text-muted-foreground', subject.muted && 'italic')}>{subject.text}</p>
 
       <div className="mt-4 grid grid-cols-2 gap-3 rounded-lg bg-muted/50 p-3.5 sm:grid-cols-3">
-        <MetaItem label="创建时间">{formatDateTime(parseCreatedAt(activeTask.created_at))}</MetaItem>
-        <MetaItem label="开始时间">{activeTask.started_at ? formatDateTime(parseStartedAt(activeTask.started_at)) : '—'}</MetaItem>
-        <MetaItem label="结束时间">{activeTask.completed_at ? formatDateTime(parseStartedAt(activeTask.completed_at)) : '—'}</MetaItem>
+        <MetaItem label="创建时间">{formatDateTime(parseTimestamp(activeTask.created_at))}</MetaItem>
+        <MetaItem label="开始时间">{activeTask.started_at ? formatDateTime(parseTimestamp(activeTask.started_at)) : '—'}</MetaItem>
+        <MetaItem label="结束时间">{activeTask.completed_at ? formatDateTime(parseTimestamp(activeTask.completed_at)) : '—'}</MetaItem>
         <MetaItem label="耗时">{duration ?? '—'}</MetaItem>
         <MetaItem label="进度">{pct != null ? `${activeTask.progress}/${activeTask.total}（${pct}%）` : '—'}</MetaItem>
         <MetaItem label="已重试 / 上限">{activeTask.retry_count} / {activeTask.max_retries}</MetaItem>
@@ -418,15 +280,15 @@ function TaskExpandedCard({ task, close, earlier = [] }: { task: TaskBrief; clos
         </div>
       )}
 
-      {(task.status === 'running' || task.status === 'pending' || task.status === 'failed') && (
+      {(((task.status === 'running' || task.status === 'pending') && taskCanCancel(task)) || (task.status === 'failed' && taskCanRetry(task))) && (
         <div className="mt-5 flex gap-2">
-          {(task.status === 'running' || task.status === 'pending') && (
+          {(task.status === 'running' || task.status === 'pending') && taskCanCancel(task) && (
             <ConfirmButton variant="destructive" title="取消该任务？" confirmLabel="取消任务" loading={cancelTask.isPending}
               onConfirm={() => cancelTask.mutate(task.id, { onSuccess: close })}>
               取消任务
             </ConfirmButton>
           )}
-          {task.status === 'failed' && (
+          {task.status === 'failed' && taskCanRetry(task) && (
             <ConfirmButton title="重试该任务？" confirmLabel="重试" loading={retryTask.isPending} onConfirm={() => retryTask.mutate(task.id)}>
               重试
             </ConfirmButton>
@@ -535,8 +397,7 @@ function MobileLifecycleTabs({ counts, selected, onSelect }: {
 
 export default function Tasks() {
   const [searchParams] = useSearchParams();
-  // The backend caps page_size at 100 (app/api/routes/tasks.py); more 422s.
-  const { data, isFetching } = useTasks(1, 100);
+  const { data, isFetching } = useTaskBoard();
   const qc = useQueryClient();
 
   const deepLinkId = useMemo(

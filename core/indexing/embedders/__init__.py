@@ -2,12 +2,15 @@
 Embedder abstraction layer.
 
 Provides a unified interface for embedding models that may output
-dense vectors, sparse vectors, or both.
+dense vectors, sparse vectors, or both. Every model runs as a vLLM service
+(``EMBEDDING__SERVICE_URL``); ``VllmBgeM3Embedder`` is the backend's client of it, built on
+``vllm_client.encode``. The in-process embedders are retired and raise when constructed.
 """
 from __future__ import annotations
 
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -15,13 +18,15 @@ from typing import ContextManager, Dict, Iterator, Literal, Optional, TYPE_CHECK
 
 import numpy as np
 
-from config import settings, EMBEDDING_MODELS
-from core.gpu_memory import (
-    configure_cuda_memory_fraction,
-    is_cuda_device,
-)
+from core.indexing.embedders.vllm_client import ServiceError
+
+# ``config`` is imported where it is used, not here: ``bge_m3_core`` and ``vllm_client`` live in
+# this package and the standalone embed worker imports them, so importing the package must not
+# pull in the project's settings layer (pydantic_settings).
 
 _logger = logging.getLogger(__name__)
+
+SERVICE_POLL_S = 1.0
 
 if TYPE_CHECKING:
     from app.models.schemas import Chunk
@@ -29,74 +34,73 @@ if TYPE_CHECKING:
 
 EmbeddingPriority = Literal["interactive", "background"]
 
+# vLLM's priority scale: the lower value runs first (the service is started with
+# ``--scheduling-policy priority``). Business requests are 0, background indexing 5.
+SERVICE_PRIORITY: Dict[str, int] = {"interactive": 0, "background": 5}
 
-class _EmbeddingScheduler:
-    """Serialize access to one shared model while giving waiting queries priority.
+# Background work resumes this long after the last interactive call in this process (user
+# decision 2026-11-14: foreground = business requests, background starts again 10 s after the
+# foreground goes idle).
+BACKGROUND_QUIET_S = 10.0
 
-    Background indexers release the slot after every batch. If an interactive request
-    arrived during that batch, the next background batch waits until all already-waiting
-    interactive work has run. This prevents long indexing jobs from starving search
-    without loading a second model instance.
+
+class ForegroundGate:
+    """Keeps background embedding out of the way of business requests in this process.
+
+    An interactive call marks the gate busy while it runs and stamps the time it ended. A
+    background call waits until no interactive call is running and ``quiet_s`` seconds have passed
+    since the last one ended. Waiting costs nothing but time: the service orders whatever reaches it
+    by priority, this only keeps a background stream from starting while a person is searching.
     """
 
-    def __init__(self, *, max_interactive_burst: int = 8) -> None:
-        if max_interactive_burst < 1:
-            raise ValueError("max_interactive_burst must be at least 1")
+    def __init__(self, quiet_s: float = BACKGROUND_QUIET_S, clock=time.monotonic) -> None:
+        if quiet_s < 0:
+            raise ValueError("quiet_s must not be negative")
+        self._quiet_s = quiet_s
+        self._clock = clock
         self._condition = threading.Condition()
-        self._active = False
-        self._interactive_waiters = 0
-        self._background_waiters = 0
-        self._interactive_streak = 0
-        self._max_interactive_burst = max_interactive_burst
+        self._running = 0
+        self._last_end: Optional[float] = None
 
     @contextmanager
     def acquire(self, priority: EmbeddingPriority) -> Iterator[None]:
-        if priority not in {"interactive", "background"}:
+        if priority not in SERVICE_PRIORITY:
             raise ValueError(f"unknown embedding priority: {priority}")
-        interactive = priority == "interactive"
-        with self._condition:
-            if interactive:
-                self._interactive_waiters += 1
-            else:
-                self._background_waiters += 1
-            try:
-                while self._active or (
-                    interactive
-                    and self._background_waiters > 0
-                    and self._interactive_streak >= self._max_interactive_burst
-                ) or (
-                    not interactive
-                    and self._interactive_waiters > 0
-                    and self._interactive_streak < self._max_interactive_burst
-                ):
-                    self._condition.wait()
-                self._active = True
-                if interactive:
-                    if self._background_waiters > 0:
-                        self._interactive_streak += 1
-                    else:
-                        self._interactive_streak = 0
-                else:
-                    self._interactive_streak = 0
-            finally:
-                if interactive:
-                    self._interactive_waiters -= 1
-                else:
-                    self._background_waiters -= 1
-        try:
-            yield
-        finally:
+        if priority == "interactive":
             with self._condition:
-                self._active = False
-                self._condition.notify_all()
+                self._running += 1
+            try:
+                yield
+            finally:
+                with self._condition:
+                    self._running -= 1
+                    self._last_end = self._clock()
+                    self._condition.notify_all()
+            return
+        self._wait_until_quiet()
+        yield
+
+    def _wait_until_quiet(self) -> float:
+        """Block until background work may run; returns the seconds waited."""
+        started = self._clock()
+        with self._condition:
+            while True:
+                if self._running:
+                    self._condition.wait(timeout=1.0)
+                    continue
+                remaining = 0.0 if self._last_end is None else self._last_end + self._quiet_s - self._clock()
+                if remaining <= 0:
+                    return self._clock() - started
+                self._condition.wait(timeout=remaining)
 
 
-_EMBEDDING_SCHEDULER = _EmbeddingScheduler()
+_FOREGROUND_GATE = ForegroundGate()
 
 
 def embedding_slot(priority: EmbeddingPriority = "interactive") -> ContextManager[None]:
-    """Reserve the process-wide shared embedder for one encode call."""
-    return _EMBEDDING_SCHEDULER.acquire(priority)
+    """Mark one encode call of the shared embedder: interactive calls hold background back for
+    ``BACKGROUND_QUIET_S``, background calls wait for that quiet. The model itself is the service."""
+    return _FOREGROUND_GATE.acquire(priority)
 
 
 @dataclass
@@ -113,7 +117,11 @@ class BaseEmbedder(ABC):
     def embed_texts(
         self, texts: list[str], *, priority: EmbeddingPriority = "interactive",
     ) -> EmbeddingResult:
-        """Embed one request and release its temporary CUDA cache before return."""
+        """Embed one request.
+
+        The token limit belongs to the model's profile, not the call: a text over it
+        raises instead of being cut.
+        """
         ...
 
     @property
@@ -125,81 +133,110 @@ class BaseEmbedder(ABC):
     def supports_sparse(self) -> bool:
         return False
 
-    _EMBED_BATCH = 8
-
     def embed_chunks(self, chunks: list["Chunk"]) -> tuple[list["Chunk"], Optional[list[dict[str, float]]]]:
-        """Embed chunks in place, batched to limit peak memory.
-
-        W49: on 32 GB machines running Qdrant + BGE-M3 concurrently, a
-        single large encode call can OOM.  Splitting into batches of
-        ``_EMBED_BATCH`` and releasing intermediate tensors between
-        batches keeps peak allocation bounded.
-        """
-        import gc
-        texts = [c.content for c in chunks]
-        if len(texts) <= self._EMBED_BATCH:
-            result = self.embed_texts(texts, priority="background")
-            for i, chunk in enumerate(chunks):
-                chunk.embedding = result.dense[i].tolist()
-            return chunks, result.sparse
-
-        all_dense = []
-        all_sparse: list[dict[str, float]] | None = [] if self.supports_sparse else None
-        for start in range(0, len(texts), self._EMBED_BATCH):
-            batch = texts[start : start + self._EMBED_BATCH]
-            result = self.embed_texts(batch, priority="background")
-            all_dense.append(result.dense)
-            if all_sparse is not None and result.sparse is not None:
-                all_sparse.extend(result.sparse)
-            del result
-            gc.collect()
-
-        dense = np.concatenate(all_dense, axis=0)
+        """Embed chunks in place as background work: one call, the client batches it."""
+        result = embed_in_pieces(self, [c.content for c in chunks], "background")
         for i, chunk in enumerate(chunks):
-            chunk.embedding = dense[i].tolist()
-        return chunks, all_sparse
+            chunk.embedding = result.dense[i].tolist()
+        return chunks, result.sparse
+
+
+class VllmBgeM3Embedder(BaseEmbedder):
+    """BGE-M3 (dense + sparse) from the vLLM embedding service.
+
+    Texts are tokenized here with the profile's tokenizer and only token ids are sent
+    (``vllm_client.encode``), under the profile's limits: a text over the model limit raises
+    ``InputTooLong`` before a request leaves. ``priority`` becomes the request's top-level vLLM
+    priority; a background call also waits for the foreground to be idle (``ForegroundGate``).
+    Constructing one does not contact the service.
+    """
+
+    def __init__(self, model_name: str = "BAAI/bge-m3", *, base_url: str | None = None):
+        from config import settings
+        from core.indexing.embedding_profile import get_profile
+
+        self._model_name = model_name
+        self._profile = get_profile(model_name)
+        self._base_url = base_url or settings.embedding.service_url
+
+    @property
+    def dimension(self) -> int:
+        return self._profile.dimension
+
+    @property
+    def supports_sparse(self) -> bool:
+        return self._profile.sparse
+
+    def check_service(self, *, wait_s: float = 0.0) -> bool:
+        """True once the service answers and serves this profile (revision, ``max_model_len``).
+
+        A service that answers with something else raises ``ServiceError`` at once: its vectors would
+        carry this profile's fingerprint without being this profile's. One that does not answer is
+        waited for up to ``wait_s``; if it never does, that is logged and False is returned (the
+        backend then runs, and every embedding call raises until the service is up).
+        """
+        from core.indexing.embedders import vllm_client
+
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                vllm_client.check_service(self._profile, self._base_url)
+                return True
+            except vllm_client.ServiceError as exc:
+                if exc.__cause__ is None:        # only "not answering" is raised from an underlying error
+                    raise
+                if time.monotonic() >= deadline:
+                    _logger.error("embedding service not reachable after %.0f s: %s", wait_s, exc)
+                    return False
+            time.sleep(min(SERVICE_POLL_S, max(0.0, deadline - time.monotonic())))
+
+    def embed_texts(
+        self, texts: list[str], *, priority: EmbeddingPriority = "interactive",
+    ) -> EmbeddingResult:
+        from core.indexing.embedders import vllm_client
+
+        with embedding_slot(priority):
+            dense, sparse = vllm_client.encode(
+                texts, self._profile, base_url=self._base_url, priority=SERVICE_PRIORITY[priority])
+        return EmbeddingResult(
+            dense=dense,
+            sparse=[{str(token_id): weight for token_id, weight in weights.items()} for weights in sparse],
+        )
+
+
+def embed_in_pieces(
+    embedder: BaseEmbedder, texts: list[str], priority: EmbeddingPriority,
+) -> EmbeddingResult:
+    """Embed ``texts`` in one call.
+
+    Kept as the name callers import. It used to cut background work into 8-text pieces so a waiting
+    query could take the in-process model between them; the model is a service that schedules by
+    priority now and the client batches, so a request is never split here.
+    """
+    return embedder.embed_texts(texts, priority=priority)
 
 
 def create_embedder(model_name: str | None = None, **kwargs) -> BaseEmbedder:
     """Factory: create the right embedder based on model name.
 
-    Prefer ``get_embedder(model_name)`` for callers that want the
-    process-wide shared instance (cheaper, hot in GPU memory). Use
-    ``create_embedder`` directly only when a one-shot fresh instance is
-    actually required (tests / device probes).
+    Prefer ``get_embedder(model_name)`` for callers that want the process-wide shared
+    instance. A fresh one costs nothing (it is a client), but only BGE-M3 is served: any other
+    model name reaches the retired in-process embedder, which raises.
     """
+    from config import settings, EMBEDDING_MODELS
+
     name = model_name or settings.embedding.model_name
     model_info = EMBEDDING_MODELS.get(name, {})
 
-    device = kwargs.get("device") or settings.embedding.device
-    if settings.reranker.cuda_memory_fraction is not None and is_cuda_device(device):
-        if not configure_cuda_memory_fraction(
-            device,
-            settings.reranker.cuda_memory_fraction,
-        ):
-            raise RuntimeError("configured Retrieval CUDA memory fraction could not be applied")
-
     if model_info.get("supports_sparse"):
-        from core.indexing.embedders.bge_m3 import BgeM3Embedder
-        return BgeM3Embedder(model_name=name, **kwargs)
+        return VllmBgeM3Embedder(model_name=name, **kwargs)
 
     from core.indexing.embedders.sentence_transformer import SentenceTransformerEmbedder
     return SentenceTransformerEmbedder(model_name=name, **kwargs)
 
 
-# W46 (2026-05-20): process-wide cached embedder. Background:
-#   - IndexService.new_embedder was per-instance lazy → with get_index_service
-#     keyed by chunker_type (W36), each chunker variant held its own BGE-M3
-#     copy in GPU memory.
-#   - SemanticSectionChunker's _BgeM3LlamaAdapter built yet another copy when
-#     semantic_inner_split=True.
-#   - Each fresh process / first-touch paid the ~5-10s tokenizer + ~6.4GB
-#     checkpoint load cost.
-# Fix: route ALL in-process callers through ``get_embedder()`` so the
-# instance is created exactly once per process (per model_name key) and
-# hot in GPU memory for the lifetime of the worker. uvicorn startup pays
-# the load cost up front; subsequent /api/search / crawl indexing / paper
-# reindex all hit the shared instance instantly.
+# W46 (2026-05-20): process-wide cached embedder: every in-process caller goes through
+# ``get_embedder()`` so the instance is created once per process (per model_name key).
 _SHARED_EMBEDDERS: Dict[str, BaseEmbedder] = {}
 _SHARED_LOCK = threading.Lock()
 
@@ -207,13 +244,13 @@ _SHARED_LOCK = threading.Lock()
 def get_embedder(model_name: str | None = None, **kwargs) -> BaseEmbedder:
     """Return the process-wide shared embedder for ``model_name``.
 
-    Double-checked locking so concurrent first-touch (e.g. crawl worker
-    + search request hitting cold start together) doesn't duplicate the
-    expensive model load. ``kwargs`` are only honored on first call;
-    subsequent calls ignore them and return the cached instance — this
-    matches the singleton contract (kwargs must not vary across callers
+    Double-checked locking so concurrent first-touch doesn't build two instances. ``kwargs``
+    are only honored on first call; subsequent calls ignore them and return the cached
+    instance — this matches the singleton contract (kwargs must not vary across callers
     for the same model_name).
     """
+    from config import settings
+
     name = model_name or settings.embedding.model_name
     cached = _SHARED_EMBEDDERS.get(name)
     if cached is not None:
@@ -222,7 +259,6 @@ def get_embedder(model_name: str | None = None, **kwargs) -> BaseEmbedder:
         cached = _SHARED_EMBEDDERS.get(name)
         if cached is not None:
             return cached
-        _logger.info("embedder.get_or_create model=%s cold_load_start", name)
         instance = create_embedder(model_name=name, **kwargs)
         _SHARED_EMBEDDERS[name] = instance
         _logger.info(
@@ -232,29 +268,48 @@ def get_embedder(model_name: str | None = None, **kwargs) -> BaseEmbedder:
         return instance
 
 
+def require_embedding_service(*, wait_s: float | None = None) -> bool:
+    """Start-up check of the shared embedder's service: ``VllmBgeM3Embedder.check_service``.
+
+    ``wait_s`` defaults to ``settings.embedding.service_wait_s``.
+
+    Raises ``ServiceError`` for a service that serves another revision or length limit; returns
+    False (after logging) for one that stays silent.
+    """
+    from config import settings
+
+    return get_embedder().check_service(wait_s=settings.embedding.service_wait_s if wait_s is None else wait_s)
+
+
 def embed_texts(
     texts: list[str],
     *,
     priority: EmbeddingPriority = "interactive",
 ) -> EmbeddingResult:
-    """Embed text with the process-wide shared model instance."""
-
-    return get_embedder().embed_texts(texts, priority=priority)
+    """Embed with the shared embedder (the vLLM service); background calls wait for the foreground."""
+    return embed_in_pieces(get_embedder(), texts, priority)
 
 
 def reset_embedder_cache() -> None:
-    """Drop all cached embedders. Used by tests to force a fresh load."""
+    """Drop all cached embedders. Used by tests to force a fresh instance."""
     with _SHARED_LOCK:
         _SHARED_EMBEDDERS.clear()
 
 
 __all__ = [
+    "BACKGROUND_QUIET_S",
     "BaseEmbedder",
     "EmbeddingPriority",
     "EmbeddingResult",
+    "ForegroundGate",
+    "SERVICE_PRIORITY",
+    "ServiceError",
+    "VllmBgeM3Embedder",
     "create_embedder",
     "embedding_slot",
+    "embed_in_pieces",
     "embed_texts",
     "get_embedder",
+    "require_embedding_service",
     "reset_embedder_cache",
 ]

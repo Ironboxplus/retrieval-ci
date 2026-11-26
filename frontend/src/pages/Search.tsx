@@ -3,37 +3,41 @@ import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Input, Card, Space, Tag, Typography, Slider, Row, Col,
-  Empty, Progress, Tooltip, Button, Steps, Switch, Segmented, theme, message,
+  Card, Space, Tag, Typography, Slider, Row, Col,
+  Empty, Progress, Tooltip, Button, Steps, theme, message,
 } from 'antd';
+import { CircleAlert } from 'lucide-react';
 import {
   LinkOutlined, FileTextOutlined, UserOutlined, SearchOutlined,
   FilterOutlined, BarChartOutlined,
   RocketOutlined, CheckCircleOutlined, LoadingOutlined,
   ExperimentOutlined, SortAscendingOutlined, FontSizeOutlined,
   FilePdfOutlined, ReadOutlined, AppstoreOutlined, GlobalOutlined,
-  CopyOutlined, HistoryOutlined,
+  CopyOutlined, HistoryOutlined, StopOutlined,
 } from '@ant-design/icons';
 import { useSearchStream } from '../api/hooks/useSearchStream';
 import type { StreamStage, StreamProgress } from '../api/hooks/useSearchStream';
 import { useAuthUI } from '../stores/authStore';
 import { PUBLIC_MODE } from '../constants';
 import api from '../api/client';
-import type { RetrievalMethod, SearchResponse, SearchRequest, PipelineMetricsData, PaperBrief, PaperGroup } from '../types';
+import type { SearchResponse, PipelineMetricsData, PaperBrief, PaperGroup } from '../types';
 import ChunkScoreView from '../components/ChunkScoreView';
 import MarkdownSnippet from '../components/MarkdownSnippet';
 import { groupPapersClientSide } from '../components/groupPapers';
 import PaperFilterPanel, { venueColors, type PaperFilterValue } from '../components/PaperFilterPanel';
 import IndexCoveragePanel from '../components/IndexCoveragePanel';
 import { copyText } from '../utils/clipboard';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Switch } from '@/components/ui/switch';
+import Segmented from '../components/common/Segmented';
+import SearchBox from '../components/common/SearchBox';
 import CodeSearchView from './CodeSearchView';
 import ModeSwitch from '../components/ModeSwitch';
-import { useIsWide } from '../hooks/useIsWide';
-
-// Same breakpoint and stacked-vs-same-row structure as CodeSearchView.tsx's
-// own NARROW_BREAKPOINT (round-3 review, 390px) — kept identical between the
-// two modes so switching 论文|代码 never jumps the header layout.
-const NARROW_BREAKPOINT = 576;
+import { withdrawnMarks } from './withdrawnModel';
+import {
+  readUI, writeUI, uiToRequest, searchEndpoint, searchTrigger,
+  type SearchUIState, type SourceTypeFilter, type SortBy,
+} from './searchModel';
 
 const SEARCH_HISTORY_KEY = 'retrival_search_history';
 const MAX_HISTORY = 20;
@@ -47,101 +51,6 @@ function saveSearchHistory(query: string) {
   localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(hist.slice(0, MAX_HISTORY)));
 }
 function clearSearchHistory() { localStorage.removeItem(SEARCH_HISTORY_KEY); }
-
-// ─── URL sync helpers ───
-// 'upload' 是上传文档（整本书走这一类）。与文档库页的「论文/网页/上传」三类对齐。
-type SourceTypeFilter = 'all' | 'paper' | 'webpage' | 'upload';
-
-type SearchUIState = {
-  query: string;
-  method: RetrievalMethod;
-  topK: number;
-  venues: string[];
-  years: number[];
-  titleOnly: boolean;
-  chunkMode: boolean;
-  sourceType: SourceTypeFilter;
-  sortBy: 'score' | 'year' | 'citations';
-};
-
-// sourceType 默认 'paper'：论文有 10.6 万篇、1394 万 chunk，upload/webpage 合计不到
-// 4 千个点，混在一起检索时后者几乎永远进不了 top_k，'all' 这个默认值等于「只搜论文」
-// 但不告诉用户。显式默认成 paper，让「搜书」成为一次有意识的切换。
-// titleOnly 默认关闭。它只匹配 L1 块（标题+摘要，无摘要时回退成标题+正文前 N 个
-// token），开着等于把正文整个排除在检索之外。以前 sourceType 默认是 'all'，
-// uiToRequest 在非 paper 下根本不发 title_only，后端默认 false——所以默认关闭才是
-// 一直以来的实际行为；把 sourceType 默认改成 'paper' 时它被顺带打开了。
-const DEFAULT_UI: SearchUIState = {
-  query: '', method: 'hybrid', topK: 20, titleOnly: false, chunkMode: false,
-  venues: [], years: [], sourceType: 'paper', sortBy: 'score',
-};
-
-function readUI(sp: URLSearchParams): SearchUIState {
-  const num = (k: string, d?: number) => {
-    const v = sp.get(k);
-    if (v == null || v === '') return d;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : d;
-  };
-  // Back-compat: legacy `year=2024` (single) still hydrates as [2024].
-  const yearsParam = sp.get('years');
-  let years: number[] = [];
-  if (yearsParam) {
-    years = yearsParam.split(',').map((s) => Number(s)).filter((n) => Number.isFinite(n));
-  } else {
-    const legacyYear = num('year');
-    if (legacyYear != null) years = [legacyYear];
-  }
-  return {
-    query: sp.get('q') ?? '',
-    method: ((sp.get('method') as RetrievalMethod) || 'hybrid'),
-    topK: num('topK', 20) ?? 20,
-    venues: sp.get('venues')?.split(',').filter(Boolean) ?? [],
-    years,
-    // 跟着 DEFAULT_UI 翻过来：缺省即关闭，'1' 才打开。旧链接里的 titleOnly=0 仍然
-    // 读作关闭，语义不变；变的只是「不带这个参数」从开变成了关。
-    titleOnly: sp.get('titleOnly') === '1',
-    chunkMode: sp.get('chunk') === '1',
-    sourceType: ((sp.get('source') as SourceTypeFilter) || DEFAULT_UI.sourceType),
-    sortBy: ((sp.get('sortBy') as 'score' | 'year' | 'citations') || 'score'),
-  };
-}
-
-function writeUI(ui: SearchUIState): URLSearchParams {
-  const sp = new URLSearchParams();
-  if (ui.query) sp.set('q', ui.query);
-  if (ui.method !== DEFAULT_UI.method) sp.set('method', ui.method);
-  if (ui.topK !== DEFAULT_UI.topK) sp.set('topK', String(ui.topK));
-  if (ui.venues.length) sp.set('venues', ui.venues.join(','));
-  if (ui.years.length) sp.set('years', ui.years.slice().sort((a, b) => a - b).join(','));
-  if (ui.titleOnly) sp.set('titleOnly', '1');
-  if (ui.chunkMode) sp.set('chunk', '1');
-  if (ui.sourceType !== DEFAULT_UI.sourceType) sp.set('source', ui.sourceType);
-  if (ui.sortBy !== DEFAULT_UI.sortBy) sp.set('sortBy', ui.sortBy);
-  return sp;
-}
-
-function uiToRequest(ui: SearchUIState): SearchRequest {
-  return {
-    query: ui.query, top_k: ui.topK, method: ui.method,
-    source_type: ui.sourceType === 'all' ? undefined : ui.sourceType,
-    // venue/year 同 title_only：只有「论文」才发。上传文档和网页的 payload 里没有
-    // 这两个字段（papers_payload.py 的 upload/webpage profile），正向过滤等于空集——
-    // 实测 source_type=upload + venue=["ICML"] 返回 candidates:0、rerank skipped。
-    // 而筛选面板与覆盖卡片都只在 paper 下渲染，用户切到「上传」后既看不见也清不掉
-    // 残留的会议选择，只会看到「什么都检索不出来」。
-    venue: ui.sourceType === 'paper' && ui.venues.length ? ui.venues : undefined,
-    year: ui.sourceType === 'paper' && ui.years.length ? ui.years : undefined,
-    // 只有「论文」才发 title_only。它匹配的是 L1 标题 chunk，对上传文档/网页没有对应
-    // 物：实测 source_type=upload + title_only=true 只能返回封面页且 score 0.0，而
-    // false 时同一 query 得到 0.983 的正文。开关本身也只在 paper 下渲染，用户在其他
-    // 来源下关不掉它——照发就是发一个必然为空的检索。
-    title_only: ui.sourceType === 'paper' ? ui.titleOnly : undefined,
-    // 展开片段 = 关闭按论文去重（每篇返回全部命中 chunk）；默认 undefined（后端默认
-    // dedup=true，每篇仅最高分）保持缓存键干净。结果始终按论文分组排序，与此开关无关。
-    dedup_by_paper: ui.chunkMode ? false : undefined,
-  };
-}
 
 // ─── Pipeline Visualization ───
 const STAGE_INDEX: Record<StreamStage, number> = {
@@ -211,9 +120,9 @@ function PipelineVis({
 }
 
 // ─── Distribution Summary ───
-function DistributionBar({ data }: { data: SearchResponse }) {
+function DistributionBar({ data, hideVenues }: { data: SearchResponse; hideVenues?: boolean }) {
   const { token } = theme.useToken();
-  const venueDist = data.venue_distribution || [];
+  const venueDist = hideVenues ? [] : (data.venue_distribution || []);
   const yearDist = data.year_distribution || [];
   const totalCount = venueDist.reduce((s, v) => s + v.count, 0) || 1;
   if (!venueDist.length && !yearDist.length) return null;
@@ -221,6 +130,7 @@ function DistributionBar({ data }: { data: SearchResponse }) {
   return (
     <Card size="small" style={{ borderRadius: 10 }} styles={{ body: { padding: '12px 16px' } }}>
       <Row gutter={24}>
+        {!hideVenues && (
         <Col span={14}>
           <Typography.Text strong style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 6, display: 'block' }}>
             <BarChartOutlined style={{ marginRight: 4 }} /> 会议分布
@@ -251,7 +161,8 @@ function DistributionBar({ data }: { data: SearchResponse }) {
             ))}
           </Space>
         </Col>
-        <Col span={10}>
+        )}
+        <Col span={hideVenues ? 24 : 10}>
           <Typography.Text strong style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 6, display: 'block' }}>
             年份分布
           </Typography.Text>
@@ -306,6 +217,7 @@ function PaperCard({ p, rank, query }: { p: PaperGroup; rank: number; query: str
   const trackType = meta.track_type as string | undefined;
   const impactLevel = meta.impact_level as string | undefined;
   const citationCount = meta.citation_count as number | undefined;
+  const withdrawnMark = withdrawnMarks(meta);
   const pdfUrl = meta.pdf_url as string | undefined;
   const crawledAt = meta.crawled_at as string | undefined;
   const sourceUrl = (meta.source as string | undefined) || p.source;
@@ -413,6 +325,8 @@ function PaperCard({ p, rank, query }: { p: PaperGroup; rank: number; query: str
             {venue && <Tag color={venueColors[venue] || '#6366f1'} style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>{venue}</Tag>}
             {year && <Tag style={{ borderRadius: 4, background: token.colorFillSecondary, border: 'none', color: token.colorTextSecondary, fontSize: 11, margin: 0 }}>{year}</Tag>}
             {venueTier && <Tag color="gold" style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>{venueTier}</Tag>}
+            {withdrawnMark.withdrawn && <Tag color="red" style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>已撤稿</Tag>}
+            {withdrawnMark.versionLabel && <Tag style={{ borderRadius: 4, background: token.colorFillSecondary, border: 'none', color: token.colorTextSecondary, fontSize: 11, margin: 0 }}>{withdrawnMark.versionLabel}</Tag>}
             {(() => {
               const nonMain: Record<string, string> = {
                 poster: '海报', demo: '演示', tutorial: '教程', keynote: '主旨演讲',
@@ -423,9 +337,7 @@ function PaperCard({ p, rank, query }: { p: PaperGroup; rank: number; query: str
               // Non-main tracks get a caution badge so a 2-3pp poster/demo isn't mistaken for a full paper.
               const label = trackType ? nonMain[trackType] : undefined;
               return label ? (
-                <Tooltip title="非主会正文（短摘要 / 非研究论文，含金量较低）">
-                  <Tag color="volcano" style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>非主会 · {label}</Tag>
-                </Tooltip>
+                <Tag color="volcano" style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>非主会 · {label}</Tag>
               ) : null;
             })()}
             {impactLevel && impactLevel !== 'unknown' && <Tag color="purple" style={{ borderRadius: 4, fontSize: 11, margin: 0 }}>{impactLevel}</Tag>}
@@ -550,7 +462,6 @@ export default function Search() {
     if (next === 'code') nsp.set('mode', 'code'); else nsp.delete('mode');
     setSp(nsp, { replace: true });
   };
-  const isWide = useIsWide(NARROW_BREAKPOINT);
   const ui = useMemo(() => readUI(sp), [sp]);
   // Collapsed by default below the `lg` breakpoint (matches Layout.tsx's
   // sidebar-collapse point) — on a 390px phone the advanced filter panel
@@ -569,7 +480,11 @@ export default function Search() {
   }, [ui.query]);
 
   const search = useSearchStream();
-  const composingRef = useRef(false);
+  const endpoint = searchEndpoint(ui.sourceType);
+  const isArxiv = ui.sourceType === 'arxiv';
+  const hasFilters = ui.sourceType === 'paper' || isArxiv;
+  // Top 滑块拖动中只改本地值，松手才写 URL（写 URL 会触发重新检索）。
+  const [topKDraft, setTopKDraft] = useState<number | null>(null);
 
   // Paid-tier gate (PUBLIC_MODE): the gateway answers 401 (anon) / 402 (no
   // credits) → useSearchStream surfaces them as sentinel errors. Prompt login
@@ -596,7 +511,9 @@ export default function Search() {
     setSp(writeUI(next), { replace: true });
   }, [ui, setSp]);
 
-  const lastFiredQuery = useRef<string | null>(null);
+  // 请求体（含端点）的序列化；它变了就重新检索，只改 sortBy 不会变。query 为空时为 null。
+  const trigger = useMemo(() => searchTrigger(ui), [ui]);
+  const lastFiredTrigger = useRef<string | null>(null);
   useEffect(() => {
     // F2-c: `q` is shared with code mode's own URL state (codeSearchModel.ts).
     // Every hook in this component still runs regardless of which mode's JSX
@@ -605,26 +522,25 @@ export default function Search() {
     // connection was observed to stall the concurrent federated-search
     // request in the same browser tab (shared connection budget).
     if (mode !== 'paper') return;
-    if (!ui.query.trim()) return;
-    if (lastFiredQuery.current === ui.query) return;
-    lastFiredQuery.current = ui.query;
+    if (trigger === null) return;
+    if (lastFiredTrigger.current === trigger) return;
+    lastFiredTrigger.current = trigger;
     const req = uiToRequest(ui);
-    if (!search.hydrate(req)) {
-      search.mutate(req);
+    if (!search.hydrate(req, endpoint)) {
+      search.mutate(req, endpoint);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ui.query, mode]);
+  }, [trigger, mode]);
 
   const [history, setHistory] = useState<HistoryEntry[]>(getSearchHistory);
 
-  const handleSearch = (raw?: string) => {
-    if (composingRef.current) return;
-    const q = (raw ?? inputValue).trim();
+  const handleSearch = (raw: string) => {
+    const q = raw.trim();
     if (!q) return;
     saveSearchHistory(q);
     setHistory(getSearchHistory());
     if (q === ui.query) {
-      search.mutate(uiToRequest(ui));
+      search.mutate(uiToRequest(ui), endpoint);
     } else {
       patchUI({ query: q });
     }
@@ -650,6 +566,9 @@ export default function Search() {
   }, [search.data, ui.sortBy]);
 
   const totalChunks = search.data?.total_results ?? 0;
+  // unauthorized / insufficient_credits 已由上面的 effect 弹登录/充值，不在结果区重复报错。
+  const showError = search.stage === 'error' && !!search.error
+    && search.error !== 'unauthorized' && search.error !== 'insufficient_credits';
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
@@ -666,22 +585,15 @@ export default function Search() {
               left of the input, same row — it used to float above the card
               as its own element. Everything from here down is byte-for-byte
               what paper mode rendered before F2-c. */}
-          <div style={{ display: 'flex', flexDirection: isWide ? 'row' : 'column', gap: 8 }}>
+          <div className="flex flex-col gap-2 sm:flex-row">
             <ModeSwitch mode={mode} onChange={setMode} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <Input.Search
-                placeholder="输入检索关键词，回车或点检索触发..."
-                enterButton={<><SearchOutlined /> 检索</>}
-                size="large"
-                loading={search.isPending}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onCompositionStart={() => { composingRef.current = true; }}
-                onCompositionEnd={() => { composingRef.current = false; }}
-                onSearch={handleSearch}
-                allowClear
-              />
-            </div>
+            <SearchBox
+              value={inputValue}
+              onChange={setInputValue}
+              onSearch={handleSearch}
+              loading={search.isPending}
+              placeholder="输入检索关键词，回车或点检索触发..."
+            />
           </div>
           <AnimatePresence>
           {history.length > 0 && !ui.query && (
@@ -719,48 +631,61 @@ export default function Search() {
           <Row justify="space-between" align="middle">
             <Space size="middle" wrap>
               <Segmented
-                size="small"
+                ariaLabel="检索方式"
                 value={ui.method}
-                onChange={(v) => patchUI({ method: v as RetrievalMethod })}
+                onChange={(v) => patchUI({ method: v })}
                 options={[
                   { value: 'hybrid', label: '混合检索' },
                   { value: 'vector', label: '语义检索' },
                   { value: 'sparse', label: '稀疏检索' },
                 ]}
               />
-              <Segmented
-                size="small"
+              <Segmented<SourceTypeFilter>
+                ariaLabel="来源"
                 value={ui.sourceType}
-                onChange={(v) => patchUI({ sourceType: v as SourceTypeFilter })}
+                onChange={(v) => patchUI({ sourceType: v })}
                 options={[
                   { value: 'all', label: '全部' },
                   { value: 'paper', label: '论文' },
+                  { value: 'arxiv', label: 'arXiv' },
                   { value: 'webpage', label: '网页' },
                   { value: 'upload', label: '上传' },
                 ]}
               />
               <Space size={4}>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>Top</Typography.Text>
-                <Slider min={5} max={100} value={ui.topK} onChange={(v) => patchUI({ topK: v })} style={{ width: 100, margin: 0 }} />
-                <Typography.Text style={{ minWidth: 28, fontFamily: 'monospace', fontWeight: 600, color: token.colorPrimary, fontSize: 12 }}>{ui.topK}</Typography.Text>
+                <Slider
+                  min={5} max={100} value={topKDraft ?? ui.topK}
+                  onChange={(v) => setTopKDraft(v)}
+                  onChangeComplete={(v) => { setTopKDraft(null); patchUI({ topK: v }); }}
+                  style={{ width: 100, margin: 0 }}
+                />
+                <Typography.Text style={{ minWidth: 28, fontFamily: 'monospace', fontWeight: 600, color: token.colorPrimary, fontSize: 12 }}>{topKDraft ?? ui.topK}</Typography.Text>
               </Space>
               <Space size={4}>
                 <AppstoreOutlined style={{ color: ui.chunkMode ? token.colorPrimary : token.colorTextSecondary, fontSize: 14 }} />
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>展开全部片段</Typography.Text>
-                <Switch size="small" checked={ui.chunkMode} onChange={(v) => patchUI({ chunkMode: v })} />
+                <Switch size="sm" checked={ui.chunkMode} onCheckedChange={(v) => patchUI({ chunkMode: v })} />
               </Space>
-              {ui.sourceType === 'paper' && (
+              {hasFilters && (
                 <Space size={4}>
                   <FontSizeOutlined style={{ color: ui.titleOnly ? token.colorPrimary : token.colorTextSecondary, fontSize: 14 }} />
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>仅标题</Typography.Text>
-                  <Switch size="small" checked={ui.titleOnly} onChange={(v) => patchUI({ titleOnly: v })} />
+                  <Switch size="sm" checked={ui.titleOnly} onCheckedChange={(v) => patchUI({ titleOnly: v })} />
+                </Space>
+              )}
+              {isArxiv && (
+                <Space size={4}>
+                  <StopOutlined style={{ color: ui.includeWithdrawn ? token.colorPrimary : token.colorTextSecondary, fontSize: 14 }} />
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>包含撤稿</Typography.Text>
+                  <Switch size="sm" checked={ui.includeWithdrawn} onCheckedChange={(v) => patchUI({ includeWithdrawn: v })} />
                 </Space>
               )}
             </Space>
-            {ui.sourceType === 'paper' && (
+            {hasFilters && (
               <Button type="text" size="small" icon={<FilterOutlined />} onClick={() => setShowFilters((s) => !s)} style={{ color: showFilters ? token.colorPrimary : token.colorTextSecondary }}>
                 {showFilters ? '收起筛选' : '展开筛选'}
-                {(ui.venues.length + ui.years.length) > 0 && ` · ${ui.venues.length + ui.years.length}`}
+                {((isArxiv ? 0 : ui.venues.length) + ui.years.length) > 0 && ` · ${(isArxiv ? 0 : ui.venues.length) + ui.years.length}`}
               </Button>
             )}
           </Row>
@@ -768,7 +693,8 @@ export default function Search() {
           <PaperFilterPanel
             value={{ venues: ui.venues, years: ui.years }}
             onChange={(next: PaperFilterValue) => patchUI({ venues: next.venues, years: next.years })}
-            expanded={showFilters && ui.sourceType === 'paper'}
+            expanded={showFilters && hasFilters}
+            yearsOnly={isArxiv}
           />
         </Space>
       </Card>
@@ -787,7 +713,7 @@ export default function Search() {
 
       {search.data && (
         <>
-          <DistributionBar data={search.data} />
+          <DistributionBar data={search.data} hideVenues={isArxiv} />
 
           <Row justify="space-between" align="middle">
             <Space>
@@ -801,10 +727,10 @@ export default function Search() {
                 </Tag>
               )}
             </Space>
-            <Segmented
-              size="small"
+            <Segmented<SortBy>
+              ariaLabel="排序"
               value={ui.sortBy}
-              onChange={(v) => patchUI({ sortBy: v as 'score' | 'year' | 'citations' })}
+              onChange={(v) => patchUI({ sortBy: v })}
               options={[
                 { value: 'score', label: '相关度' },
                 { value: 'year', label: '年份' },
@@ -812,6 +738,18 @@ export default function Search() {
               ]}
             />
           </Row>
+
+          {papers.length === 0 && (
+            <div style={{ padding: '40px 0' }}>
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有结果">
+                {ui.sourceType === 'paper' && (
+                  <Button type="primary" icon={<SearchOutlined />} onClick={() => patchUI({ sourceType: 'arxiv' })}>
+                    在 arXiv 中检索
+                  </Button>
+                )}
+              </Empty>
+            </div>
+          )}
 
           {papers.map((p, i) => (
             <motion.div
@@ -826,7 +764,20 @@ export default function Search() {
         </>
       )}
 
-      {!search.isPending && !search.data && (
+      {showError && (
+        <Alert variant="destructive">
+          <CircleAlert />
+          <AlertTitle>检索失败</AlertTitle>
+          <AlertDescription>
+            <div className="flex w-full items-center justify-between gap-3">
+              <span>{search.error}</span>
+              <Button size="small" onClick={() => search.mutate(uiToRequest(ui), endpoint)}>重试</Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {!search.isPending && !search.data && !showError && (
         <div style={{ padding: '60px 0' }}>
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="开始检索" />
         </div>

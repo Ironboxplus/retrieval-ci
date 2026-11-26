@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 @router.post("/policy", response_model=IndexScopePolicyUpsert)
-async def upsert_index_policy(
+def upsert_index_policy(
     body: IndexScopePolicyUpsert,
     request: Request,
     user_id: str | None = Header(default=None, alias="X-Retrival-User-Id"),
@@ -38,7 +38,7 @@ async def upsert_index_policy(
 
 
 @router.get("/policy", response_model=IndexScopePolicyUpsert)
-async def get_index_policy(
+def get_index_policy(
     request: Request,
     host: str = Query(..., min_length=1, max_length=200),
     project: str = Query(..., min_length=1, max_length=2000),
@@ -54,7 +54,7 @@ async def get_index_policy(
 
 
 @router.post("/report", response_model=IndexReportResponse)
-async def report_index(
+def report_index(
     body: IndexReportRequest,
     request: Request,
     user_id: str | None = Header(default=None, alias="X-Retrival-User-Id"),
@@ -88,6 +88,19 @@ async def my_inventory(
                     "= compact summary (project counts + freshness only); the full tree is "
                     "~10MB for a heavy indexer and the inventory tool never renders files.",
     ),
+    lean: bool = Query(
+        default=False,
+        description="With detail=True, return only the fields an incremental diff compares "
+                    "(rel_path, kind, language, chunk_count, content_hash, size_bytes); "
+                    "indexed_at, collection and metadata come back empty. Servers that "
+                    "predate it ignore the flag and return the full tree.",
+    ),
+    project_contains: str | None = Query(
+        default=None, max_length=2000,
+        description="Compact summary only: render just the projects whose path contains "
+                    "this fragment (case-insensitive, backslash read as slash). users, "
+                    "hosts and totals still describe the whole inventory.",
+    ),
     user_id: str | None = Header(default=None, alias="X-Retrival-User-Id"),
 ):
     """The caller's own indexed-file inventory tree (compact summary by default)."""
@@ -108,13 +121,15 @@ async def my_inventory(
             kind=kind,
             detail=detail,
             code_scope_states=code_scope_states,
+            lean=lean,
+            project_contains=project_contains,
         )
 
     return await asyncio.to_thread(load_inventory)
 
 
 @router.get("/scope-overlap", response_model=ScopeOverlapResponse)
-async def scope_overlap(
+def scope_overlap(
     request: Request,
     project: str = Query(..., min_length=1, max_length=2000),
     host: str | None = Query(default=None),

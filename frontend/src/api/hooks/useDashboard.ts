@@ -119,7 +119,8 @@ export interface ActivityResp {
 }
 
 const FAST = 10_000; // ops-grade refresh: 10s for live counters
-const SLOW = 60_000; // 1min for distributions (heavy GROUP BY)
+const SLOW = 60_000; // 1min for the SQLite detail card
+const DISTRIBUTION_REFRESH = 600_000; // 10min: matches the backend stale-while-revalidate TTL of the heavy GROUP BYs
 
 export function useOverview() {
   return useQuery({
@@ -151,7 +152,7 @@ export function useDistribution() {
     queryKey: ['dash', 'distribution'],
     queryFn: () => api.get<DistributionResp>('/dashboard/distribution').then((r) => r.data),
     enabled,
-    refetchInterval: SLOW,
+    refetchInterval: DISTRIBUTION_REFRESH,
   });
 }
 

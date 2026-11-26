@@ -13,7 +13,8 @@ remote paths here.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -47,6 +48,10 @@ class UploadStageContext:
 
     project_root: Path = _PROJECT_ROOT
     upload_root: Path = _DEFAULT_UPLOAD_ROOT
+
+    # Cancellation flag; the orchestrator swaps in its own Event so run_local()
+    # kills the stage's subprocess when the runner cancels (see StageContext.abort).
+    abort: threading.Event = field(default_factory=threading.Event)
 
     # ----------------------------------------------------------- computed paths
     @property

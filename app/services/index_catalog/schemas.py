@@ -71,6 +71,11 @@ class IndexReportResponse(BaseModel):
     total_files: int
 
 
+# Automatic indexing (the client watcher and auto-refresh) runs at most once per this many
+# seconds per scope. The 5-minute floor is the user's rule (2026-11-15).
+AUTO_INDEX_MIN_INTERVAL_S = 300
+
+
 class IndexScopePolicyUpsert(BaseModel):
     host: str = Field(..., min_length=1, max_length=200)
     project: str = Field(..., min_length=1, max_length=2000)
@@ -79,7 +84,8 @@ class IndexScopePolicyUpsert(BaseModel):
     auto_refresh: bool = True
     respect_gitignore: bool = True
     exclude_globs: list[str] = Field(default_factory=list, max_length=200)
-    min_check_interval_s: int = Field(default=10, ge=0, le=3600)
+    min_check_interval_s: int = Field(
+        default=AUTO_INDEX_MIN_INTERVAL_S, ge=AUTO_INDEX_MIN_INTERVAL_S, le=3600)
 
     @field_validator("project", "root_dir")
     @classmethod

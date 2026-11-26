@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import desc
@@ -43,10 +44,40 @@ from app.services.task_runtime import (
     get_task_workflow_graph,
     purge_task_runtime_rows,
 )
+from app.services.pipeline.progress import pipeline_progress
+from core.timestamps import from_local_naive, from_utc_naive, local_naive_iso, utc_naive_iso
+from app.services.pipeline.runner_registry import TaskNotCancellable, get_runner
 from app.tasks.base import cancel_task, TASKS_DIR
 from app.tasks.crawl_tasks import enqueue_crawl_urls
 
 router = APIRouter()
+
+# Server-Sent Events, WHATWG HTML Living Standard section 9.2.
+SSE_RETRY_MS = 3000          # `retry:` field, 9.2.5: reconnection delay the client should use
+SSE_KEEPALIVE_SECONDS = 15.0  # comment lines keep idle proxies/EventSource from timing out
+
+
+def _sse_start_event_id(after_event_id: int, last_event_id: Optional[str]) -> int:
+    """First task-event id to send after.
+
+    A reconnecting EventSource sends the last `id:` it saw as the `Last-Event-ID`
+    request header (9.2.4). It is client-controlled text: anything that is not a
+    non-negative integer is ignored rather than rejected, and the explicit
+    `after_event_id` query parameter still applies.
+    """
+    try:
+        header_id = int(last_event_id) if last_event_id is not None else 0
+    except ValueError:
+        header_id = 0
+    return max(after_event_id, header_id, 0)
+
+
+def _sse_message(event: str, data: Any, event_id: Optional[int] = None) -> str:
+    """One event block. `id:` is only set for task-event: an event without an `id`
+    field leaves the client's last-event-ID unchanged (9.2.6), so snapshot / resource
+    / final never move the resume cursor."""
+    head = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{head}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 def _enqueue_retry(task: Task, retry_urls: List[str]) -> None:
@@ -209,6 +240,9 @@ class TaskResponse(BaseModel):
     duration_seconds: Optional[float] = None
     params: Optional[dict] = None
     result: Optional[dict] = None
+    # Running ingest pipelines only (list view): time-weighted fraction, ETA,
+    # current stage. See app/services/pipeline/progress.py.
+    pipeline: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -227,6 +261,9 @@ class TaskListResponse(BaseModel):
     page: int
     page_size: int
     tasks: List[TaskResponse]
+    # All running ingest pipelines, not just this page: seconds until the last
+    # one is done (stage-lane backlog, see app/services/pipeline/progress.py).
+    pipeline_eta_seconds: Optional[float] = None
 
 
 class TaskEventListResponse(BaseModel):
@@ -283,7 +320,7 @@ def _event_to_response(event: TaskEvent) -> TaskEventResponse:
         stage=event.stage,
         message=event.message,
         payload=event.payload_json,
-        created_at=event.created_at,
+        created_at=from_utc_naive(event.created_at),
     )
 
 
@@ -300,7 +337,7 @@ def _resource_to_response(sample: TaskResourceSample) -> TaskResourceSampleRespo
         thread_count=sample.thread_count,
         open_file_count=sample.open_file_count,
         extra=sample.extra_json,
-        created_at=sample.created_at,
+        created_at=from_utc_naive(sample.created_at),
     )
 
 
@@ -321,10 +358,10 @@ def _subtask_to_response(subtask: TaskSubtask) -> TaskSubtaskResponse:
         error_message=subtask.error_message,
         metadata=subtask.metadata_json,
         result=subtask.result_json,
-        created_at=subtask.created_at,
-        updated_at=subtask.updated_at,
-        started_at=subtask.started_at,
-        completed_at=subtask.completed_at,
+        created_at=from_utc_naive(subtask.created_at),
+        updated_at=from_utc_naive(subtask.updated_at),
+        started_at=from_local_naive(subtask.started_at),
+        completed_at=from_local_naive(subtask.completed_at),
     )
 
 
@@ -339,15 +376,43 @@ def _task_to_response(task: Task) -> TaskResponse:
         error_message=task.error_message,
         retry_count=task.retry_count or 0,
         max_retries=task.max_retries or 3,
-        created_at=task.created_at,
-        started_at=task.started_at,
-        completed_at=task.completed_at,
+        created_at=from_utc_naive(task.created_at),
+        started_at=from_local_naive(task.started_at),
+        completed_at=from_local_naive(task.completed_at),
         worker_id=task.worker_id,
-        last_heartbeat=task.last_heartbeat,
+        last_heartbeat=from_local_naive(task.last_heartbeat),
         duration_seconds=_task_duration_seconds(task),
         params=task.params_json,
         result=task.result_json,
     )
+
+
+def _pipeline_progress() -> Dict[str, Any]:
+    with get_db_session() as db:
+        ids = [row.id for row in db.query(Task.id).filter(
+            Task.task_type == "ingest_pipeline", Task.status == DBTaskStatus.running,
+        )]
+        return pipeline_progress(db, ids)
+
+
+def _resource_summary(task_id: int) -> Dict[str, Any]:
+    summary = get_task_resource_summary(task_id)
+    if summary.get("latest"):
+        summary["latest"]["created_at"] = utc_naive_iso(summary["latest"].get("created_at"))
+    return summary
+
+
+def _graph_with_offsets(graph: Dict[str, Any]) -> Dict[str, Any]:
+    """task_runtime serialises the naive columns with isoformat(); give them offsets."""
+    for node in graph.get("nodes", []):
+        for key in ("created_at", "updated_at"):
+            node[key] = utc_naive_iso(node.get(key))
+        for key in ("started_at", "completed_at"):
+            node[key] = local_naive_iso(node.get(key))
+    for edge in graph.get("edges", []):
+        for key in ("created_at", "updated_at"):
+            edge[key] = utc_naive_iso(edge.get(key))
+    return graph
 
 
 def _task_to_detail(task: Task, db: Session) -> TaskDetailResponse:
@@ -358,14 +423,14 @@ def _task_to_detail(task: Task, db: Session) -> TaskDetailResponse:
     return TaskDetailResponse(
         **_task_to_response(task).model_dump(),
         health=_task_health(task),
-        resource_summary=get_task_resource_summary(task.id),
+        resource_summary=_resource_summary(task.id),
         subtask_summary=_subtask_summary(task.id, db),
         recent_events=[_event_to_response(event) for event in recent_events],
     )
 
 
 def _workflow_response(task_id: int, task_type: str, task_status: str) -> TaskWorkflowResponse:
-    graph = get_task_workflow_graph(task_id)
+    graph = _graph_with_offsets(get_task_workflow_graph(task_id))
     return TaskWorkflowResponse(
         task_id=task_id,
         task_type=task_type,
@@ -389,7 +454,7 @@ def _workflow_payload(task: Task) -> Dict[str, Any]:
 
 
 @router.get("", response_model=TaskListResponse)
-async def list_tasks(
+def list_tasks(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     status: Optional[str] = Query(None, description="状态筛选: pending|running|completed|failed|cancelled"),
@@ -418,16 +483,22 @@ async def list_tasks(
         (page - 1) * page_size
     ).limit(page_size).all()
 
+    responses = [_task_to_response(task) for task in tasks]
+    board = _pipeline_progress()
+    for resp in responses:
+        resp.pipeline = board["tasks"].get(resp.id)
+
     return TaskListResponse(
         total=total,
         page=page,
         page_size=page_size,
-        tasks=[_task_to_response(task) for task in tasks],
+        tasks=responses,
+        pipeline_eta_seconds=board["eta_seconds"],
     )
 
 
 @router.get("/{task_id}", response_model=TaskDetailResponse)
-async def get_task(
+def get_task(
     task_id: int,
     db: Session = Depends(get_db)
 ):
@@ -446,10 +517,11 @@ async def get_task(
 
 
 @router.get("/{task_id}/events", response_model=TaskEventListResponse)
-async def get_task_events(
+def get_task_events(
     task_id: int,
     after_id: Optional[int] = Query(None, ge=1, description="只返回该事件ID之后的事件"),
     limit: int = Query(100, ge=1, le=500, description="返回的最大事件数"),
+    tail: bool = Query(False, description="返回最新的 limit 条（仍按 ID 升序），而不是最早的"),
     db: Session = Depends(get_db),
 ):
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -461,7 +533,10 @@ async def get_task_events(
         query = query.filter(TaskEvent.id > after_id)
 
     total = query.count()
-    events = query.order_by(TaskEvent.id.asc()).limit(limit).all()
+    if tail:
+        events = list(reversed(query.order_by(TaskEvent.id.desc()).limit(limit).all()))
+    else:
+        events = query.order_by(TaskEvent.id.asc()).limit(limit).all()
     return TaskEventListResponse(
         total=total,
         events=[_event_to_response(event) for event in events],
@@ -469,7 +544,7 @@ async def get_task_events(
 
 
 @router.get("/{task_id}/resources", response_model=TaskResourceListResponse)
-async def get_task_resources(
+def get_task_resources(
     task_id: int,
     after_id: Optional[int] = Query(None, ge=1, description="只返回该采样ID之后的资源样本"),
     limit: int = Query(100, ge=1, le=500, description="返回的最大资源样本数"),
@@ -492,7 +567,7 @@ async def get_task_resources(
 
 
 @router.get("/{task_id}/subtasks", response_model=TaskSubtaskListResponse)
-async def get_task_subtasks(
+def get_task_subtasks(
     task_id: int,
     status: Optional[str] = Query(None, description="子任务状态筛选"),
     limit: int = Query(500, ge=1, le=1000, description="最大子任务数"),
@@ -518,7 +593,7 @@ async def get_task_subtasks(
 
 
 @router.get("/{task_id}/subtasks/{subtask_id}", response_model=TaskSubtaskResponse)
-async def get_task_subtask(
+def get_task_subtask(
     task_id: int,
     subtask_id: int,
     db: Session = Depends(get_db),
@@ -533,7 +608,7 @@ async def get_task_subtask(
 
 
 @router.get("/{task_id}/workflow", response_model=TaskWorkflowResponse)
-async def get_task_workflow(
+def get_task_workflow(
     task_id: int,
     db: Session = Depends(get_db),
 ):
@@ -548,35 +623,46 @@ async def get_task_workflow(
     return _workflow_response(task.id, task.task_type, task.status.value if task.status else "unknown")
 
 
+def _require_task(task_id: int) -> None:
+    with get_db_session() as db:
+        if db.query(Task).filter(Task.id == task_id).first() is None:
+            raise HTTPException(404, "Task not found")
+
+
 @router.get("/{task_id}/stream")
 async def stream_task(
     task_id: int,
     request: Request,
     after_event_id: int = Query(0, ge=0),
     after_resource_id: int = Query(0, ge=0),
+    last_event_id_header: Optional[str] = Header(None, alias="Last-Event-ID"),
 ):
     """
-    以 SSE 形式流式输出任务快照、事件和资源数据。
+    以 SSE 形式流式输出任务快照、事件和资源数据（WHATWG HTML 9.2）。
+
+    `task-event` 带 `id:`（= TaskEvent.id），断线重连时浏览器自动带 `Last-Event-ID`，
+    只补发 id 更大的事件；`snapshot` / `resource` / `final` 不带 id。流首发 `retry:`，
+    空闲每 15 s 发注释行保活。任务进入终态后发 `final` 并由服务器结束连接：
+    **客户端收到 `final` 必须调用 `EventSource.close()`**，否则浏览器会按 `retry:` 自动重连，
+    每次都再收到一份 snapshot + final。
     """
-    with get_db_session() as db:
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if task is None:
-            raise HTTPException(404, "Task not found")
+    await asyncio.to_thread(_require_task, task_id)
 
     async def event_generator():
-        last_event_id = after_event_id
+        last_event_id = _sse_start_event_id(after_event_id, last_event_id_header)
         last_resource_id = after_resource_id
         first_snapshot = True
+        last_output = time.monotonic()
 
-        while True:
-            if await request.is_disconnected():
-                break
-
+        def poll_once() -> tuple[List[str], bool, bool]:
+            """One DB pass on a worker thread: (messages in send order, drained, finished)."""
+            nonlocal last_event_id, last_resource_id, first_snapshot
+            messages: List[str] = []
             with get_db_session() as db:
                 task = db.query(Task).filter(Task.id == task_id).first()
                 if task is None:
-                    yield "event: error\ndata: {\"message\":\"Task not found\"}\n\n"
-                    break
+                    messages.append("event: error\ndata: {\"message\":\"Task not found\"}\n\n")
+                    return messages, False, True
 
                 if task.task_type == "crawl_urls":
                     sync_crawl_task_rollup(task.id, status=task.status.value, db=db)
@@ -584,7 +670,7 @@ async def stream_task(
 
                 if first_snapshot:
                     snapshot = _task_detail_payload(task, db)
-                    yield f"event: snapshot\ndata: {json.dumps(snapshot, ensure_ascii=False)}\n\n"
+                    messages.append(_sse_message("snapshot", snapshot))
                     first_snapshot = False
 
                 events = db.query(TaskEvent).filter(
@@ -594,7 +680,7 @@ async def stream_task(
                 for event in events:
                     payload = _event_to_response(event).model_dump(mode="json")
                     last_event_id = event.id
-                    yield f"event: task-event\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    messages.append(_sse_message("task-event", payload, event.id))
 
                 samples = db.query(TaskResourceSample).filter(
                     TaskResourceSample.task_id == task_id,
@@ -603,19 +689,40 @@ async def stream_task(
                 for sample in samples:
                     payload = _resource_to_response(sample).model_dump(mode="json")
                     last_resource_id = sample.id
-                    yield f"event: resource\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    messages.append(_sse_message("resource", payload))
 
-                if task.status in {
+                # A full batch means more may be waiting: poll again at once instead
+                # of sleeping, and only announce the end once nothing is left to send.
+                drained = bool(events or samples)
+                if not drained and task.status in {
                     DBTaskStatus.completed,
                     DBTaskStatus.failed,
                     DBTaskStatus.cancelled,
                     DBTaskStatus.timeout,
                 }:
                     final_snapshot = _task_detail_payload(task, db)
-                    yield f"event: final\ndata: {json.dumps(final_snapshot, ensure_ascii=False)}\n\n"
-                    break
+                    messages.append(_sse_message("final", final_snapshot))
+                    return messages, drained, True
+            return messages, drained, False
 
+        yield f"retry: {SSE_RETRY_MS}\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                break
+            messages, drained, finished = await asyncio.to_thread(poll_once)
+            for message in messages:
+                yield message
+            if messages:
+                last_output = time.monotonic()
+            if finished:
+                break
+            if drained:
+                continue
             await asyncio.sleep(1.0)
+            if time.monotonic() - last_output >= SSE_KEEPALIVE_SECONDS:
+                yield ": keepalive\n\n"
+                last_output = time.monotonic()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -626,30 +733,31 @@ async def stream_task_workflow(
     request: Request,
     after_event_id: int = Query(0, ge=0),
     after_resource_id: int = Query(0, ge=0),
+    last_event_id_header: Optional[str] = Header(None, alias="Last-Event-ID"),
 ):
     """
     以 SSE 形式流式输出任务详情、工作流图、事件和资源数据。
+
+    重连、`id:`、保活与结束语义同 `/{task_id}/stream`：收到 `final` 后客户端必须 `close()`。
     """
-    with get_db_session() as db:
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if task is None:
-            raise HTTPException(404, "Task not found")
+    await asyncio.to_thread(_require_task, task_id)
 
     async def workflow_event_generator():
-        last_event_id = after_event_id
+        last_event_id = _sse_start_event_id(after_event_id, last_event_id_header)
         last_resource_id = after_resource_id
         last_workflow_signature = ""
         first_snapshot = True
+        last_output = time.monotonic()
 
-        while True:
-            if await request.is_disconnected():
-                break
-
+        def poll_once() -> tuple[List[str], bool, bool]:
+            """One DB pass on a worker thread: (messages in send order, drained, finished)."""
+            nonlocal last_event_id, last_resource_id, last_workflow_signature, first_snapshot
+            messages: List[str] = []
             with get_db_session() as db:
                 task = db.query(Task).filter(Task.id == task_id).first()
                 if task is None:
-                    yield "event: error\ndata: {\"message\":\"Task not found\"}\n\n"
-                    break
+                    messages.append("event: error\ndata: {\"message\":\"Task not found\"}\n\n")
+                    return messages, False, True
 
                 if task.task_type == "crawl_urls":
                     sync_crawl_task_rollup(task.id, status=task.status.value, db=db)
@@ -661,11 +769,11 @@ async def stream_task_workflow(
 
                 if first_snapshot:
                     snapshot = {"task": task_payload, "workflow": workflow_payload}
-                    yield f"event: snapshot\ndata: {json.dumps(snapshot, ensure_ascii=False)}\n\n"
+                    messages.append(_sse_message("snapshot", snapshot))
                     last_workflow_signature = workflow_signature
                     first_snapshot = False
                 elif workflow_signature != last_workflow_signature:
-                    yield f"event: workflow\ndata: {json.dumps(workflow_payload, ensure_ascii=False)}\n\n"
+                    messages.append(_sse_message("workflow", workflow_payload))
                     last_workflow_signature = workflow_signature
 
                 events = db.query(TaskEvent).filter(
@@ -675,7 +783,7 @@ async def stream_task_workflow(
                 for event in events:
                     payload = _event_to_response(event).model_dump(mode="json")
                     last_event_id = event.id
-                    yield f"event: task-event\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    messages.append(_sse_message("task-event", payload, event.id))
 
                 samples = db.query(TaskResourceSample).filter(
                     TaskResourceSample.task_id == task_id,
@@ -684,25 +792,46 @@ async def stream_task_workflow(
                 for sample in samples:
                     payload = _resource_to_response(sample).model_dump(mode="json")
                     last_resource_id = sample.id
-                    yield f"event: resource\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    messages.append(_sse_message("resource", payload))
 
-                if task.status in {
+                # A full batch means more may be waiting: poll again at once instead
+                # of sleeping, and only announce the end once nothing is left to send.
+                drained = bool(events or samples)
+                if not drained and task.status in {
                     DBTaskStatus.completed,
                     DBTaskStatus.failed,
                     DBTaskStatus.cancelled,
                     DBTaskStatus.timeout,
                 }:
                     final_snapshot = {"task": task_payload, "workflow": workflow_payload}
-                    yield f"event: final\ndata: {json.dumps(final_snapshot, ensure_ascii=False)}\n\n"
-                    break
+                    messages.append(_sse_message("final", final_snapshot))
+                    return messages, drained, True
+            return messages, drained, False
 
+        yield f"retry: {SSE_RETRY_MS}\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                break
+            messages, drained, finished = await asyncio.to_thread(poll_once)
+            for message in messages:
+                yield message
+            if messages:
+                last_output = time.monotonic()
+            if finished:
+                break
+            if drained:
+                continue
             await asyncio.sleep(1.0)
+            if time.monotonic() - last_output >= SSE_KEEPALIVE_SECONDS:
+                yield ": keepalive\n\n"
+                last_output = time.monotonic()
 
     return StreamingResponse(workflow_event_generator(), media_type="text/event-stream")
 
 
 @router.post("/{task_id}/cancel", response_model=TaskActionResponse)
-async def cancel_task_endpoint(
+def cancel_task_endpoint(
     task_id: int,
     db: Session = Depends(get_db)
 ):
@@ -721,19 +850,20 @@ async def cancel_task_endpoint(
             f"Cannot cancel task in status: {task.status.value}"
         )
 
-    if task.task_type == "medical_corpus_download":
-        from app.services.medical_corpus import get_medical_download_runner
-
-        task.status = DBTaskStatus.cancelled
-        task.completed_at = datetime.now()
-        db.add(TaskEvent(
-            task_id=task.id, event_type="task.cancelled", level="warning",
-            stage="task.cancelled", message="Medical download cancellation requested",
-            payload_json={"task_id": task.id},
-        ))
-        db.commit()
-        await asyncio.to_thread(get_medical_download_runner().cancel_download, task_id)
-        return TaskActionResponse(success=True, message="Medical download cancellation requested", task_id=task_id)
+    # A task type with a registered runner is cancelled by that runner: it flips
+    # the status atomically AND stops the worker. Anything else (crawl_urls)
+    # falls through to the legacy status-only path below.
+    runner = get_runner(task.task_type)
+    if runner is not None:
+        try:
+            cancelled = runner.cancel(task_id)
+        except NotImplementedError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except TaskNotCancellable as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if not cancelled:
+            raise HTTPException(409, "Task already finished")
+        return TaskActionResponse(success=True, message="Task cancelled successfully", task_id=task_id)
 
     task.status = DBTaskStatus.cancelled
     task.completed_at = datetime.now()
@@ -762,7 +892,7 @@ async def cancel_task_endpoint(
 
 
 @router.post("/{task_id}/retry", response_model=TaskActionResponse)
-async def retry_task(
+def retry_task(
     task_id: int,
     db: Session = Depends(get_db)
 ):
@@ -775,24 +905,21 @@ async def retry_task(
     if not task:
         raise HTTPException(404, "Task not found")
 
-    if task.task_type == "medical_corpus_download":
-        if task.status not in (DBTaskStatus.failed, DBTaskStatus.cancelled):
-            raise HTTPException(400, f"Cannot retry task in status: {task.status.value}")
-        if task.retry_count >= task.max_retries:
-            raise HTTPException(400, f"Task has exceeded max retries ({task.max_retries})")
-        from app.services.medical_corpus import get_medical_download_runner
-
+    runner = get_runner(task.task_type)
+    if runner is not None:
+        # Runner-driven tasks are executed by an in-process orchestrator, not a
+        # queue: a row set back to pending would never run. The runner re-drives
+        # it in place, from the stage that stopped.
         try:
-            scheduled = await asyncio.to_thread(get_medical_download_runner().retry_download, task_id)
+            result = runner.retry(task_id)
+        except (ValueError, NotImplementedError) as exc:
+            raise HTTPException(400, str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(503, detail=str(exc)) from exc
-        if not scheduled:
-            raise HTTPException(409, "Medical download retry could not be scheduled")
-        return TaskActionResponse(
-            success=True,
-            message="Medical download queued for retry",
-            task_id=task_id,
-        )
+        if result.get("status") != "started":
+            raise HTTPException(409, result.get("error") or "retry conflict")
+        return TaskActionResponse(success=True, message="Task re-driven from its failed stage",
+                                  task_id=task_id)
 
     retry_urls: List[str] = []
     if task.task_type == "crawl_urls" and task.status in (DBTaskStatus.failed, DBTaskStatus.completed):
@@ -946,7 +1073,7 @@ async def retry_task(
 
 
 @router.post("/{task_id}/subtasks/{subtask_id}/retry", response_model=TaskActionResponse)
-async def retry_task_subtask(
+def retry_task_subtask(
     task_id: int,
     subtask_id: int,
     db: Session = Depends(get_db),
@@ -1100,7 +1227,7 @@ async def retry_task_subtask(
 
 
 @router.post("/{task_id}/workflow/nodes/{subtask_id}/actions/{action}", response_model=TaskActionResponse)
-async def workflow_node_action(
+def workflow_node_action(
     task_id: int,
     subtask_id: int,
     action: str,
@@ -1119,7 +1246,7 @@ async def workflow_node_action(
 
     action = action.lower()
     if action == "retry":
-        return await retry_task_subtask(task_id, subtask_id, db)
+        return retry_task_subtask(task_id, subtask_id, db)
 
     if action != "skip":
         raise HTTPException(400, f"Unsupported node action: {action}")
@@ -1191,7 +1318,7 @@ async def workflow_node_action(
 
 
 @router.post("/{task_id}/workflow/edges/{edge_id}/actions/{action}", response_model=TaskActionResponse)
-async def workflow_edge_action(
+def workflow_edge_action(
     task_id: int,
     edge_id: int,
     action: str,
@@ -1239,7 +1366,7 @@ async def workflow_edge_action(
 
 
 @router.delete("/{task_id}", response_model=TaskActionResponse)
-async def delete_task(
+def delete_task(
     task_id: int,
     db: Session = Depends(get_db)
 ):

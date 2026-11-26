@@ -24,7 +24,7 @@ from collections.abc import Callable, Mapping
 from urllib.parse import unquote, urlsplit
 
 import aiohttp
-from aiohttp_socks import ChainProxyConnector
+from aiohttp_socks import ChainProxyConnector, ProxyConnector
 
 from pipeline.paper_crawler.runtime_files import remove_file_if_present
 
@@ -148,7 +148,7 @@ class ProxyPoolProbeReport:
 
 @dataclass
 class _ProxyExitState:
-    url: str
+    url: str | None  # None = the pool's single exit-less route (first hop only)
     ordinal: int
     verified: bool = False
     ewma_latency_seconds: float | None = None
@@ -330,6 +330,10 @@ class ChainedProxyPool:
     Exit reachability is tested with the same two-hop connector used for real
     transfers.  There is deliberately no direct-connect branch and no raw
     credential logging surface.
+
+    With no exits the pool degrades to one route that goes through the first
+    hop only (never direct).  That route is retried in place, cooldown
+    included, instead of failing over to another exit.
     """
 
     def __init__(self, first_hop_proxy: str, exit_urls: list[str]) -> None:
@@ -338,11 +342,10 @@ class ChainedProxyPool:
             self.first_hop_proxy,
             schemes=_SUPPORTED_CHAIN_EXIT_SCHEMES,
         )
-        if not exit_urls:
-            raise RuntimeError("chained proxy pool contains no permitted exits")
+        self._exitless = not exit_urls
         states = [
             _ProxyExitState(url=url, ordinal=index)
-            for index, url in enumerate(exit_urls)
+            for index, url in enumerate(exit_urls or [None])
         ]
         random.SystemRandom().shuffle(states)
         self._states = states
@@ -390,11 +393,15 @@ class ChainedProxyPool:
                 raise RuntimeError(
                     f"{len(missing)} allowlisted exit endpoint(s) are absent from {path}"
                 )
+        if not exits_by_endpoint:
+            # An exit-less pool is a deliberate choice (``cls(first_hop, [])``),
+            # not what an empty or fully filtered pool file should turn into.
+            raise RuntimeError(f"proxy pool file holds no permitted exits: {path}")
         return cls(first_hop_proxy, list(exits_by_endpoint.values()))
 
     @property
     def configured_count(self) -> int:
-        return len(self._states)
+        return 0 if self._exitless else len(self._states)
 
     @property
     def healthy_count(self) -> int:
@@ -415,7 +422,9 @@ class ChainedProxyPool:
             headers.update(extra)
         return headers
 
-    def _connector(self, exit_url: str) -> ChainProxyConnector:
+    def _connector(self, exit_url: str | None) -> ChainProxyConnector | ProxyConnector:
+        if exit_url is None:
+            return ProxyConnector.from_url(self.first_hop_proxy, limit=1)
         return ChainProxyConnector.from_urls(
             [self.first_hop_proxy, exit_url],
             limit=1,
@@ -454,28 +463,37 @@ class ChainedProxyPool:
         *,
         verified_only: bool = False,
     ) -> _ProxyExitState | None:
-        async with self._lock:
-            now = time.monotonic()
-            candidates = [
-                state for state in self._states
-                if state.ordinal not in excluded_ordinals
-                and state.cooldown_until <= now
-                and (state.verified or not verified_only)
-            ]
-            if not candidates:
-                return None
-            candidates.sort(key=lambda state: (
-                not state.verified,
-                state.in_flight,
-                state.uses,
-                state.consecutive_failures,
-                state.ewma_latency_seconds
-                if state.ewma_latency_seconds is not None else float("inf"),
-            ))
-            state = candidates[0]
-            state.in_flight += 1
-            state.uses += 1
-            return state
+        """Lease the best exit; wait out a cooldown rather than fail on it.
+
+        ``None`` only when ``excluded_ordinals``/``verified_only`` leave no
+        exit that could ever become available.
+        """
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                eligible = [
+                    state for state in self._states
+                    if state.ordinal not in excluded_ordinals
+                    and (state.verified or not verified_only)
+                ]
+                candidates = [s for s in eligible if s.cooldown_until <= now]
+                if candidates:
+                    candidates.sort(key=lambda state: (
+                        not state.verified,
+                        state.in_flight,
+                        state.uses,
+                        state.consecutive_failures,
+                        state.ewma_latency_seconds
+                        if state.ewma_latency_seconds is not None else float("inf"),
+                    ))
+                    state = candidates[0]
+                    state.in_flight += 1
+                    state.uses += 1
+                    return state
+                if not eligible:
+                    return None
+                wait = min(s.cooldown_until for s in eligible) - now
+            await asyncio.sleep(wait)
 
     async def _probe_one(
         self,
@@ -528,7 +546,9 @@ class ChainedProxyPool:
         """
         excluded = excluded_ordinals if excluded_ordinals is not None else set()
         state = await self._acquire(excluded, verified_only=True)
-        if state is None:
+        if state is None or state.url is None:
+            if state is not None:
+                await self._release(state)
             raise ChainedProxyDownloadError("no eligible landing exit for browser session")
         bridge = _XrayBrowserBridge(
             xray_executable=Path(xray_executable),
@@ -600,11 +620,17 @@ class ChainedProxyPool:
             raise ValueError("max_attempts must be positive")
         used: set[int] = set()
         failures: Counter[str] = Counter()
-        for _ in range(min(max_attempts, len(self._states))):
+        attempted = 0
+        # Exits are tried once each; the exit-less route has nowhere to fail
+        # over to, so it is retried in place (``_acquire`` waits out cooldown).
+        budget = max_attempts if self._exitless else min(max_attempts, len(self._states))
+        for _ in range(budget):
             state = await self._acquire(used)
             if state is None:
                 break
-            used.add(state.ordinal)
+            attempted += 1
+            if not self._exitless:
+                used.add(state.ordinal)
             started = time.monotonic()
             timeout = aiohttp.ClientTimeout(
                 total=timeout_seconds,
@@ -659,5 +685,184 @@ class ChainedProxyPool:
             f"{name}={count}" for name, count in sorted(failures.items())
         ) or "no eligible exit"
         raise ChainedProxyDownloadError(
-            f"two-hop download failed after {len(used)} distinct exit(s): {detail}"
+            f"two-hop download failed after {attempted} attempt(s) "
+            f"over {len(used)} distinct exit(s): {detail}"
         )
+
+
+# Responses that mean "this host is refusing us right now" (Anubis/IEEE answer
+# 202 with a challenge page, Cloudflare 403/503, rate limits 429). They are never
+# retried at once: the host is cooled down and the queue moves to another host.
+BLOCKING_STATUS_CODES = frozenset({202, 403, 429, 503})
+# Bodies that are an anti-bot interstitial rather than the requested file:
+# Springer/Akamai "Client Challenge", Cloudflare, Anubis (DBLP).
+CHALLENGE_PAGE_MARKERS = (
+    b"<title>Client Challenge</title>",
+    b"<title>Just a moment...</title>",
+    b"challenges.cloudflare.com",
+    b"Attention Required! | Cloudflare",
+    b"Making sure you&#39;re not a bot",
+    b"Making sure you're not a bot",
+)
+
+
+class ChallengePageError(ValueError):
+    """A response whose body is an anti-bot challenge page, not the file."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def is_challenge_page(head: bytes) -> bool:
+    return any(marker in head for marker in CHALLENGE_PAGE_MARKERS)
+
+
+def interleave_by_key(items, key, *, secondary_key=None) -> list:
+    """Order ``items`` so two consecutive entries never share ``key`` while another
+    key still has work.
+
+    Each step takes the head of the key queue with the most remaining items among
+    those different from the previous step's key, so the run ends with the
+    shortest possible single-key tail. ``secondary_key`` breaks ties toward a head
+    whose secondary value also differs from the previous one (two venues behind
+    one host still alternate). Order inside one key is preserved.
+    """
+    queues: dict = {}
+    for item in items:
+        queues.setdefault(key(item), []).append(item)
+    for queue in queues.values():
+        queue.reverse()  # pop() from the end keeps the original order
+    ordered: list = []
+    last_key: object = object()
+    last_secondary: object = object()
+    while queues:
+        candidates = [k for k in queues if k != last_key] or list(queues)
+
+        def rank(k):
+            head = queues[k][-1]
+            differs = secondary_key is None or secondary_key(head) != last_secondary
+            return (1 if differs else 0, len(queues[k]))
+
+        chosen = max(candidates, key=rank)
+        item = queues[chosen].pop()
+        if not queues[chosen]:
+            del queues[chosen]
+        ordered.append(item)
+        last_key = chosen
+        last_secondary = secondary_key(item) if secondary_key is not None else None
+    return ordered
+
+
+class HostTurnQueue:
+    """Serial download queue that takes turns between hosts and backs off blocks.
+
+    ``next()`` never returns two consecutive items from one host while another
+    host has ready work, preferring the host with the most remaining items (and,
+    among those, a different venue than the previous item). ``block(host)``
+    cools a host down -- ``base_cooldown_seconds`` doubling per consecutive block,
+    at least the server's Retry-After -- and after ``max_strikes`` consecutive
+    blocks the host is abandoned for this run; its items move to ``abandoned``.
+    ``ok(host)`` clears the strike count. A blocked item may be ``requeue``d once
+    to retry after its host's cooldown.
+    """
+
+    def __init__(
+        self,
+        items,
+        *,
+        host_of: Callable,
+        venue_of: Callable | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        base_cooldown_seconds: float = 300.0,
+        max_cooldown_seconds: float = 3600.0,
+        max_strikes: int = 4,
+        max_requeues: int = 1,
+    ) -> None:
+        self._host_of = host_of
+        self._venue_of = venue_of
+        self._clock = clock
+        self._base = float(base_cooldown_seconds)
+        self._max = float(max_cooldown_seconds)
+        self._max_strikes = int(max_strikes)
+        self._max_requeues = int(max_requeues)
+        self._queues: dict[str, list] = {}
+        for item in items:
+            self._queues.setdefault(host_of(item), []).append(item)
+        for host, queue in self._queues.items():
+            if venue_of is not None:
+                # Venues sharing one host (TPAMI and IJCV on arxiv.org) alternate too.
+                queue[:] = interleave_by_key(queue, key=venue_of)
+            queue.reverse()
+        self._cool_until: dict[str, float] = {}
+        self._strikes: Counter = Counter()
+        self._requeues: Counter = Counter()
+        self._last_host: str | None = None
+        self._last_venue: object = object()
+        self.abandoned: list = []
+        self.abandoned_hosts: set[str] = set()
+
+    def remaining(self) -> int:
+        return sum(len(queue) for queue in self._queues.values())
+
+    def next(self):
+        """``(item, 0.0)`` when one is ready, ``(None, seconds)`` while every host
+        with work is cooling down, ``(None, 0.0)`` when drained."""
+        if not self._queues:
+            return None, 0.0
+        now = self._clock()
+        ready = [host for host in self._queues if self._cool_until.get(host, 0.0) <= now]
+        if not ready:
+            return None, max(0.0, min(self._cool_until[host] for host in self._queues) - now)
+        candidates = [host for host in ready if host != self._last_host] or ready
+
+        def rank(host):
+            head = self._queues[host][-1]
+            differs = self._venue_of is None or self._venue_of(head) != self._last_venue
+            return (1 if differs else 0, len(self._queues[host]))
+
+        host = max(candidates, key=rank)
+        item = self._queues[host].pop()
+        if not self._queues[host]:
+            del self._queues[host]
+        self._last_host = host
+        self._last_venue = self._venue_of(item) if self._venue_of is not None else None
+        return item, 0.0
+
+    def ok(self, host: str) -> None:
+        self._strikes.pop(host, None)
+
+    def block(self, host: str, retry_after_seconds: float | None = None) -> None:
+        self._strikes[host] += 1
+        strikes = self._strikes[host]
+        cooldown = min(self._max, self._base * (2 ** (strikes - 1)))
+        cooldown = max(cooldown, float(retry_after_seconds or 0.0))
+        self._cool_until[host] = self._clock() + cooldown
+        if strikes >= self._max_strikes:
+            self.abandoned_hosts.add(host)
+            queue = self._queues.pop(host, [])
+            self.abandoned.extend(reversed(queue))
+
+    def requeue(self, item) -> bool:
+        """Put a blocked item back at the head of its host queue, once."""
+        host = self._host_of(item)
+        if host in self.abandoned_hosts:
+            self.abandoned.append(item)
+            return False
+        ident = id(item)
+        if self._requeues[ident] >= self._max_requeues:
+            return False
+        self._requeues[ident] += 1
+        self._queues.setdefault(host, []).append(item)
+        return True
+
+
+def blocking_status(exc: BaseException) -> int | None:
+    """HTTP status of a host-refusal error, else None."""
+    if isinstance(exc, ChallengePageError):
+        return exc.status_code  # a challenge is a refusal whatever its status
+    status = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status is None and response is not None:
+        status = getattr(response, "status_code", None)
+    return status if status in BLOCKING_STATUS_CODES else None
