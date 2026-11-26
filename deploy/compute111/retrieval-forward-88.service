@@ -1,0 +1,13 @@
+[Unit]
+Description=Retrieval internal forward from compute .111 to compute .88
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -N -g -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%h/.ssh/known_hosts -o IdentitiesOnly=yes -o IdentityFile=%h/.ssh/retrieval-forward-88_ed25519 -L 0.0.0.0:8000:10.100.100.88:18080 arc@10.100.100.88
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
