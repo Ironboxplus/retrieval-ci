@@ -92,10 +92,17 @@ def load_want_docs(conn: sqlite3.Connection, ids_file: Path) -> int:
 
 
 def validate_wanted_chunks_fit(conn: sqlite3.Connection, *, max_chars: int = 8192) -> None:
-    """Reject legacy paper rows that bypassed canonical chunk reconciliation."""
+    """Reject legacy rows that bypassed canonical chunk reconciliation.
+
+    Older scratch/test databases do not have ``chunks.token_count``. In that
+    schema use character length as a conservative bound; production databases
+    have the token count populated by the canonical preindexer.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(chunks)")}
+    measured = "token_count" if "token_count" in columns else "length(content)"
     row = conn.execute(
-        "SELECT doc_id, id, token_count FROM chunks "
-        "WHERE doc_id IN (SELECT doc_id FROM want_docs) AND token_count > ? LIMIT 1",
+        f"SELECT doc_id, id, {measured} FROM chunks "
+        f"WHERE doc_id IN (SELECT doc_id FROM want_docs) AND {measured} > ? LIMIT 1",
         (max_chars,),
     ).fetchone()
     if row is not None:
