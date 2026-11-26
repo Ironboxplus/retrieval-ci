@@ -69,15 +69,26 @@ def sanitize_utf8_text(content: str) -> str:
     return "".join(sanitized_characters)
 
 
-def write_text_atomic(path: Path, content: str) -> None:
-    """Write text with atomic rename, falling back to direct write on Windows lock issues."""
+def write_text_atomic(path: Path, content: str, *, durable: bool = False) -> None:
+    """Write text via temp file + rename, retrying transient Windows locks.
+
+    When the rename keeps failing the last ``OSError`` is raised and ``path``
+    keeps its previous content: callers use this for manifests and resume
+    state, where an in-place overwrite would leave a torn file that still
+    reads as a successful write. ``durable`` also fsyncs the temp file before
+    the rename, for cursors that must survive a power loss.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     sanitized = sanitize_utf8_text(content)
     temporary_path = build_write_in_progress_path(path)
 
     for attempt in range(1, 6):
         try:
-            temporary_path.write_text(sanitized, encoding="utf-8")
+            with temporary_path.open("w", encoding="utf-8") as handle:
+                handle.write(sanitized)
+                if durable:
+                    handle.flush()
+                    os.fsync(handle.fileno())
             temporary_path.replace(path)
             return
         except OSError:
@@ -86,13 +97,9 @@ def write_text_atomic(path: Path, content: str) -> None:
                     temporary_path.unlink()
                 except OSError:
                     pass
-            if attempt < 5:
-                time.sleep(0.2 * attempt)
-                continue
-            # All retries exhausted — fall back to direct write (non-atomic but functional)
-            LOGGER.warning("Atomic write failed for %s after 5 attempts, falling back to direct write", path)
-            path.write_text(sanitized, encoding="utf-8")
-            return
+            if attempt == 5:
+                raise
+            time.sleep(0.2 * attempt)
 
 
 def write_json_atomic(path: Path, payload: Any) -> None:

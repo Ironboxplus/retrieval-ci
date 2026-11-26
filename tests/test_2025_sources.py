@@ -421,11 +421,21 @@ class TestIclrOpenReviewSource(unittest.TestCase):
         self.assertEqual(IclrOpenReviewSource._extract_field({}, "authors", []), [])
 
 
+# conf/conferences.yaml lists ECCV with years [2022, 2024, 2026] ("Even years only").
+EVEN_YEARS_ONLY = {"ECCV"}
+
+
 class TestAllSourcesSupport2025(unittest.TestCase):
     def test_all_eight_conferences_support_2025(self):
         sources = build_sources()
         for name, source in sources.items():
             with self.subTest(conference=name):
+                if name in EVEN_YEARS_ONLY:
+                    self.assertFalse(
+                        source.supports_year(2025),
+                        f"{name} is held in even years only and has no 2025 edition",
+                    )
+                    continue
                 self.assertTrue(
                     source.supports_year(2025),
                     f"{name} must support year 2025",

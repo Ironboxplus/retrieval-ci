@@ -386,7 +386,7 @@ def _wait_for_files(
 
 
 def _resident_bytes(pid: int) -> int:
-    """Read one process's RSS without adding psutil as a runtime dependency."""
+    """Read one process's RSS from the OS directly, independent of the daemon's own code."""
     if os.name == "nt":
         probe = subprocess.run(
             [
@@ -417,7 +417,7 @@ def _resident_bytes(pid: int) -> int:
 
 
 def _resident_bytes_many(pids: set[int]) -> dict[int, int]:
-    """Collect RSS for a client burst in one OS query, without psutil."""
+    """Collect RSS for a client burst in one OS query, independent of the daemon's own code."""
     if not pids:
         return {}
     if os.name == "nt":
@@ -621,17 +621,7 @@ def test_stdio_proxy_exits_naturally_after_client_eof_and_keeps_daemon_running(
         assert shim["anyio_loaded"] is False
         live_state = json.loads((runtime_dir / "daemon.json").read_text(encoding="utf-8"))
         live_pid = int(live_state["pid"])
-        parent_probe = subprocess.run(
-            [
-                "powershell", "-NoProfile", "-NonInteractive", "-Command",
-                f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {live_pid}').ParentProcessId",
-            ],
-            text=True,
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-        daemon_parent_pid = parent_probe.stdout.strip()
+        daemon_parent_pid = _parent_pids({live_pid}).get(live_pid)
         stdout, stderr = process.communicate(timeout=10)
         assert process.returncode == 0, f"client failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
 

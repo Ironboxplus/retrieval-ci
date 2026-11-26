@@ -570,6 +570,7 @@ class RetrievalClient:
         method: str = "hybrid",
         paper_ids: Optional[list[str]] = None,
         source_type: Optional[str] = None,
+        include_withdrawn: bool = False,
     ) -> dict:
         """Hybrid (BGE-M3 dense+sparse RRF + cross-encoder rerank) search over the
         whole corpus. Results come back grouped by paper, ranked by best chunk."""
@@ -590,6 +591,8 @@ class RetrievalClient:
             payload["paper_ids"] = paper_ids
         if source_type:
             payload["source_type"] = source_type
+        if include_withdrawn:
+            payload["include_withdrawn"] = True
         return await self._post("/api/search", payload)
 
     async def search_within_paper(self, paper_id: str, query: str, top_k: int = 50) -> dict:
@@ -913,13 +916,20 @@ class RetrievalClient:
         project: str | None = None,
         kind: str | None = None,
         detail: bool = False,
+        lean: bool = False,
+        project_contains: str | None = None,
     ) -> dict:
         params = {k: v for k, v in
-                  {"host": host, "project": project, "kind": kind}.items() if v is not None}
+                  {"host": host, "project": project, "kind": kind,
+                   "project_contains": project_contains}.items() if v is not None}
         # The endpoint defaults to a SUMMARY (no per-file tree); ask for detail only when the
         # caller needs the per-file content hashes (the incremental-index diff baseline).
         if detail:
             params["detail"] = True
+            if lean:
+                # Only the compared columns; a backend that predates it ignores the flag
+                # and returns the full tree, which flattens identically.
+                params["lean"] = True
         return await self._get("/api/index/inventory", params)
 
     async def scope_overlap(
@@ -1090,6 +1100,7 @@ class RetrievalClient:
                          files: list[dict], incremental: bool = False,
                          manifest: list[str] | None = None,
                          removed_paths: list[str] | None = None,
+                         removed_paths_complete: bool = False,
                          report: dict | None = None,
                          client_job_id: str | None = None) -> dict:
         # Async since W156: returns 202 {job_id, status, ...} — poll code_index_job.
@@ -1107,6 +1118,11 @@ class RetrievalClient:
             payload["manifest"] = manifest
         if removed_paths:
             payload["removed_paths"] = removed_paths
+        if removed_paths_complete:
+            # removed_paths is every deletion, diffed against the catalog inventory, so
+            # the server skips its Qdrant path enumeration. The manifest is still sent for
+            # a backend that predates the flag.
+            payload["removed_paths_complete"] = True
         if report is not None:
             payload["report"] = report
         return await self._post("/api/code/index", payload)
@@ -1124,7 +1140,11 @@ class RetrievalClient:
         Returns {removed_entries, deleted_vectors, catalog_removed}."""
         return await self._delete("/api/journal/docs", {"project_slug": project_slug})
 
-    async def code_index_job(self, job_id: str) -> dict:
+    async def code_index_job(self, job_id: str, *, scope_notice: bool = False) -> dict:
+        """`scope_notice=True` also claims the scope's deliver-once message; leave it off
+        for progress polling so a message meant for a person is not consumed."""
+        if scope_notice:
+            return await self._get(f"/api/code/jobs/{job_id}", {"scope_notice": "true"})
         return await self._get(f"/api/code/jobs/{job_id}")
 
     async def code_index_jobs(self, *, project: str | None = None,
@@ -1421,7 +1441,8 @@ def format_search_results(resp: dict, max_snippet: int = 280) -> str:
         title = p.get("doc_title") or p.get("title") or "(untitled)"
         score = p.get("max_score", p.get("score", 0.0))
         pid = _result_id(p)
-        lines.append(f"{i}. {title}  [{venue} {year}]  score={score:.3f}")
+        withdrawn = "  [WITHDRAWN]" if meta.get("withdrawn") else ""
+        lines.append(f"{i}. {title}  [{venue} {year}]  score={score:.3f}{withdrawn}")
         lines.append(f"   paper_id: {pid}")
         chunks = p.get("chunks") or []
         if chunks:

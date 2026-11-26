@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/" 
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.openarchives.org/OAI/2.0/ http://www.openarchives.org/OAI/2.0/OAI-PMH.xsd">
+    <responseDate>2026-11-02T15:19:26Z</responseDate>
+                <request verb="ListRecords" metadataPrefix="arXivRaw" from="2026-09-22" set="cs">http://oaipmh.arxiv.org/oai</request>
+
+
+    <ListRecords>
+<record>
+                <header>
+        <identifier>oai:arXiv.org:2608.14288</identifier>
+        <datestamp>2026-09-21</datestamp>
+            <setSpec>cs:cs:LG</setSpec>
+    </header>
+
+            <metadata>
+                        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://arxiv.org/OAI/arXivRaw/ https://oaipmh.arxiv.org/OAI/arXivRaw.xsd">
+        <id>2608.14288</id>
+        <submitter>Filippo Portera</submitter>
+            <version version="v1">
+                <date>Fri, 14 Aug 2026 13:21:05 GMT</date>
+                <size>12kb</size>
+            </version>
+            <version version="v2">
+                <date>Fri, 18 Sep 2026 12:40:11 GMT</date>
+                <size>0kb</size>
+                    <source_type>I</source_type>
+            </version>
+        <title>Convex losses and their applications to SVM, SVR, and Shallow Neural Networks</title>
+        <authors>Filippo Portera</authors>
+        <categories>cs.LG</categories>
+            <comments>Further experiments</comments>
+            <license>http://creativecommons.org/licenses/by/4.0/</license>
+            <abstract>We propose multiple new convex losses for SVM and Neural Networks, applied to binary classification tasks. While there are practical limitations in exploiting them with the dual SVM models, we are able to use them with SVM primal formulation and Neural Networks. In detail, the primal SVM problem with the modified losses has been solved with the Particle Swarm Optimization algorithm. We prove that the proposed losses are a generalization of the standard loss, and we experiment them with several small data-sets. This preliminary study shows that using pattern correlations
+  inside the loss function could in theory enhance the generalization performances on some data-sets. To evaluate the performance of each loss, we adopt a Nested Cross-Validation procedure. Results show that generalization measures are the same with or without the new losses.</abstract>
+    </arXivRaw>
+
+            </metadata>
+        </record>
+<record>
+                <header>
+        <identifier>oai:arXiv.org:2609.10457</identifier>
+        <datestamp>2026-09-21</datestamp>
+            <setSpec>cs:cs:MM</setSpec>
+    </header>
+
+            <metadata>
+                        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://arxiv.org/OAI/arXivRaw/ https://oaipmh.arxiv.org/OAI/arXivRaw.xsd">
+        <id>2609.10457</id>
+        <submitter>Zeyu Ling</submitter>
+            <version version="v1">
+                <date>Wed, 09 Sep 2026 17:06:18 GMT</date>
+                <size>16968kb</size>
+            </version>
+            <version version="v2">
+                <date>Thu, 10 Sep 2026 08:40:14 GMT</date>
+                <size>0kb</size>
+                    <source_type>I</source_type>
+            </version>
+            <version version="v3">
+                <date>Fri, 18 Sep 2026 06:51:37 GMT</date>
+                <size>27108kb</size>
+            </version>
+        <title>AnimateCanvas: Learning Implicit Motion Planning from Composable Kinematic Cues</title>
+        <authors>Zeyu Ling, Di Kang, Qing Shuai, Yuxin Wen, Jing Li, Zhanke Wang, Heng Li, Chunchao Guo, Changqing Zou, Linchao Bao</authors>
+        <categories>cs.MM</categories>
+            <comments>This paper was posted before completion of the required internal review and approval process. It is being withdrawn pending approval for public release</comments>
+            <license>http://creativecommons.org/licenses/by/4.0/</license>
+            <abstract>Professional character animation requires both natural motion and precise, versatile control. For example, creators often define the timing of a specified action, control the motion range of the character&#39;s arm swing, or specify the route the character walks through--effectively placing various kinematic cues on a motion canvas. This motivates us to propose AnimateCanvas, a model that supports cue-conditioned implicit motion planning to faithfully and coherently connect all cues, dense or sparse, full or partial, into one full-body motion sequence. Specifically, AnimateCanvas represents heterogeneous kinematic cues on a shared motion canvas, where position and rotation values are specified across body joints and time. A shared flow-matching model generates motion conditioned on this canvas, with optional language and input motion; cue imputation keeps the specified canvas values fixed in both training and sampling. To learn coherent completion across different cue sets, we train with a compositional cue sampler that varies the timing of cue application, the positions or rotations specified, and how they are combined. Together, these designs enable a single generator to integrate heterogeneous kinematic cues into coherent full-body actions, giving creators fine-grained control over selected frames, joints, and position or rotation channels. We evaluate this planning ability on temporal, root, and body-part cues--alone and combined--as well as language-guided editing, and naturally extend it to sequential generation and motion repair. AnimateCanvas achieves state-of-the-art results in temporal completion, spatial control, sequential generation, language-guided editing, and motion repair, while retaining strong text-to-motion capability.</abstract>
+    </arXivRaw>
+
+            </metadata>
+        </record>
+<record>
+                <header>
+        <identifier>oai:arXiv.org:2107.07420</identifier>
+        <datestamp>2026-09-21</datestamp>
+            <setSpec>cs:cs:GT</setSpec>
+            <setSpec>cs:cs:LG</setSpec>
+            <setSpec>math:math:ST</setSpec>
+            <setSpec>stat:stat:TH</setSpec>
+    </header>
+
+            <metadata>
+                        <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://arxiv.org/OAI/arXivRaw/ https://oaipmh.arxiv.org/OAI/arXivRaw.xsd">
+        <id>2107.07420</id>
+        <submitter>Fang-Yi Yu</submitter>
+            <version version="v1">
+                <date>Thu, 15 Jul 2021 16:05:48 GMT</date>
+                <size>498kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v2">
+                <date>Thu, 26 Oct 2023 17:02:12 GMT</date>
+                <size>908kb</size>
+                    <source_type>D</source_type>
+            </version>
+            <version version="v3">
+                <date>Fri, 11 Oct 2024 19:34:17 GMT</date>
+                <size>1589kb</size>
+                    <source_type>D</source_type>
+            </version>
+        <title>Optimal Scoring Rule Design under Partial Knowledge</title>
+        <authors>Yiling Chen and Fang-Yi Yu</authors>
+        <categories>cs.GT cs.LG math.ST stat.TH</categories>
+            <comments>Accepted at WINE&#39;24</comments>
+            <doi>10.1007/978-3-032-08560-3_22</doi>
+            <license>http://creativecommons.org/licenses/by/4.0/</license>
+            <abstract>This paper studies the design of optimal proper scoring rules when the principal has partial knowledge of an agent&#39;s signal distribution. Recent work characterizes the proper scoring rules that maximize the increase of an agent&#39;s payoff when the agent chooses to access a costly signal to refine a posterior belief from her prior prediction, under the assumption that the agent&#39;s signal distribution is fully known to the principal. In our setting, the principal only knows about a set of distributions where the agent&#39;s signal distribution belongs. We formulate the scoring rule design problem as a max-min optimization that maximizes the worst-case increase in payoff across the set of distributions.
+  We propose an efficient algorithm to compute an optimal scoring rule when the set of distributions is finite, and devise a fully polynomial-time approximation scheme that accommodates various infinite sets of distributions. We further remark that widely used scoring rules, such as the quadratic and log rules, as well as previously identified optimal scoring rules under full knowledge, can be far from optimal in our partial knowledge settings.</abstract>
+    </arXivRaw>
+
+            </metadata>
+        </record>
+</ListRecords>
+</OAI-PMH>

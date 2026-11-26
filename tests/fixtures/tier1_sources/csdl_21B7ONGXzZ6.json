@@ -1,0 +1,104 @@
+{
+ "data": {
+  "proceeding": {
+   "id": "21B7ONGXzZ6",
+   "acronym": "sp",
+   "title": "2025 IEEE Symposium on Security and Privacy (SP)",
+   "year": "2025"
+  },
+  "articlesByProceeding": {
+   "totalResults": 6,
+   "articleResults": [
+    {
+     "id": "26EkEuJuwdW",
+     "doi": "10.1109/SP61157.2025.00105",
+     "idPrefix": "sp",
+     "fno": "223600z001",
+     "isOpenAccess": true,
+     "pages": "1-1",
+     "sectionTitle": null,
+     "title": "Title Page",
+     "year": "2025",
+     "authors": []
+    },
+    {
+     "id": "26EkEvvsJcQ",
+     "doi": "10.1109/SP61157.2025.00106",
+     "idPrefix": "sp",
+     "fno": "223600z003",
+     "isOpenAccess": true,
+     "pages": "1-1",
+     "sectionTitle": null,
+     "title": "Title Page",
+     "year": "2025",
+     "authors": []
+    },
+    {
+     "id": "26EkEzYdD1K",
+     "doi": "10.1109/SP61157.2025.00265",
+     "idPrefix": "sp",
+     "fno": "223600z042",
+     "isOpenAccess": true,
+     "pages": "42-47",
+     "sectionTitle": null,
+     "title": "Program Committee",
+     "year": "2025",
+     "authors": []
+    },
+    {
+     "id": "26hiWfoHOec",
+     "doi": "10.1109/SP61157.2025.00239",
+     "idPrefix": "sp",
+     "fno": "223600e297",
+     "isOpenAccess": true,
+     "pages": "4699-4715",
+     "sectionTitle": null,
+     "title": "Author Index",
+     "year": "2025",
+     "authors": []
+    },
+    {
+     "id": "21B7QqhuoOA",
+     "doi": "10.1109/SP61157.2025.00037",
+     "idPrefix": "sp",
+     "fno": "223600a037",
+     "isOpenAccess": false,
+     "pages": "1-18",
+     "sectionTitle": null,
+     "title": "SoK: Digging into the Digital Underworld of Stolen Data Markets",
+     "year": "2025",
+     "authors": [
+      {
+       "fullName": "Tina Marjanov"
+      },
+      {
+       "fullName": "Alice Hutchings"
+      }
+     ]
+    },
+    {
+     "id": "22K50t9UUyQ",
+     "doi": "10.1109/SP61157.2025.00096",
+     "idPrefix": "sp",
+     "fno": "223600a096",
+     "isOpenAccess": false,
+     "pages": "19-36",
+     "sectionTitle": null,
+     "title": "Characterizing Robocalls with Multiple Vantage Points",
+     "year": "2025",
+     "authors": [
+      {
+       "fullName": "Sathvik Prasad"
+      },
+      {
+       "fullName": "Aleksandr Nahapetyan"
+      },
+      {
+       "fullName": "Bradley Reaves"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

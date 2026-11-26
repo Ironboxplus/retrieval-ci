@@ -9,6 +9,8 @@ By declaring everything at collection creation:
   - on_disk dense vector + on_disk HNSW graph (RAM 4-6 GB)
   - int8 scalar quantization (4x compression, 2x speed via SIMD)
   - 8 payload indexes pre-created (filter pushdown ready before first upsert)
+  - `--indexes-only` adds the indexes a collection lacks (the BOOL `withdrawn` index
+    on an existing `papers`/`arxiv`) without touching its points; safe to repeat
   - optimizer config baked in (W6 safe threads, W7 on_disk segment is born correct)
 """
 from __future__ import annotations
@@ -39,7 +41,11 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from core.storage.papers_payload import PAPER_PROFILE_KEYS
+from core.storage.papers_payload import (
+    COMMON_OPTIONAL_STRING_KEYS,
+    OPTIONAL_PAPER_KEYS,
+    PAPER_PROFILE_KEYS,
+)
 
 
 COLLECTION = "papers"
@@ -55,13 +61,38 @@ COLLECTION = "papers"
 # filters by it — an index nothing queries is dead weight, not a safety net).
 _INTEGER_FIELDS = {"year", "level"}
 
+def _schema(field: str) -> PayloadSchemaType:
+    if field in _INTEGER_FIELDS:
+        return PayloadSchemaType.INTEGER
+    # Optional keys are booleans (`withdrawn`): Qdrant indexes them as `bool`, and a
+    # keyword index would not see a JSON true.
+    return PayloadSchemaType.BOOL if field in OPTIONAL_PAPER_KEYS else PayloadSchemaType.KEYWORD
+
+
 PAYLOAD_INDEXES = [
-    (
-        field,
-        PayloadSchemaType.INTEGER if field in _INTEGER_FIELDS else PayloadSchemaType.KEYWORD,
-    )
-    for field in sorted(PAPER_PROFILE_KEYS - {"content"})
+    (field, _schema(field))
+    for field in sorted((PAPER_PROFILE_KEYS - {"content"}) | OPTIONAL_PAPER_KEYS
+                        | COMMON_OPTIONAL_STRING_KEYS)
 ]
+
+
+def ensure_payload_indexes(client: QdrantClient, collection: str) -> list[str]:
+    """Create the payload indexes `collection` lacks and return their field names.
+
+    A field already indexed is left alone (whatever its schema), so this is
+    idempotent and also what a fresh collection goes through.
+    """
+    have = set(client.get_collection(collection).payload_schema or {})
+    created = []
+    for field, schema in PAYLOAD_INDEXES:
+        if field in have:
+            continue
+        print(f"[index] PUT {field} ({schema.value})")
+        client.create_payload_index(
+            collection_name=collection, field_name=field, field_schema=schema, wait=True,
+        )
+        created.append(field)
+    return created
 
 
 def main():
@@ -73,9 +104,18 @@ def main():
         action="store_true",
         help="Drop existing collection (if any) before recreating",
     )
+    parser.add_argument(
+        "--indexes-only",
+        action="store_true",
+        help="Only add the payload indexes the existing collection lacks; no data is touched",
+    )
     args = parser.parse_args()
 
     client = QdrantClient(url=args.url, timeout=60)
+    if args.indexes_only:
+        created = ensure_payload_indexes(client, args.collection)
+        print(f"[done] collection='{args.collection}' created indexes: {created or 'none (already complete)'}")
+        return
 
     # Safety: check existing collection
     existing = [c.name for c in client.get_collections().collections]
@@ -136,17 +176,10 @@ def main():
 
     print(f"[create] collection created")
 
-    # PUT 8 payload indexes BEFORE first upsert
+    # PUT the payload indexes BEFORE first upsert
     # This way, every segment born during ingest already has these indexes,
     # avoiding the W9/W10 retroactive build storm.
-    for field, schema in PAYLOAD_INDEXES:
-        print(f"[index] PUT {field} ({schema.value})")
-        client.create_payload_index(
-            collection_name=args.collection,
-            field_name=field,
-            field_schema=schema,
-            wait=True,
-        )
+    ensure_payload_indexes(client, args.collection)
 
     # Final state report
     info = client.get_collection(args.collection)

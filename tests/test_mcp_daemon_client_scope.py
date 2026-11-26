@@ -33,7 +33,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from test_mcp_daemon_cli import (
+from tests.test_mcp_daemon_cli import (
     CLI,
     STDIO_CLIENT,
     _daemon_env,

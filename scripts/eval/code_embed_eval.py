@@ -93,7 +93,15 @@ def evaluate(model_name, cfg, docs, codes, queries):
             "Recall@3": round(r3 / n, 4), "n_queries": n_scored}
 
 
+def _retired() -> None:
+    """RETIRED: this script loads a model into its own process; every model is a vLLM service now."""
+    from core.inference_retired import EMBEDDER_INSTEAD, RetiredInferencePath
+
+    raise RetiredInferencePath('code_embed_eval.py (loads embedders into this process with sentence-transformers)', EMBEDDER_INSTEAD)
+
+
 def main():
+    _retired()
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=".")
     ap.add_argument("--max-chunks", type=int, default=3000)

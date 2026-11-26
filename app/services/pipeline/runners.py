@@ -7,11 +7,17 @@ orchestrator's event stream stays live during a long-running stage.
 
 A `popen_factory` is injectable so a test can assert run_local launches the built
 command without spawning a real process.
+
+Cancellation: run_local() takes the orchestrator's abort Event. Setting it
+terminates the child's whole process group, so a cancelled stage releases its
+GPU/Qdrant work immediately instead of running to completion.
 """
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
@@ -22,17 +28,31 @@ EventSink = Callable[..., None]
 PopenFactory = Callable[..., subprocess.Popen]
 
 
-def _default_popen(args: Sequence[str], cwd: Optional[str], env: Optional[dict]) -> subprocess.Popen:
+# Seconds a terminated child gets to exit before it is killed outright.
+ABORT_KILL_GRACE_S = 10.0
+
+
+def _default_popen(args: Sequence[str], cwd: Optional[str], env: Optional[dict],
+                   stdin: Optional[int] = None) -> subprocess.Popen:
+    # Own process group, so abort can signal the child AND whatever it spawned
+    # (bash -> python -> workers); otherwise grandchildren keep the stdout pipe
+    # open and run_local() never returns.
+    group = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        if os.name == "nt" else {"start_new_session": True}
+    )
     return subprocess.Popen(
         list(args),
         cwd=cwd,
         env=env,
+        stdin=stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
         encoding="utf-8",
         errors="replace",
+        **group,
     )
 
 
@@ -88,25 +108,140 @@ def _probe_local_gpu_memory_with_torch() -> str:
     return out
 
 
+def _terminate_on_abort(proc: subprocess.Popen, abort: threading.Event, done: threading.Event) -> None:
+    """Watcher thread: when `abort` is set, stop the child; return once `done` is set.
+
+    POSIX: SIGTERM to the child's process group (it leads its own, see
+    _default_popen), SIGKILL after ABORT_KILL_GRACE_S. A child that is not a group
+    leader (injected popen_factory) is terminated directly; this process's own
+    group is never signalled. Windows: Popen.terminate() on the child.
+    """
+    while not abort.wait(0.5):
+        if done.is_set():
+            return
+    if done.is_set():
+        return
+    logger.warning(f"runner.local.abort pid={proc.pid}")
+    group = None
+    if os.name != "nt":
+        try:
+            pgid = os.getpgid(proc.pid)
+            group = pgid if pgid != os.getpgrp() else None
+        except ProcessLookupError:
+            return
+    try:
+        if group is not None:
+            os.killpg(group, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except ProcessLookupError:
+        return
+    if done.wait(ABORT_KILL_GRACE_S):
+        return
+    logger.warning(f"runner.local.abort.kill pid={proc.pid} after {ABORT_KILL_GRACE_S:g}s")
+    try:
+        if group is not None:
+            os.killpg(group, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _stop_process_tree(proc: subprocess.Popen, grace_s: float = ABORT_KILL_GRACE_S) -> None:
+    """Stop ``proc`` and everything it spawned, then reap it (no process left running or defunct).
+
+    POSIX: SIGTERM to the child's process group, SIGKILL after ``grace_s``, then ``wait()``.
+    A child that is not a group leader (injected popen_factory) is signalled directly; this
+    process's own group never is. Windows: ``taskkill /T /F`` takes the whole tree at once.
+    """
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False)
+        proc.wait()
+        return
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:  # already reaped
+        return
+    group = pgid if pgid != os.getpgrp() else None
+
+    def send(sig: int) -> None:
+        try:
+            if group is not None:
+                os.killpg(group, sig)
+            else:
+                proc.send_signal(sig)
+        except ProcessLookupError:
+            pass
+
+    send(signal.SIGTERM)
+    try:
+        proc.wait(timeout=grace_s)
+    except subprocess.TimeoutExpired:
+        logger.warning(f"runner.local.stop.kill pid={proc.pid} after {grace_s:g}s")
+    send(signal.SIGKILL)  # whatever of the group outlived the child
+    proc.wait()
+
+
 def run_local(
     cmd: list[str],
     cwd: Path,
     sink: EventSink,
     *,
     env: Optional[dict] = None,
+    abort: Optional[threading.Event] = None,
     popen_factory: PopenFactory = _default_popen,
+    hold_stdin: bool = False,
 ) -> int:
-    """Run a local command, streaming stdout into sink. Raise on non-zero exit."""
+    """Run a local command, streaming stdout into sink. Raise on non-zero exit.
+
+    `abort` set while the command runs terminates it; the resulting non-zero exit
+    raises RuntimeError("cancelled"), which the orchestrator maps to a cancelled
+    stage (it checks its own abort Event before treating the error as a failure).
+
+    `hold_stdin` gives the child a stdin pipe that is never written and is closed when this
+    returns (or this process dies): for an ssh client, the remote command's stdin then stays
+    open exactly as long as the client lives, so the far end can tell that its session ended
+    from EOF. The factory is handed ``stdin=PIPE`` only in that case.
+
+    Any exception that leaves the read loop (the sink raising, an interrupt) stops the child's
+    whole process tree and reaps it before propagating: a stage that failed must not leave its
+    worker running untracked on the GPU, or defunct.
+    """
     logger.info(f"runner.local.start cwd={cwd} cmd={' '.join(map(str, cmd))}")
-    proc = popen_factory(cmd, str(cwd), env)
-    if proc.stdout is not None:
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            if line:
-                sink(line)
-    code = proc.wait()
+    proc = popen_factory(cmd, str(cwd), env, stdin=subprocess.PIPE) if hold_stdin else popen_factory(cmd, str(cwd), env)
+    done = threading.Event()
+    if abort is not None:
+        threading.Thread(
+            target=_terminate_on_abort, args=(proc, abort, done),
+            daemon=True, name="runner-abort-watch",
+        ).start()
+    try:
+        try:
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    if line:
+                        sink(line)
+        except BaseException:
+            logger.warning(f"runner.local.error pid={proc.pid}: stopping the child's process tree")
+            try:
+                _stop_process_tree(proc)
+            except Exception:  # the error on its way out is the one to report
+                logger.exception(f"runner.local.stop.failed pid={proc.pid}")
+            raise
+        code = proc.wait()
+    finally:
+        done.set()
+        if hold_stdin and proc.stdin is not None:
+            try:
+                proc.stdin.close()
+            except OSError:  # the child is gone and the pipe with it
+                pass
     logger.info(f"runner.local.exit code={code} cmd0={cmd[0] if cmd else '-'}")
     if code != 0:
+        if abort is not None and abort.is_set():
+            raise RuntimeError("cancelled")
         raise RuntimeError(f"command failed (exit {code}): {' '.join(map(str, cmd))}")
     return code
 
@@ -117,12 +252,17 @@ def run_remote(
     sink: EventSink,
     *,
     env_prefix: str = "",
+    abort: Optional[threading.Event] = None,
     popen_factory: PopenFactory = _default_popen,
 ) -> int:
-    """Run a command on a remote host via ssh, streaming stdout into sink."""
+    """Run a command on a remote host via ssh, streaming stdout into sink.
+
+    `abort` only kills the LOCAL ssh client; the remote process is not
+    controlled (the remote execution topology is retired, see StageContext).
+    """
     full = f"{env_prefix}{remote_cmd}"
     logger.info(f"runner.remote.start target={ssh_target} cmd={full}")
-    return run_local(["ssh", ssh_target, full], Path("."), sink, popen_factory=popen_factory)
+    return run_local(["ssh", ssh_target, full], Path("."), sink, abort=abort, popen_factory=popen_factory)
 
 
 def probe_remote_count(

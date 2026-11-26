@@ -140,18 +140,21 @@ def test_rate_limiter():
 
     limiter = RateLimiter(requests_per_second=10.0, burst_size=3)
 
-    # 前3个请求应该不需要等待（burst）
-    import time
-    start = time.time()
-    for _ in range(3):
-        limiter.sync_acquire()
-    elapsed = time.time() - start
+    async def run() -> tuple[float, float]:
+        # 前3个请求应该不需要等待（burst）
+        import time
+        start = time.time()
+        for _ in range(3):
+            await limiter.acquire()
+        return time.time() - start, await limiter.acquire()
+
+    elapsed, wait_time = asyncio.run(run())
     print(f"3 burst requests took: {elapsed:.3f}s")
     assert elapsed < 0.1, "Burst requests should be immediate"
 
     # 第4个请求应该需要等待
-    wait_time = limiter.sync_acquire()
     print(f"4th request waited: {wait_time:.3f}s")
+    assert wait_time > 0, "The request after the burst must wait"
 
     print("All RateLimiter tests passed!")
 

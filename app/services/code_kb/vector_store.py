@@ -17,16 +17,22 @@ from typing import Any, Callable, Sequence
 from qdrant_client import models
 from qdrant_client.models import PointStruct
 
+from app.services.scope_paths import scopes_share_files
 from core.code_kb.vector_records import (
     CodeChunkVectorRecord,
     build_code_chunk_payload,
     code_chunk_identity_id,
 )
+from core.indexing.embedding_profile import current_embed_fp
 from core.storage.qdrant_operations import (
     ensure_keyword_payload_indexes,
     retry_qdrant_operation,
 )
-from core.storage.qdrant_store import QdrantStore, sparse_dict_to_qdrant
+from core.storage.qdrant_store import (
+    QDRANT_COLLECTION_ON_DISK,
+    QdrantStore,
+    sparse_dict_to_qdrant,
+)
 
 logger = logging.getLogger("code_kb.vector_store")
 
@@ -37,12 +43,31 @@ logger = logging.getLogger("code_kb.vector_store")
 # incremental path must never cause (W157-inc). Failing loud makes the job FAILED instead.
 _MAX_RETRIES = 5
 _PATH_FACET_LIMIT = 100_000
-_SEARCH_FILTER_FIELDS = ("owner_user_id", "project", "path", "language")
+# ``embed_fp`` is not a search filter: "which points are stale" is a must_not on it.
+_SEARCH_FILTER_FIELDS = ("owner_user_id", "project", "path", "language", "embed_fp")
 _PAYLOAD_INDEX_RETRY_SECONDS = 60.0
+
+
+_REUSE_RETRIEVE_BATCH = 256
 
 
 def _with_retry(what: str, fn: Callable[[], Any]) -> Any:
     return retry_qdrant_operation(what, fn, max_attempts=_MAX_RETRIES)
+
+
+def _stored_vectors(
+    point: Any, require_sparse: bool,
+) -> tuple[list[float], dict[str, float] | None] | None:
+    """(dense, sparse|None) of a retrieved point, or None when it cannot be reused:
+    no dense vector, or no sparse vector although this write would store one."""
+    vector = point.vector
+    dense = vector.get("dense") if isinstance(vector, dict) else vector
+    sparse = vector.get("sparse") if isinstance(vector, dict) else None
+    if not dense or (require_sparse and sparse is None):
+        return None
+    lexical = ({str(index): value for index, value
+                in zip(sparse.indices, sparse.values)} if sparse is not None else None)
+    return list(dense), lexical
 
 
 # Compatibility alias for the existing private Code KB service contract. The
@@ -73,14 +98,25 @@ def point_id(
 
 
 class CodeVectorStore:
-    def __init__(self, collection_name: str = "code_chunks", store: QdrantStore | None = None):
+    def __init__(self, collection_name: str = "code_chunks", store: QdrantStore | None = None,
+                 catalog: Any = None):
         self.collection_name = collection_name
         self.store = store or QdrantStore(collection_name=collection_name)
+        self._catalog = catalog
         self._payload_index_lock = threading.Lock()
         self._missing_search_indexes: set[str] = set()
         self._next_payload_index_retry_at = 0.0
         if store is None:
             self.ensure_search_payload_indexes()
+
+    @property
+    def catalog(self):
+        """The durable SQL catalog (``IndexCatalogRepository``): the file inventory source.
+        Injected for tests; otherwise built on first use (late import avoids a cycle)."""
+        if self._catalog is None:
+            from app.services.index_catalog.repository import IndexCatalogRepository
+            self._catalog = IndexCatalogRepository()
+        return self._catalog
 
     def ensure_search_payload_indexes(self) -> None:
         """Ensure code-search filters and path facets use payload indexes.
@@ -105,6 +141,7 @@ class CodeVectorStore:
                 field_names=_SEARCH_FILTER_FIELDS,
                 retry=_with_retry,
                 existing_schema=schema,
+                on_disk=QDRANT_COLLECTION_ON_DISK,
             )
             self._missing_search_indexes = failed
             self._next_payload_index_retry_at = (
@@ -152,16 +189,70 @@ class CodeVectorStore:
                                     for key, value in expected.items()):
                 result.append(None)
                 continue
-            vector = point.vector
-            dense = vector.get("dense") if isinstance(vector, dict) else vector
-            sparse = vector.get("sparse") if isinstance(vector, dict) else None
-            if not dense or (require_sparse and sparse is None):
-                result.append(None)
-                continue
-            lexical = ({str(index): value for index, value
-                        in zip(sparse.indices, sparse.values)} if sparse is not None else None)
-            result.append((list(dense), lexical))
+            result.append(_stored_vectors(point, require_sparse))
         return result
+
+    def reusable_vectors_by_content(
+        self, *, owner_user_id: str, project: str, paths: Sequence[str],
+        texts: Sequence[str], require_sparse: bool,
+    ) -> dict[str, tuple[list[float], dict[str, float] | None]]:
+        """Stored vectors of one private scope that were computed from exactly ``texts``.
+
+        A line shift changes a chunk's point id and line payload but not the text the
+        model embeds, so the id-keyed lookup above misses it. Here the key is the text:
+        a point under ``paths`` of (owner, project) qualifies only when its payload
+        ``content`` equals a requested text byte for byte AND its ``embed_fp`` is the
+        current embedding profile's, so a vector of another model or text is never copied
+        forward. Payload is scrolled first (no vectors); vectors are fetched only for the
+        points that matched, at most one per distinct text, 256 per call. The caller copies
+        the result into NEW points; nothing here moves, renames or keeps a stored point.
+        Lookup failures propagate so an outage is never mistaken for a cache miss.
+        """
+        if not owner_user_id or not project:
+            raise ValueError("private vector reuse requires both owner and project")
+        wanted = set(texts)
+        path_list = sorted(set(paths))
+        if not wanted or not path_list:
+            return {}
+        fingerprint = current_embed_fp()
+        qf = self.store._build_filter(
+            {"owner_user_id": owner_user_id, "project": project, "path": path_list})
+
+        def _scan() -> dict[int | str, str]:
+            text_by_id: dict[int | str, str] = {}
+            claimed: set[str] = set()
+            offset = None
+            while True:
+                rows, offset = self.store.client.scroll(
+                    self.collection_name, scroll_filter=qf, limit=1000, offset=offset,
+                    with_payload=["content", "embed_fp"], with_vectors=False)
+                for row in rows:
+                    payload = row.payload or {}
+                    content = payload.get("content")
+                    if (payload.get("embed_fp") == fingerprint and content in wanted
+                            and content not in claimed):
+                        claimed.add(content)
+                        text_by_id[row.id] = content
+                if offset is None:
+                    return text_by_id
+
+        text_by_id = _with_retry(
+            f"scan_content_for_reuse(owner={owner_user_id} project={project} "
+            f"paths={len(path_list)})", _scan)
+        found: dict[str, tuple[list[float], dict[str, float] | None]] = {}
+        matched = list(text_by_id)
+        for start in range(0, len(matched), _REUSE_RETRIEVE_BATCH):
+            ids = matched[start:start + _REUSE_RETRIEVE_BATCH]
+            points = _with_retry(
+                f"read_vectors_for_content_reuse(n={len(ids)})",
+                lambda ids=ids: self.store.client.retrieve(
+                    collection_name=self.collection_name, ids=ids,
+                    with_payload=False, with_vectors=True))
+            for point in points:
+                vectors = _stored_vectors(point, require_sparse)
+                if vectors is not None:
+                    found[text_by_id[point.id]] = vectors
+        return found
 
     def upsert(self, *, owner_user_id: str, project: str, host: str,
                items: Sequence[CodeChunkPoint], dense_vectors: list[list[float]],
@@ -213,7 +304,12 @@ class CodeVectorStore:
         """The distinct file paths currently indexed for (owner, project) — used by
         incremental indexing to find files that were deleted from the repo (W157-inc).
         Uses Qdrant's path facet so work scales with files, not chunks. Missing facet
-        support fails visibly instead of hiding a full chunk scan inside a request."""
+        support fails visibly instead of hiding a full chunk scan inside a request.
+
+        Only for the legacy-protocol incremental reconcile when the catalog is not
+        trustworthy (jobs.py unsettled fallback). New code must not use it as an
+        inventory: take the file list from the catalog (``catalog_paths`` /
+        ``list_owner_files``)."""
         qf = self.store._build_filter({"owner_user_id": owner_user_id, "project": project})
 
         return self._facet_paths(
@@ -221,13 +317,22 @@ class CodeVectorStore:
             operation=f"list_paths(owner={owner_user_id} project={project})",
         )
 
-    def list_owner_paths(self, *, owner_user_id: str) -> set[str]:
-        """Distinct relative paths across an owner's projects for cross-project search."""
-        qf = self.store._build_filter({"owner_user_id": owner_user_id})
-        return self._facet_paths(
-            qf,
-            operation=f"list_owner_paths(owner={owner_user_id})",
-        )
+    def matching_paths(
+        self, *, owner_user_id: str, project: str | list[str] | None,
+        pattern: str | None, case_sensitive: bool, path_prefix: str | None = None,
+    ) -> tuple[list[str], int]:
+        """Search-time file selection uses the durable catalog, not vector facets.
+
+        ``path_prefix`` (a scope-relative directory) is only forwarded when set, so the
+        catalog call keeps its original shape for every search that has no prefix."""
+        extra = {"path_prefix": path_prefix} if path_prefix else {}
+        return self.catalog.matching_code_paths(
+            owner_user_id=owner_user_id, project=project,
+            pattern=pattern, case_sensitive=case_sensitive, **extra)
+
+    def catalog_paths(self, *, owner_user_id: str, project: str) -> set[str]:
+        """The scope's live file paths from the durable catalog (SQL), not a Qdrant facet."""
+        return self.catalog.list_code_paths(owner_user_id=owner_user_id, project=project)
 
     def _facet_paths(self, qf, *, operation: str) -> set[str]:
         self._retry_missing_search_indexes()
@@ -243,31 +348,50 @@ class CodeVectorStore:
                 exact=True,
             )
             values = {str(hit.value) for hit in response.hits if hit.value}
-            if len(values) >= _PATH_FACET_LIMIT:
-                raise RuntimeError(
-                    f"{operation} reached its {_PATH_FACET_LIMIT}-value safety limit")
             return values
 
-        return _with_retry(operation, _do)
+        values = _with_retry(operation, _do)
+        # A deterministic size limit cannot recover through transport retries.
+        if len(values) >= _PATH_FACET_LIMIT:
+            raise RuntimeError(
+                f"{operation} reached its {_PATH_FACET_LIMIT}-value safety limit")
+        return values
 
-    def list_owner_files(self, *, owner_user_id: str) -> set[tuple[str, str]]:
-        """Distinct (project, path) pairs indexed for this owner across ALL projects —
-        the cross-scope fan-out (方案2) uses these to find the same physical file
-        (matched by absolute path = project/path) indexed under another scope. It facets
-        projects and then paths per project, never scanning code chunks."""
-        self._retry_missing_search_indexes()
-        owner_filter = self.store._build_filter({"owner_user_id": owner_user_id})
-        projects = self._facet_values(
-            "project", owner_filter,
-            operation=f"list_owner_projects(owner={owner_user_id})")
+    def list_owner_files(
+        self, *, owner_user_id: str, related_to: str | None = None,
+        exclude_project: str | None = None,
+    ) -> set[tuple[str, str]]:
+        """Distinct (project, path) pairs this owner has indexed — the cross-scope
+        fan-out (方案2) uses these to find the same physical file (matched by absolute
+        path = project/path) indexed under another scope.
+
+        The inventory comes from the SQL catalog only (no Qdrant call). Qdrant facets
+        for this were the dominant cost on .88 (owner project facet ~97 s, per-project
+        path facet 4-33 s; measured 2026-11-21). Coverage check the same day: all 245
+        projects holding points are in the catalog; for the 18 projects related to three
+        scopes, 1 path had points but no catalog row and 1,693 catalog rows had no
+        points. So the catalog is a superset: rows whose file has no points are skipped
+        by ``_fan_out_sync`` (it re-reads ``list_point_ids`` under the target scope lock
+        and never recreates), while a file missing from the catalog is not refreshed —
+        the same source search visibility uses.
+
+        ``related_to`` restricts to scopes that can hold the same physical file as that
+        scope: equal (e.g. a Windows case variant) or on its ancestor/descendant chain.
+        Stored rel paths never contain ``..``, so every other scope is irrelevant.
+        ``None`` keeps the all-projects behaviour. ``exclude_project`` skips exactly that
+        project string (not its case variants): the fan-out passes the job's own scope,
+        which is always related to itself but whose files the caller discards."""
+        projects = {
+            row["project"]
+            for row in self.catalog.list_projects(owner_user_id=owner_user_id, kind="code")
+        }
         out: set[tuple[str, str]] = set()
         for project in projects:
-            project_filter = self.store._build_filter(
-                {"owner_user_id": owner_user_id, "project": project})
-            paths = self._facet_values(
-                "path", project_filter,
-                operation=(f"list_owner_project_paths(owner={owner_user_id} "
-                           f"project={project})"))
+            if project == exclude_project:
+                continue
+            if related_to is not None and not scopes_share_files(project, related_to):
+                continue
+            paths = self.catalog_paths(owner_user_id=owner_user_id, project=project)
             out.update((project, path) for path in paths)
         return out
 
@@ -309,6 +433,27 @@ class CodeVectorStore:
         """
         if paths == set():
             return set()
+        scope = "all" if paths is None else str(len(paths))
+        ids, _ = self._scroll_ids_and_paths(
+            owner_user_id=owner_user_id, project=project, paths=paths,
+            with_paths=False,
+            operation=(f"list_point_ids_for_paths(owner={owner_user_id} "
+                       f"project={project} paths={scope})"))
+        return ids
+
+    def list_point_ids_and_paths(
+        self, *, owner_user_id: str, project: str,
+    ) -> tuple[set[int], set[str]]:
+        """Point ids AND distinct paths of (owner, project) from ONE scroll, so both come
+        from the same snapshot and no path facet is needed. Retries then RAISES."""
+        return self._scroll_ids_and_paths(
+            owner_user_id=owner_user_id, project=project, paths=None, with_paths=True,
+            operation=f"list_point_ids_and_paths(owner={owner_user_id} project={project})")
+
+    def _scroll_ids_and_paths(
+        self, *, owner_user_id: str, project: str, paths: set[str] | None,
+        with_paths: bool, operation: str,
+    ) -> tuple[set[int], set[str]]:
         filters: dict[str, Any] = {
             "owner_user_id": owner_user_id,
             "project": project,
@@ -317,22 +462,24 @@ class CodeVectorStore:
             filters["path"] = list(paths)
         qf = self.store._build_filter(filters)
 
-        def _do() -> set[int]:
+        def _do() -> tuple[set[int], set[str]]:
             ids: set[int] = set()
+            found: set[str] = set()
             offset = None
             while True:
                 rows, offset = self.store.client.scroll(
                     self.collection_name, scroll_filter=qf, limit=1000,
-                    offset=offset, with_payload=False, with_vectors=False)
+                    offset=offset, with_payload=["path"] if with_paths else False,
+                    with_vectors=False)
                 for r in rows:
                     ids.add(r.id)
+                    if with_paths:
+                        path = (r.payload or {}).get("path")
+                        if path:
+                            found.add(str(path))
                 if offset is None:
-                    return ids
-        scope = "all" if paths is None else str(len(paths))
-        return _with_retry(
-            f"list_point_ids_for_paths(owner={owner_user_id} project={project} paths={scope})",
-            _do,
-        )
+                    return ids, found
+        return _with_retry(operation, _do)
 
     def delete_point_ids(self, ids: set[int]) -> int:
         """Delete specific points by id (no-op on empty). Retries then RAISES on permanent

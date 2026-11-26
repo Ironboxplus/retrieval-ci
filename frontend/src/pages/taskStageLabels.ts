@@ -55,6 +55,8 @@ const NODE_NAME_PATTERNS: [RegExp, string][] = [
   [/^Download (.+) PDFs$/, '下载 $1 PDF'],
   [/^Extract (.+) \(KSS marker\)$/, '解析 $1（KSS 标记）'],
   [/^Extract (.+) \(local marker\)$/, '解析 $1（本地标记）'],
+  // The local worker names its stage after itself (`(local pvl_worker)`, stages.py _local_worker_label).
+  [/^Extract (.+) \(local ([\w-]+)\)$/, '解析 $1（本地 $2）'],
   [/^Preindex (.+) → SQL$/, '预索引 $1 → SQL'],
   [/^Embed (.+) \(KSS BGE-M3\)$/, '向量化 $1（KSS BGE-M3）'],
   [/^Embed (.+) \(local BGE-M3\)$/, '向量化 $1（本地 BGE-M3）'],
@@ -86,7 +88,7 @@ export function nodeNameLabel(name: string): string {
 // the uploaded file, not converting a crawled PDF) — hence two separate
 // tables instead of one keyed only by subtask_key.
 const INGEST_STAGE_KEY_LABEL: Record<string, string> = {
-  download: '下载', extract: '转换', preindex: '预索引', embed: '向量化', ingest: '入库',
+  download: '下载', extract: '转换', preindex: '预索引', embed: '向量化', ingest: '入库', cleanup: '清理旧版本',
 };
 const UPLOAD_STAGE_KEY_LABEL: Record<string, string> = {
   extract: '解析', embed: '向量化', index: '入库',
@@ -102,7 +104,7 @@ const INGEST_TASK_TYPES = new Set(['ingest_pipeline', 'icml2026_external_pipelin
 const INGEST_TITLE_SHORT_PATTERNS: [RegExp, string][] = [
   [/^Download /, '下载'],
   [/^Extract .*\(KSS marker\)$/, '转换'],
-  [/^Extract .*\(local marker\)$/, '转换'],
+  [/^Extract .*\(local [\w-]+\)$/, '转换'],
   [/^Preindex .* → SQL$/, '预索引'],
   [/^Embed .*\(KSS BGE-M3\)$/, '向量化'],
   [/^Embed .*\(local BGE-M3\)$/, '向量化'],
