@@ -32,12 +32,19 @@ class QdrantRetrievalCancelledError(RuntimeError):
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, MatchAny,
     SparseVector, SparseVectorParams, SparseIndexParams,
-    Prefetch, Fusion, FusionQuery,
+    Prefetch, Fusion, FusionQuery, QuantizationSearchParams, SearchParams,
 )
 
 from config import settings
 from app.models.schemas import Chunk
+from core.storage.corpus_layout import (
+    QDRANT_ARXIV_COLLECTION,
+    check_paper_point,
+    is_paper_collection,
+    paper_collections,
+)
 from core.storage.papers_payload import project_papers_payload
+from core.storage.qdrant_operations import retry_qdrant_operation
 
 
 VECTOR_DIM = settings.embedding.dimension
@@ -55,6 +62,13 @@ QDRANT_COLLECTION_MAX_OPTIMIZATION_THREADS = int(os.environ.get(
     "QDRANT_COLLECTION_MAX_OPTIMIZATION_THREADS", "1"
 ))
 QDRANT_PAPERS_COLLECTION = os.environ.get("QDRANT_PAPERS_COLLECTION", "papers").strip() or "papers"
+# `papers` dense search rescoring. Its 2-bit TurboQuant copy (2026-10-14, 264 B/point
+# so it can stay resident) ranks coarsely on its own; rescoring 2x oversampled
+# candidates against the original vectors measured Recall@10/@100 = 0.923/0.826 on
+# 288 real search_papers queries, vs 0.846/0.739 for the former int8 default
+# (journal 2026-10-14). 0 disables it and restores Qdrant's per-method default.
+QDRANT_PAPERS_DENSE_OVERSAMPLING = float(os.environ.get(
+    "QDRANT_PAPERS_DENSE_OVERSAMPLING", "2.0"))
 
 # Qdrant rejects any single REST upsert whose JSON payload exceeds 32MB
 # ("Payload error: JSON payload (... bytes) is larger than allowed (limit:
@@ -178,22 +192,67 @@ def sparse_dict_to_qdrant(sparse: dict[str, float]) -> SparseVector:
     return SparseVector(indices=indices, values=values)
 
 
+class QdrantCollectionMissing(RuntimeError):
+    """The collection does not exist and this store must not create it."""
+
+
 class QdrantStore:
     """Qdrant 向量存储，接口兼容 ChromaStore"""
 
-    def __init__(self, collection_name: str | None = None):
+    def __init__(self, collection_name: str | None = None, *, create_if_missing: bool = True):
         self.collection_name = collection_name or QDRANT_PAPERS_COLLECTION
         self.qdrant_dir = getattr(settings, 'qdrant_dir', os.path.join(settings.index_dir, 'qdrant'))
-        self.client = _get_shared_client(self.qdrant_dir)
-        self._ensure_collection()
+        client = _get_shared_client(self.qdrant_dir)
+        # Follow the module's shared client rather than keep this one: see `client`.
+        self._pinned_client = None if client is _shared_client else client
+        self._ensure_collection(create_if_missing=create_if_missing)
+
+    @property
+    def client(self) -> QdrantClient:
+        """The current shared client, unless one was assigned to this store.
+
+        `_validate_or_rebuild` closes the shared client and builds a new one. A store
+        that kept the client it was built with then failed every call with "Cannot
+        invoke RPC on closed channel!" until the process restarted (2026-11-28 on .88:
+        a rebuild at 06:00 after an oomd kill of Qdrant left /api/search answering 503
+        for seven hours against a healthy Qdrant). Reading the module slot on each use
+        lets one rebuild reach every store."""
+        pinned = self.__dict__.get("_pinned_client")
+        if pinned is not None:
+            return pinned
+        if _shared_client is not None:
+            return _shared_client
+        return _get_shared_client(self.qdrant_dir)
+
+    @client.setter
+    def client(self, value: QdrantClient) -> None:
+        self._pinned_client = value
 
     @property
     def supports_sparse(self) -> bool:
         return settings.embedding.supports_sparse
 
-    def _ensure_collection(self):
+    def _dense_search_params(self) -> Optional[SearchParams]:
+        """Query-time quantization params for dense retrieval: the TurboQuant paper
+        collections (`papers`, and `arxiv`, which copies its config) only, since the
+        code/journal collections carry no quantization."""
+        rescored = {QDRANT_PAPERS_COLLECTION, QDRANT_ARXIV_COLLECTION}
+        if self.collection_name not in rescored or QDRANT_PAPERS_DENSE_OVERSAMPLING <= 0:
+            return None
+        return SearchParams(quantization=QuantizationSearchParams(
+            rescore=True, oversampling=QDRANT_PAPERS_DENSE_OVERSAMPLING))
+
+    def _ensure_collection(self, *, create_if_missing: bool = True):
         if self.client.collection_exists(self.collection_name):
             return
+        # The split paper collections are created with their full production config
+        # (quantization, on-disk placement, payload indexes) by
+        # scripts/split_papers_corpus.py; a bare auto-created one would silently
+        # serve empty results and later block that script.
+        split_names = {paper_collections()[role] for role in ("arxiv", "reviews")}
+        if not create_if_missing or self.collection_name in split_names:
+            raise QdrantCollectionMissing(
+                f"Qdrant collection `{self.collection_name}` does not exist")
         collection_options: dict[str, Any] = {}
         dense_options: dict[str, Any] = {}
         sparse_index_options: dict[str, Any] = {}
@@ -253,11 +312,22 @@ class QdrantStore:
                    use_upsert: bool = True,
                    wait: bool = True,
                    sparse_vectors: Optional[List[Dict[str, float]]] = None):
-        if not chunks:
-            return
+        self.upsert_points(self.build_points(
+            chunks, source_type=source_type, data_source=data_source,
+            doc_title=doc_title, doc_source=doc_source, sparse_vectors=sparse_vectors,
+        ), wait=wait)
 
+    def build_points(self, chunks: List[Chunk],
+                     source_type: str = None,
+                     data_source: str = None,
+                     doc_title: str = None,
+                     doc_source: str = None,
+                     sparse_vectors: Optional[List[Dict[str, float]]] = None,
+                     ) -> List[PointStruct]:
+        """The points `add_chunks` writes, payload already projected for a paper
+        collection; nothing is written."""
         points = []
-        for i, chunk in enumerate(chunks):
+        for i, chunk in enumerate(chunks or []):
             if chunk.embedding is None:
                 continue
 
@@ -288,14 +358,15 @@ class QdrantStore:
             if data_source:
                 payload["data_source"] = data_source
 
-            # `papers` is the only collection with a schema contract (D1-D3,
-            # docs/papers_payload_contract_plan.md); route every point through
-            # the projector so `**chunk.metadata` above can never leak an
-            # arbitrary key into it. Other collections (journal_chunks,
-            # code_chunks, public_code_chunks) own their payload shape
-            # elsewhere and are intentionally NOT constrained here (AGENTS.md
-            # 2.1: "禁止跨 collection 复用不匹配的 payload projector").
-            if self.collection_name == "papers":
+            # The paper collections (`papers`, `arxiv`, `reviews`) share the one
+            # schema contract (D1-D3, docs/papers_payload_contract_plan.md); route
+            # every point through the projector so `**chunk.metadata` above can
+            # never leak an arbitrary key into it; `upsert_points` then refuses a
+            # point that belongs to another paper collection before writing. Other
+            # collections (journal_chunks, code_chunks, public_code_chunks) own
+            # their payload shape elsewhere and are intentionally NOT constrained
+            # here (AGENTS.md 2.1: "禁止跨 collection 复用不匹配的 payload projector").
+            if is_paper_collection(self.collection_name):
                 payload = project_papers_payload(payload)
 
             if sparse_vectors and i < len(sparse_vectors) and sparse_vectors[i]:
@@ -313,9 +384,16 @@ class QdrantStore:
                 vector=vector,
                 payload=payload,
             ))
+        return points
 
+    def upsert_points(self, points: List[PointStruct], wait: bool = True) -> None:
+        """Write points in bounded batches. A paper collection first checks every
+        point belongs to it, so a misrouted batch is refused before any write."""
         if not points:
             return
+        if is_paper_collection(self.collection_name):
+            for point in points:
+                check_paper_point(self.collection_name, point.payload or {})
 
         n_batches = (len(points) + UPSERT_BATCH_SIZE - 1) // UPSERT_BATCH_SIZE
         if n_batches > 1:
@@ -334,26 +412,18 @@ class QdrantStore:
         Point IDs are content-derived (idempotent) so a retry after a partial
         server-side apply overwrites rather than duplicates.
         """
-        delay = 1.0
-        last_err = None
-        for attempt in range(1, _UPSERT_MAX_RETRIES + 1):
-            try:
-                self.client.upsert(self.collection_name, points=points, wait=wait)
-                return
-            except Exception as e:
-                last_err = e
-                _logger.warning(
-                    "[qdrant] upsert batch failed (attempt %d/%d, %d pts): %s",
-                    attempt, _UPSERT_MAX_RETRIES, len(points), e,
-                )
-                if attempt < _UPSERT_MAX_RETRIES:
-                    time.sleep(delay)
-                    delay = min(delay * 2, 30.0)
-        _logger.error(
-            "[qdrant] upsert batch permanently failed after %d attempts (%d pts)",
-            _UPSERT_MAX_RETRIES, len(points),
-        )
-        raise last_err
+        try:
+            retry_qdrant_operation(
+                f"upsert(collection={self.collection_name} points={len(points)})",
+                lambda: self.client.upsert(self.collection_name, points=points, wait=wait),
+                max_attempts=_UPSERT_MAX_RETRIES,
+            )
+        except Exception:
+            _logger.error(
+                "[qdrant] upsert batch permanently failed after %d attempts (%d pts)",
+                _UPSERT_MAX_RETRIES, len(points),
+            )
+            raise
 
     def _build_filter(self, filter_dict: Dict[str, Any] = None,
                       level: int = None, source_type: str = None,
@@ -365,13 +435,17 @@ class QdrantStore:
         # point (a positive MatchAny would silently exclude rows with a null/odd
         # source_type — must_not only removes the named values).
         exclude: Dict[str, Any] = merged.pop("__exclude__", None) or {}
+        # Reserved key: an OR over independent sub-filters, each a filter_dict of its own
+        # (e.g. [{"entry_id": [...]}, {"__exclude__": {"source_kind": "doc"}}] = "in this
+        # id set, or not a doc"). It ANDs with every other condition, like ``must``.
+        should_groups: List[Dict[str, Any]] = merged.pop("__should__", None) or []
         if level is not None:
             merged["level"] = level
         if source_type is not None:
             merged["source_type"] = source_type
         if data_source is not None:
             merged["data_source"] = data_source
-        if not merged and not exclude:
+        if not merged and not exclude and not should_groups:
             return None
         conditions = []
         for k, v in merged.items():
@@ -379,11 +453,26 @@ class QdrantStore:
                 conditions.append(FieldCondition(key=k, match=MatchAny(any=v)))
             else:
                 conditions.append(FieldCondition(key=k, match=MatchValue(value=v)))
+        # A list is MatchAny, a scalar MatchValue. The distinction matters for bool:
+        # qdrant_client's MatchAny.any is List[StrictStr] | List[StrictInt] (it rejects
+        # [True] at validation), while MatchValue.value is bool | int | str. So
+        # {"withdrawn": True} -> MatchValue(True), {"source_type": ["review"]} -> MatchAny.
+        # Cost of a must_not: Qdrant estimates it as total - estimate(condition)
+        # (lib/segment/src/index/query_estimator.rs::invert_estimation: min=total-max,
+        # exp=total-exp, max=total-min): for a rare value that is nearly every point,
+        # so the condition is checked on each visited point instead of narrowing the
+        # candidate set. It is only cheap when the key is payload-indexed in this
+        # collection, so a must_not on an unindexed key must not go to a large
+        # collection (see core/storage/corpus_layout.py ROLE_ONLY_EXCLUSIONS).
         must_not = []
         for k, v in exclude.items():
-            vals = v if isinstance(v, list) else [v]
-            must_not.append(FieldCondition(key=k, match=MatchAny(any=vals)))
-        return Filter(must=conditions or None, must_not=must_not or None)
+            if isinstance(v, list):
+                must_not.append(FieldCondition(key=k, match=MatchAny(any=v)))
+            else:
+                must_not.append(FieldCondition(key=k, match=MatchValue(value=v)))
+        should = [self._build_filter(group) for group in should_groups]
+        return Filter(
+            must=conditions or None, must_not=must_not or None, should=should or None)
 
     @staticmethod
     def _format_points(points) -> List[Dict]:
@@ -415,6 +504,9 @@ class QdrantStore:
         kwargs = {}
         if self.supports_sparse:
             kwargs["using"] = "dense"
+        dense_params = self._dense_search_params()
+        if dense_params is not None:
+            kwargs["search_params"] = dense_params
 
         def _do() -> Optional[List]:
             try:
@@ -459,6 +551,7 @@ class QdrantStore:
         resolved_filter = query_filter if query_filter is not None else self._build_filter(
             filter_dict, level, source_type, data_source
         )
+        dense_params = self._dense_search_params()
 
         def _do() -> Optional[List]:
             try:
@@ -466,7 +559,8 @@ class QdrantStore:
                     self.collection_name,
                     prefetch=[
                         Prefetch(query=dense_vector, using="dense",
-                                 limit=prefetch_limit, filter=resolved_filter),
+                                 limit=prefetch_limit, filter=resolved_filter,
+                                 params=dense_params),
                         Prefetch(query=sparse_vector, using="sparse",
                                  limit=prefetch_limit, filter=resolved_filter),
                     ],
@@ -642,15 +736,15 @@ class QdrantStore:
 
     def delete_by_doc_id(self, doc_id: str) -> int:
         try:
-            before = self.client.count(self.collection_name).count
+            # Count the document's own points (``doc_id`` is payload-indexed, the same
+            # index the delete filter uses) instead of differencing two whole-collection
+            # counts, which are O(points) on the ~24M-point corpus.
+            doc_filter = Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))])
+            deleted = self.client.count(
+                self.collection_name, count_filter=doc_filter, exact=True).count
             self.client.delete(
-                self.collection_name,
-                points_selector=models.FilterSelector(
-                    filter=Filter(must=[FieldCondition(key="doc_id", match=MatchValue(value=doc_id))])
-                ),
-            )
-            after = self.client.count(self.collection_name).count
-            return before - after
+                self.collection_name, points_selector=models.FilterSelector(filter=doc_filter))
+            return deleted
         except Exception as e:
             print(f"Warning: Error deleting chunks for doc_id={doc_id}: {e}")
             return 0

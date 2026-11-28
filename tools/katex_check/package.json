@@ -1,0 +1,10 @@
+{
+  "name": "katex-check",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Persistent KaTeX renderer used by the PDF-to-Markdown verifier; the version is the one the frontend renders with.",
+  "type": "module",
+  "dependencies": {
+    "katex": "0.18.9"
+  }
+}

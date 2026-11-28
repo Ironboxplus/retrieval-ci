@@ -16,13 +16,18 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from qdrant_client.models import PayloadSchemaType
 
-from core.storage.papers_payload import PAPER_PROFILE_KEYS
+from core.storage.papers_payload import (
+    COMMON_OPTIONAL_STRING_KEYS,
+    OPTIONAL_PAPER_KEYS,
+    PAPER_PROFILE_KEYS,
+)
 from recreate_qdrant_collection import PAYLOAD_INDEXES
 
 
-def test_index_fields_are_exactly_the_paper_profile_minus_content():
+def test_index_fields_are_exactly_the_paper_profile_minus_content_plus_optional_keys():
     fields = {field for field, _ in PAYLOAD_INDEXES}
-    assert fields == PAPER_PROFILE_KEYS - {"content"}
+    assert fields == ((PAPER_PROFILE_KEYS - {"content"}) | OPTIONAL_PAPER_KEYS
+                      | COMMON_OPTIONAL_STRING_KEYS)
 
 
 def test_no_duplicate_fields():
@@ -60,6 +65,18 @@ def test_keyword_fields_are_keyword_schema():
         assert by_field[field] == PayloadSchemaType.KEYWORD
 
 
-def test_seven_indexes_total():
-    """AGENTS.md 2.1: 8-field paper whitelist, 7 of them indexed (content isn't)."""
-    assert len(PAYLOAD_INDEXES) == 7
+def test_withdrawn_is_a_bool_index():
+    """The optional `withdrawn` key is written as a JSON true, which only a `bool`
+    index covers (a keyword index would never see it)."""
+    assert dict(PAYLOAD_INDEXES)["withdrawn"] == PayloadSchemaType.BOOL
+
+
+def test_embed_fp_is_a_keyword_index():
+    assert dict(PAYLOAD_INDEXES)["embed_fp"] == PayloadSchemaType.KEYWORD
+
+
+def test_ten_indexes_total():
+    """AGENTS.md 2.1: 8-field paper whitelist, 7 of them indexed (content isn't),
+    plus the optional `withdrawn` and `preprint_full_text` flags and the
+    `embed_fp` profile fingerprint."""
+    assert len(PAYLOAD_INDEXES) == 10

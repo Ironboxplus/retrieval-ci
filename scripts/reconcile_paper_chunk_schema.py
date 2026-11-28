@@ -26,8 +26,6 @@ import json
 import sqlite3
 import sys
 import time
-from collections import defaultdict, deque
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -35,9 +33,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from app.models.schemas import Chunk
 from core.indexing.chunker import create_chunker
-from scripts.remote_embed.dump_chunks import chunk_id_int, chunk_id_str
+from core.indexing.paper_chunk_reconcile import (
+    apply_document_plan_atomically,
+    build_document_reconciliation,
+    load_existing_chunks,
+)
+from core.storage.qdrant_operations import retry_qdrant_operation
+from pipeline.paper_crawler.runtime_files import write_text_atomic
 
 
 DEFAULT_DB = Path("data/db/retrieval.db")
@@ -47,240 +50,34 @@ DEFAULT_REPORT = Path(
 )
 
 
-@dataclass(frozen=True)
-class ExistingChunkRecord:
-    row_id: int
-    content: str
-    level: int
-    chunk_index: int
-    start_idx: int | None
-    end_idx: int | None
-    token_count: int | None
-    metadata: dict[str, Any]
-
-
-@dataclass(frozen=True)
-class RetainedChunk:
-    row_id: int
-    expected_index: int
-    chunk: Chunk
-    requires_update: bool
-
-
-@dataclass(frozen=True)
-class InsertedChunk:
-    expected_index: int
-    chunk: Chunk
-
-
-@dataclass
-class DocumentReconciliation:
-    retained: list[RetainedChunk] = field(default_factory=list)
-    inserts: list[InsertedChunk] = field(default_factory=list)
-    delete_row_ids: list[int] = field(default_factory=list)
-    stale_point_ids: list[int] = field(default_factory=list)
-
-
-def _normalized_start(value: int | None) -> int:
-    return int(value or 0)
-
-
-def _vector_identity(content: str, level: int, start_idx: int | None) -> tuple[int, int, str]:
-    return int(level), _normalized_start(start_idx), content
-
-
-def _expected_identity(chunk: Chunk) -> tuple[int, int, str]:
-    return _vector_identity(chunk.content, chunk.level, chunk.start_idx)
-
-
-def _existing_identity(chunk: ExistingChunkRecord) -> tuple[int, int, str]:
-    return _vector_identity(chunk.content, chunk.level, chunk.start_idx)
-
-
-def _validate_expected_schema(expected: Sequence[Chunk]) -> None:
-    if not expected:
-        raise ValueError("canonical paper chunker returned no chunks")
-    l1_count = sum(chunk.level == 1 for chunk in expected)
-    if l1_count != 1:
-        raise ValueError(f"canonical paper schema requires one L1 chunk, got {l1_count}")
-    invalid_levels = sorted({chunk.level for chunk in expected if chunk.level not in (1, 2)})
-    if invalid_levels:
-        raise ValueError(f"canonical paper schema only permits levels 1 and 2: {invalid_levels}")
-    if expected[0].level != 1:
-        raise ValueError("canonical paper schema requires L1 as chunk_index 0")
-
-
-def _retained_row_requires_update(
-    existing: ExistingChunkRecord,
-    expected_index: int,
-    expected: Chunk,
-) -> bool:
-    return any((
-        existing.chunk_index != expected_index,
-        _normalized_start(existing.start_idx) != _normalized_start(expected.start_idx),
-        existing.end_idx != expected.end_idx,
-        existing.token_count != len(expected.content),
-        existing.metadata != expected.metadata,
-    ))
-
-
-def build_document_reconciliation(
-    doc_id: int,
-    existing: Sequence[ExistingChunkRecord],
-    expected: Sequence[Chunk],
-) -> DocumentReconciliation:
-    """Return the exact SQL/vector mutations needed for one document."""
-    _validate_expected_schema(expected)
-    available: dict[tuple[int, int, str], deque[ExistingChunkRecord]] = defaultdict(deque)
-    for row in existing:
-        available[_existing_identity(row)].append(row)
-
-    plan = DocumentReconciliation()
-    expected_identities = {_expected_identity(chunk) for chunk in expected}
-    retained_ids: set[int] = set()
-
-    for expected_index, chunk in enumerate(expected):
-        identity = _expected_identity(chunk)
-        candidates = available.get(identity)
-        if candidates:
-            row = candidates.popleft()
-            retained_ids.add(row.row_id)
-            plan.retained.append(RetainedChunk(
-                row_id=row.row_id,
-                expected_index=expected_index,
-                chunk=chunk,
-                requires_update=_retained_row_requires_update(row, expected_index, chunk),
-            ))
-        else:
-            plan.inserts.append(InsertedChunk(expected_index=expected_index, chunk=chunk))
-
-    stale_points: set[int] = set()
-    for row in existing:
-        if row.row_id in retained_ids:
-            continue
-        plan.delete_row_ids.append(row.row_id)
-        identity = _existing_identity(row)
-        if identity not in expected_identities:
-            stale_points.add(chunk_id_int(chunk_id_str(
-                doc_id,
-                row.content,
-                row.level,
-                _normalized_start(row.start_idx),
-            )))
-    plan.stale_point_ids = sorted(stale_points)
-    return plan
-
-
-def _decode_metadata(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if not value:
-        return {}
-    return json.loads(value)
-
-
-def _load_existing_chunks(conn: sqlite3.Connection, doc_id: int) -> list[ExistingChunkRecord]:
-    rows = conn.execute(
-        """
-        SELECT id, content, level, chunk_index, start_idx, end_idx,
-               token_count, metadata_json
-        FROM chunks
-        WHERE doc_id = ?
-        ORDER BY chunk_index, id
-        """,
-        (doc_id,),
-    ).fetchall()
-    return [ExistingChunkRecord(
-        row_id=row[0],
-        content=row[1],
-        level=row[2],
-        chunk_index=row[3],
-        start_idx=row[4],
-        end_idx=row[5],
-        token_count=row[6],
-        metadata=_decode_metadata(row[7]),
-    ) for row in rows]
-
-
-def _metadata_json(metadata: dict[str, Any]) -> str:
-    return json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
-
-
-def _apply_document_plan(
-    conn: sqlite3.Connection,
-    doc_id: int,
-    plan: DocumentReconciliation,
-) -> list[int]:
-    if plan.delete_row_ids:
-        placeholders = ",".join("?" for _ in plan.delete_row_ids)
-        conn.execute(f"DELETE FROM chunks WHERE id IN ({placeholders})", plan.delete_row_ids)
-
-    for item in plan.retained:
-        if not item.requires_update:
-            continue
-        chunk = item.chunk
-        conn.execute(
-            """
-            UPDATE chunks
-            SET chunk_index = ?, start_idx = ?, end_idx = ?, token_count = ?, metadata_json = ?
-            WHERE id = ?
-            """,
-            (
-                item.expected_index,
-                chunk.start_idx,
-                chunk.end_idx,
-                len(chunk.content),
-                _metadata_json(chunk.metadata),
-                item.row_id,
-            ),
-        )
-
-    inserted_ids: list[int] = []
-    for item in plan.inserts:
-        chunk = item.chunk
-        cursor = conn.execute(
-            """
-            INSERT INTO chunks (
-                doc_id, content, level, chunk_index, start_idx, end_idx,
-                token_count, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                doc_id,
-                chunk.content,
-                chunk.level,
-                item.expected_index,
-                chunk.start_idx,
-                chunk.end_idx,
-                len(chunk.content),
-                _metadata_json(chunk.metadata),
-            ),
-        )
-        inserted_ids.append(int(cursor.lastrowid))
-    return inserted_ids
-
-
 def _write_report(path: Path, report: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    write_text_atomic(path, json.dumps(report, ensure_ascii=False, indent=2))
 
 
 def reconcile_slice(args: argparse.Namespace) -> dict[str, Any]:
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    rows = conn.execute(
-        """
-        SELECT p.paper_id, p.title, p.doc_id, d.file_path
-        FROM papers p
-        JOIN documents d ON d.id = p.doc_id
-        WHERE LOWER(p.venue) = LOWER(?) AND p.year = ?
-        ORDER BY p.doc_id
-        """,
-        (args.conf, args.year),
-    ).fetchall()
+    if getattr(args, "paper_ids_file", None):
+        ids = [line.strip() for line in Path(args.paper_ids_file).read_text(encoding="utf-8").splitlines()
+               if line.strip()]
+        rows = []
+        for start in range(0, len(ids), 400):
+            batch = ids[start:start + 400]
+            rows.extend(conn.execute(
+                "SELECT p.paper_id, p.title, p.doc_id, d.file_path "
+                "FROM papers p JOIN documents d ON d.id=p.doc_id "
+                "WHERE p.paper_id IN (" + ",".join("?" * len(batch)) + ") ORDER BY p.doc_id",
+                batch,
+            ).fetchall())
+        rows.sort(key=lambda row: row[2])
+    else:
+        rows = conn.execute(
+            "SELECT p.paper_id, p.title, p.doc_id, d.file_path "
+            "FROM papers p JOIN documents d ON d.id=p.doc_id "
+            "WHERE LOWER(p.venue) = LOWER(?) AND p.year = ? ORDER BY p.doc_id",
+            (args.conf, args.year),
+        ).fetchall()
     if args.limit > 0:
         rows = rows[:args.limit]
 
@@ -305,19 +102,11 @@ def reconcile_slice(args: argparse.Namespace) -> dict[str, Any]:
                 raise FileNotFoundError(file_path or "missing document file_path")
             text = Path(file_path).read_text(encoding="utf-8", errors="replace")
             expected = chunker.chunk_document(str(doc_id), text, title_hint=title)
-            existing = _load_existing_chunks(conn, doc_id)
+            existing = load_existing_chunks(conn, doc_id)
             plan = build_document_reconciliation(doc_id, existing, expected)
 
             if args.execute:
-                conn.execute("SAVEPOINT reconcile_paper")
-                try:
-                    new_ids = _apply_document_plan(conn, doc_id, plan)
-                    conn.execute("RELEASE SAVEPOINT reconcile_paper")
-                except Exception:
-                    conn.execute("ROLLBACK TO SAVEPOINT reconcile_paper")
-                    conn.execute("RELEASE SAVEPOINT reconcile_paper")
-                    raise
-                inserted_chunk_ids.extend(new_ids)
+                inserted_chunk_ids.extend(apply_document_plan_atomically(conn, doc_id, plan))
 
             counters["processed"] += 1
             counters["inserted"] += len(plan.inserts)
@@ -344,7 +133,7 @@ def reconcile_slice(args: argparse.Namespace) -> dict[str, Any]:
     conn.close()
 
     report = {
-        "conference": args.conf.upper(),
+        "conference": args.conf.upper() if args.conf else "paper_ids",
         "year": args.year,
         "executed": bool(args.execute),
         **counters,
@@ -423,18 +212,14 @@ def delete_stale_vectors(
 
     deleted = 0
     for batch in _batches(point_ids, batch_size):
-        for attempt in range(5):
-            try:
-                client.delete(
-                    collection_name=collection,
-                    points_selector=PointIdsList(points=batch),
-                    wait=True,
-                )
-                break
-            except Exception:
-                if attempt == 4:
-                    raise
-                time.sleep(2 ** attempt)
+        retry_qdrant_operation(
+            f"delete(collection={collection} points={len(batch)})",
+            lambda batch=batch: client.delete(
+                collection_name=collection,
+                points_selector=PointIdsList(points=batch),
+                wait=True,
+            ),
+        )
         deleted += len(batch)
         print(f"[qdrant] deleted {deleted}/{len(point_ids)} stale points", flush=True)
     return deleted
@@ -444,6 +229,8 @@ def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--conf")
     parser.add_argument("--year", type=int)
+    parser.add_argument("--paper-ids-file", type=Path,
+                        help="Reconcile exactly these paper_id values; mutually exclusive with --conf/--year")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--limit", type=int, default=0, help="0 means all papers in the slice")
@@ -474,8 +261,11 @@ def main() -> int:
         )
         print(json.dumps({"deleted_stale_vectors": deleted}, indent=2))
         return 0
-    if not args.conf or args.year is None:
-        parser.error("--conf and --year are required for chunk reconciliation")
+    if args.paper_ids_file:
+        if args.conf is not None or args.year is not None:
+            parser.error("--paper-ids-file cannot be combined with --conf/--year")
+    elif not args.conf or args.year is None:
+        parser.error("--conf and --year, or --paper-ids-file, are required")
 
     report = reconcile_slice(args)
     print(json.dumps({

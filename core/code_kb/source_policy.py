@@ -40,6 +40,9 @@ LANG_BY_NAME = {
 }
 
 FALLBACK_EXTS = {".env", ".properties", ".cfg", ".conf", ".editorconfig", ".sass"}
+# Documentation files the Journal document pipeline owns; index_code walks them with the code.
+DOC_EXTS = frozenset({".md", ".mdx", ".markdown", ".rst", ".adoc", ".txt"})
+DOC_GLOBS = ["*.md", "*.mdx", "*.markdown", "*.rst", "*.adoc", "*.txt"]
 DEFAULT_MAX_CHUNK_SIZE = 1500
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
@@ -65,6 +68,8 @@ def resolve_language(path: str) -> Optional[str]:
 
 __all__ = [
     "DEFAULT_MAX_CHUNK_SIZE",
+    "DOC_EXTS",
+    "DOC_GLOBS",
     "FALLBACK_EXTS",
     "LANG_BY_EXT",
     "LANG_BY_NAME",
