@@ -3,6 +3,7 @@ API路由模块
 """
 from fastapi import APIRouter
 
+from app.api.errors import register_error_handlers
 from app.api.routes.tasks import router as tasks_router
 from app.api.routes.documents import router as documents_router
 from app.api.routes.crawl import router as crawl_router
@@ -13,6 +14,7 @@ from app.api.routes.playbook import router as playbook_router
 from app.api.routes.code_kb import router as code_kb_router
 from app.api.routes.public_code import router as public_code_router
 from app.api.routes.admin_console import router as admin_console_router
+from app.api.routes.schedules import router as schedules_router
 
 
 def register_routes(app):
@@ -22,6 +24,7 @@ def register_routes(app):
     Args:
         app: FastAPI应用实例
     """
+    register_error_handlers(app)
     app.include_router(tasks_router, prefix="/api/tasks", tags=["任务管理"])
     app.include_router(documents_router, prefix="/api/documents", tags=["文档管理"])
     app.include_router(crawl_router, prefix="/api/crawl", tags=["爬虫"])
@@ -31,6 +34,7 @@ def register_routes(app):
     app.include_router(code_kb_router, prefix="/api/code", tags=["Code KB"])
     app.include_router(public_code_router, prefix="/api/public-code", tags=["Public Code KB"])
     app.include_router(admin_console_router, prefix="/api/admin/console", tags=["Admin Console"])
+    app.include_router(schedules_router, prefix="/api/schedules", tags=["Schedules"])
     app.include_router(dashboard_router)
 
 __all__ = [
@@ -43,6 +47,7 @@ __all__ = [
     "code_kb_router",
     "public_code_router",
     "admin_console_router",
+    "schedules_router",
     "dashboard_router",
     "register_routes",
 ]

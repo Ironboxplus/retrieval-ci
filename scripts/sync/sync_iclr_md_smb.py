@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 import argparse
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from pipeline.paper_crawler.ccf_a_main_corpus import sanitize_file_component  # type: ignore
+from pipeline.paper_crawler.runtime_files import write_text_atomic
 
 MANIFEST = REPO / "data/papers/ccf_a_main_conference_corpus/manifests/paper_manifest.json"
 SMB_ROOT = Path("//10.100.100.9/lsb/retrival/papers/markdown/iclr")
@@ -92,10 +94,8 @@ def main() -> int:
         return 0
 
     bak = MANIFEST.with_suffix(f".json.bak.iclr-r7.{int(time.time())}")
-    tmp = MANIFEST.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    MANIFEST.rename(bak)
-    tmp.rename(MANIFEST)
+    shutil.copy2(MANIFEST, bak)
+    write_text_atomic(MANIFEST, json.dumps(data, ensure_ascii=False, indent=2))
     print(f"\n[execute] wrote {MANIFEST}  (backup: {bak.name})")
     return 0
 

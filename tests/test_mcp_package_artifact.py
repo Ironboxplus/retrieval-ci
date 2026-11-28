@@ -233,7 +233,8 @@ def test_built_wheel_console_is_a_real_singleton_for_isolated_and_fixed_port_cli
         assert list(artifact_dir.glob("retrieval_mcp-*.tar.gz"))
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
-        assert {"retrieval_mcp.py", "retrieval_mcp_cli.py", "retrieval_mcp_daemon.py"} <= names
+        assert {"retrieval_mcp.py", "retrieval_mcp_cli.py", "retrieval_mcp_daemon.py",
+                "retrieval_mcp_conversations.py"} <= names
         entrypoints = next(name for name in names if name.endswith(".dist-info/entry_points.txt"))
         assert "retrieval-mcp = retrieval_mcp_cli:main" in archive.read(entrypoints).decode("utf-8")
 
@@ -320,7 +321,7 @@ def test_built_wheel_console_is_a_real_singleton_for_isolated_and_fixed_port_cli
         assert status["pid"] == live_state["pid"]
         assert status["instance_token"] == live_state["instance_token"]
         for tools, text in results:
-            assert len(tools) == 32
+            assert len(tools) == _expected_tool_count()
             assert "corpus_stats" in tools
             assert "7 papers" in text
 

@@ -94,7 +94,7 @@ def extract_gate(ctx: UploadStageContext) -> GateResult:
 def make_upload_extract_stage(ctx: UploadStageContext) -> StageSpec:
     def run(c: UploadStageContext, sink: EventSink) -> None:
         sink(f"extract doc {c.doc_id}: marker {c.ext} -> {c.md_path.name} (+persist to SMB)")
-        run_local(build_extract_cmd(c), c.project_root, sink)
+        run_local(build_extract_cmd(c), c.project_root, sink, abort=c.abort)
 
     return StageSpec(
         key="extract", title=f"Extract upload doc {ctx.doc_id} (marker)",
@@ -144,7 +144,7 @@ def index_gate(
 def make_upload_index_stage(ctx: UploadStageContext, *, session_factory=None) -> StageSpec:
     def run(c: UploadStageContext, sink: EventSink) -> None:
         sink(f"index doc {c.doc_id}: embed chunks + upsert to Qdrant")
-        run_local(build_index_cmd(c), c.project_root, sink)
+        run_local(build_index_cmd(c), c.project_root, sink, abort=c.abort)
 
     return StageSpec(
         key="index", title=f"Index upload doc {ctx.doc_id} -> Qdrant",

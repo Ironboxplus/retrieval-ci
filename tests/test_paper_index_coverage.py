@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from core.db import get_db_session
 from core.db.models import DataSource, Document, DocumentStatus, Paper, SourceType
+from core.cache import stats_cache
 from pipeline.paper_crawler.integration import api_routes
 from pipeline.paper_crawler.integration.api_routes import create_paper_router
 
@@ -81,12 +82,12 @@ class PaperIndexCoverageTests(unittest.TestCase):
                 synchronize_session=False)
             db.query(Document).filter(Document.id.in_(doc_ids)).delete(
                 synchronize_session=False)
-        api_routes._coverage_cache = None
+        stats_cache.clear()
 
     def setUp(self) -> None:
-        # The endpoint caches for 5 minutes; a stale entry from an earlier test
+        # The endpoint caches for 10 minutes; a stale entry from an earlier test
         # would answer before this run's seed rows landed.
-        api_routes._coverage_cache = None
+        stats_cache.clear()
 
     def _seeded_venue(self) -> dict:
         response = self.client.get("/api/papers/coverage")
@@ -129,7 +130,7 @@ class PaperIndexCoverageTests(unittest.TestCase):
 
     def test_cache_serves_a_repeat_call(self) -> None:
         """Second call inside the TTL returns the identical cached object."""
-        api_routes._coverage_cache = None
+        stats_cache.clear()
         first = api_routes._index_coverage_cached()
         second = api_routes._index_coverage_cached()
         self.assertIs(first, second)

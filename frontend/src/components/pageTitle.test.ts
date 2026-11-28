@@ -14,6 +14,7 @@ describe('pageTitle', () => {
   });
   it('names the plain pages', () => {
     expect(pageTitle('/tasks', '').title).toBe('任务');
+    expect(pageTitle('/updates', '').title).toBe('定时更新');
     expect(pageTitle('/documents', '').title).toBe('文档库');
     expect(pageTitle('/match-doc', '').title).toBe('文档匹配');
     expect(pageTitle('/papers/abc', '')).toEqual({ title: '检索', sub: '论文详情' });

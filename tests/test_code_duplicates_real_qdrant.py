@@ -385,7 +385,8 @@ def test_scanner_only_reads_store_attributes_that_really_exist(store):
     # And the instance state this fixture fabricates must stay a subset of what
     # a genuinely constructed store carries, so the next invented attribute
     # fails here rather than in production.
-    assert set(vars(store.store)) <= {"collection_name", "client", "qdrant_dir"}
+    # (`client` is a property; an assigned client lives in `_pinned_client`.)
+    assert set(vars(store.store)) <= {"collection_name", "_pinned_client", "qdrant_dir"}
 
 
 class TestAliasScopesDoNotMultiplyTheEvidence:

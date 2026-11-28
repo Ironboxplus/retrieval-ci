@@ -126,6 +126,11 @@ def test_static_routes_select_port_specific_bundle_and_fail_closed(tmp_path: Pat
     assert public_response.text == "public bundle"
     assert unknown_response.status_code == 503
     assert asset_directory.status_code == 404
+    # A deploy must reach browsers: index.html revalidates, fingerprinted assets are immutable.
+    assert internal_response.headers["cache-control"] == "no-cache"
+    asset = TestClient(main.app, base_url="http://testserver:18080").get("/assets/app.js")
+    assert asset.text == "internal bundle asset"
+    assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
 def test_public_static_route_returns_503_for_an_incomplete_bundle(tmp_path: Path, monkeypatch):

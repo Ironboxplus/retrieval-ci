@@ -9,23 +9,31 @@ StartLimitBurst=3
 Type=simple
 WorkingDirectory=/home/arc/retrival-4090-migration/qdrant
 Environment=QDRANT__STORAGE__STORAGE_PATH=/home/arc/retrival-4090-migration/retrival/data/indices/qdrant_server
-Environment=QDRANT__STORAGE__LOW_MEMORY_MODE=no_populate
+# No LOW_MEMORY_MODE: it forces every quantization off RAM, which kept papers' dense
+# search reading ~0.5-1 GB from disk per query. Every collection's persisted config is
+# disk-safe instead (code/public_code dense, sparse and payload indexes on disk; papers
+# payload indexes on disk); papers' 5.8G TurboQuant and journal stay in RAM.
 Environment=QDRANT__SERVICE__HOST=127.0.0.1
 Environment=QDRANT__SERVICE__HTTP_PORT=16333
 Environment=QDRANT__SERVICE__GRPC_PORT=16334
 Environment=QDRANT__STORAGE__PERFORMANCE__MAX_SEARCH_THREADS=4
 Environment=QDRANT__STORAGE__PERFORMANCE__ASYNC_SCORER=true
 Environment=QDRANT__STORAGE__PERFORMANCE__MAX_OPTIMIZATION_THREADS=1
-Environment=QDRANT__STORAGE__PERFORMANCE__OPTIMIZER_CPU_BUDGET=1
+# 2 of the 4 cores for optimizer/HNSW builds (one segment at a time, two build
+# threads); the other two stay with search. Raised from 1 on 2026-10-14 for the
+# papers TurboQuant rebuild by operator decision.
+Environment=QDRANT__STORAGE__PERFORMANCE__OPTIMIZER_CPU_BUDGET=2
 ExecStart=/home/arc/retrival-4090-migration/qdrant/qdrant --disable-telemetry
 Restart=on-failure
 RestartSec=5
 TimeoutStartSec=600
 TimeoutStopSec=120
 LimitNOFILE=1048576
-MemoryHigh=11G
+MemoryHigh=12G
 MemoryMax=13G
-MemorySwapMax=1G
+# always_ram only controls heap placement. Prevent the quantized search working
+# set from being swapped out; the existing RAM limits still bound this service.
+MemorySwapMax=0
 
 [Install]
 WantedBy=default.target

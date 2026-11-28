@@ -13,7 +13,6 @@ Groups:
     qdrant     Qdrant ops (health, recreate, cleanup, payload migration)
     db         SQLite migrations
     verify     API contract / data source verification
-    test       CLI test suites (not pytest)
     ops        Operational (cleanup zombies, monitor, watch progress)
 
 Examples:
@@ -24,7 +23,6 @@ Examples:
     python scripts/retrival.py qdrant health
     python scripts/retrival.py qdrant segments
     python scripts/retrival.py verify api-contracts
-    python scripts/retrival.py test api
 
 Args after the command are passed through verbatim to the underlying script.
 See scripts/README.md for the full catalog and archived scripts.
@@ -93,12 +91,6 @@ COMMANDS: dict[tuple[str, str], tuple[str, ...]] = {
     ("verify", "api-contracts"):       ("py", "scripts/verify_live_api_contracts.py"),
     ("verify", "2025-sources"):        ("py", "scripts/verify_2025_sources.py"),
 
-    # ─── test: CLI test suites ───
-    ("test", "api"):                   ("py", "scripts/test_api.py"),
-    ("test", "e2e"):                   ("py", "scripts/test_e2e.py"),
-    ("test", "services"):              ("py", "scripts/test_services.py"),
-    ("test", "stress"):                ("py", "scripts/test_stress.py"),
-
     # ─── ops: maintenance / monitoring ───
     ("ops", "cleanup-zombies"):        ("py", "scripts/cleanup_zombie_tasks.py"),
     ("ops", "monitor-corpus"):         ("py", "scripts/monitor_ccf_a_main_corpus_pipeline.py"),
@@ -114,7 +106,6 @@ GROUP_DESC = {
     "qdrant":   "Qdrant ops (health, recreate, cleanup, payload migration)",
     "db":       "SQLite migrations (one-shot, applied; kept for rollback reference)",
     "verify":   "API contract / data source verification",
-    "test":     "CLI test suites (not pytest)",
     "ops":      "Operational (cleanup zombies, monitor, watch progress)",
 }
 
