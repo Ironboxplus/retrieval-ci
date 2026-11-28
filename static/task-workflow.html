@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Workflow Graph</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        :root {
+            --wf-bg: radial-gradient(circle at top left, rgba(230, 245, 255, 0.9), rgba(245, 240, 232, 0.95) 45%, rgba(247, 244, 238, 1) 100%);
+            --wf-ink: #1b2430;
+            --wf-muted: #5f6874;
+            --wf-line: rgba(27, 36, 48, 0.12);
+            --wf-panel: rgba(255, 255, 255, 0.82);
+            --wf-panel-strong: rgba(255, 255, 255, 0.94);
+            --wf-accent: #0b6bcb;
+            --wf-accent-soft: rgba(11, 107, 203, 0.12);
+            --wf-good: #18794e;
+            --wf-warn: #b76e00;
+            --wf-bad: #b42318;
+            --wf-shadow: 0 18px 60px rgba(24, 31, 42, 0.10);
+        }
+
+        body.workflow-body {
+            margin: 0;
+            min-height: 100vh;
+            background: var(--wf-bg);
+            color: var(--wf-ink);
+        }
+
+        .workflow-shell {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 28px 22px 32px;
+        }
+
+        .workflow-topbar {
+            display: grid;
+            grid-template-columns: 1.3fr 1fr;
+            gap: 18px;
+            margin-bottom: 18px;
+        }
+
+        .workflow-hero,
+        .workflow-summary {
+            background: var(--wf-panel-strong);
+            border: 1px solid var(--wf-line);
+            border-radius: 26px;
+            box-shadow: var(--wf-shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        .workflow-hero {
+            padding: 26px 28px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .workflow-hero::after {
+            content: "";
+            position: absolute;
+            right: -50px;
+            top: -70px;
+            width: 220px;
+            height: 220px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, rgba(11, 107, 203, 0.14), rgba(209, 86, 29, 0.06));
+            filter: blur(6px);
+        }
+
+        .workflow-kicker {
+            font-size: 12px;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--wf-accent);
+            margin-bottom: 10px;
+        }
+
+        .workflow-title {
+            font-size: 34px;
+            line-height: 1.1;
+            margin: 0 0 10px;
+        }
+
+        .workflow-subtitle {
+            margin: 0;
+            max-width: 62ch;
+            color: var(--wf-muted);
+            font-size: 15px;
+            line-height: 1.6;
+        }
+
+        .workflow-summary {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            padding: 18px;
+        }
+
+        .summary-card {
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid var(--wf-line);
+            background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(247,248,250,0.72));
+        }
+
+        .summary-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--wf-muted);
+            margin-bottom: 8px;
+        }
+
+        .summary-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .summary-detail {
+            font-size: 13px;
+            color: var(--wf-muted);
+        }
+
+        .workflow-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.6fr) 420px;
+            gap: 18px;
+        }
+
+        .workflow-graph-panel,
+        .workflow-side-panel {
+            min-height: 720px;
+            background: var(--wf-panel);
+            border: 1px solid var(--wf-line);
+            border-radius: 28px;
+            box-shadow: var(--wf-shadow);
+            backdrop-filter: blur(18px);
+        }
+
+        .workflow-graph-panel {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .workflow-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 18px 20px;
+            border-bottom: 1px solid var(--wf-line);
+            background: rgba(255, 255, 255, 0.72);
+        }
+
+        .workflow-toolbar-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        #workflowGraph {
+            flex: 1;
+            min-height: 620px;
+        }
+
+        .workflow-side-panel {
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr);
+            overflow: hidden;
+        }
+
+        .side-card {
+            padding: 18px 20px;
+            border-bottom: 1px solid var(--wf-line);
+        }
+
+        .side-card:last-child {
+            border-bottom: none;
+        }
+
+        .side-card h3 {
+            margin: 0 0 12px;
+            font-size: 16px;
+        }
+
+        .selection-empty {
+            color: var(--wf-muted);
+            line-height: 1.6;
+        }
+
+        .detail-kv {
+            display: grid;
+            grid-template-columns: 108px 1fr;
+            gap: 8px 10px;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .detail-kv strong {
+            color: var(--wf-muted);
+            font-weight: 600;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+
+        .event-stream {
+            overflow: auto;
+            padding-right: 4px;
+            max-height: 100%;
+        }
+
+        pre {
+            margin: 8px 0 0;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(16, 32, 51, 0.06);
+            color: #243040;
+            border: 1px solid rgba(16, 32, 51, 0.08);
+            overflow: auto;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .legend-strip {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .event-item {
+            border: 1px solid var(--wf-line);
+            border-radius: 16px;
+            padding: 12px 14px;
+            background: rgba(255, 255, 255, 0.86);
+            margin-bottom: 10px;
+        }
+
+        .event-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--wf-muted);
+            margin-bottom: 8px;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            border: 1px solid var(--wf-line);
+            background: rgba(255,255,255,0.92);
+        }
+
+        .pill.running { color: var(--wf-accent); }
+        .pill.completed { color: var(--wf-good); }
+        .pill.failed, .pill.blocked, .pill.disabled { color: var(--wf-bad); }
+        .pill.pending { color: var(--wf-muted); }
+        .pill.active, .pill.traversed { color: var(--wf-accent); }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: currentColor;
+        }
+
+        .ghost-link {
+            color: var(--wf-accent);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .workflow-error {
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(180, 35, 24, 0.10);
+            color: var(--wf-bad);
+            border: 1px solid rgba(180, 35, 24, 0.16);
+        }
+
+        @media (max-width: 1180px) {
+            .workflow-topbar,
+            .workflow-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .workflow-side-panel {
+                min-height: auto;
+            }
+        }
+    </style>
+</head>
+<body class="workflow-body">
+    <div class="workflow-shell">
+        <section class="workflow-topbar">
+            <div class="workflow-hero">
+                <div class="workflow-kicker">Workflow Graph</div>
+                <h1 class="workflow-title" id="workflowTitle">Task Workflow</h1>
+                <p class="workflow-subtitle" id="workflowSubtitle">
+                    可视化展示后台任务的动作图、实时流式状态、资源消耗与节点/边级操作。
+                </p>
+            </div>
+            <div class="workflow-summary" id="workflowSummary">
+                <div class="summary-card">
+                    <div class="summary-label">Loading</div>
+                    <div class="summary-value">...</div>
+                    <div class="summary-detail">正在获取任务图数据</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="workflow-grid">
+            <div class="workflow-graph-panel">
+                <div class="workflow-toolbar">
+                    <div class="workflow-toolbar-group">
+                        <span class="pill" id="workflowStatusPill"><span class="status-dot"></span><span>loading</span></span>
+                        <span class="pill" id="workflowLivePill"><span class="status-dot"></span><span>connecting</span></span>
+                    </div>
+                    <div class="workflow-toolbar-group">
+                        <a class="ghost-link" href="/" target="_blank" rel="noreferrer">Back To Console</a>
+                        <button class="btn" id="workflowRefreshBtn">Refresh</button>
+                        <button class="btn primary" id="workflowFitBtn">Fit Graph</button>
+                    </div>
+                </div>
+                <div class="workflow-toolbar" style="padding-top: 0; border-bottom: none; background: transparent;">
+                    <div class="legend-strip">
+                        <span class="pill completed"><span class="status-dot"></span><span>Completed</span></span>
+                        <span class="pill running"><span class="status-dot"></span><span>Running</span></span>
+                        <span class="pill pending"><span class="status-dot"></span><span>Pending</span></span>
+                        <span class="pill failed"><span class="status-dot"></span><span>Failed / Blocked</span></span>
+                        <span class="pill active"><span class="status-dot"></span><span>Traversed Edge</span></span>
+                    </div>
+                </div>
+                <div id="workflowGraph"></div>
+            </div>
+
+            <aside class="workflow-side-panel">
+                <section class="side-card">
+                    <h3>Selection</h3>
+                    <div id="selectionPanel" class="selection-empty">
+                        点击节点或边查看详情和可执行动作。
+                    </div>
+                </section>
+                <section class="side-card">
+                    <h3>Runtime</h3>
+                    <div class="detail-kv" id="runtimePanel"></div>
+                </section>
+                <section class="side-card">
+                    <h3>Live Events</h3>
+                    <div id="eventStream" class="event-stream"></div>
+                </section>
+            </aside>
+        </section>
+    </div>
+
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/task-workflow.js"></script>
+</body>
+</html>
