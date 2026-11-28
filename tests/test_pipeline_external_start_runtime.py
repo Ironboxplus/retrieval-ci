@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from contextlib import contextmanager
@@ -61,18 +62,30 @@ def test_external_preindex_start_completes_real_production_prefix(tmp_path):
         corpus_root=tmp_path / "corpus",
         execution_mode="local",
     )
+    (tmp_path / "corpus" / "manifests").mkdir(parents=True)
+    (tmp_path / "corpus" / "manifests" / "paper_manifest.json").write_text(
+        json.dumps([{"paper_id": f"acl-2026-{i}", "conference": "ACL", "year": 2026} for i in range(4)]),
+        encoding="utf-8")
+    ctx.pdf_dir.mkdir(parents=True)
+    for i in range(2):
+        (ctx.pdf_dir / f"acl-2026-{i}.pdf").write_bytes(b"%PDF-1.4")
+    ctx.local_md_dir.mkdir(parents=True)
+    for i in range(2):
+        # Past extract's gate (a sample must be > 200 bytes with a header): the stage right before
+        # start_stage is judged by its gate now, not only probed.
+        (ctx.local_md_dir / f"acl-2026-{i}.md").write_text("# t\n\n" + "A sentence of body text. " * 12, encoding="utf-8")
     specs = build_ingest_pipeline(ctx)
     runner = PipelineRunner(store=store)
 
-    runner._complete_external_stage_prefix(task_id, specs, "preindex")
-    runner._complete_external_stage_prefix(task_id, specs, "preindex")
+    runner._complete_external_stage_prefix(task_id, specs, "preindex", ctx)
+    runner._complete_external_stage_prefix(task_id, specs, "preindex", ctx)
 
-    for key in ("download", "extract"):
+    # What the probes saw, not an asserted 1/1.
+    for key, (done, total) in {"download": (2, 4), "extract": (2, 2)}.items():
         subtask = store.get_subtask(task_id, key)
         assert subtask is not None
         assert subtask["status"] == "completed"
-        assert subtask["progress"] == 1
-        assert subtask["total"] == 1
+        assert (subtask["progress"], subtask["total"]) == (done, total)
         assert "externally supplied" in subtask["message"]
     assert store.get_subtask(task_id, "preindex") is None
 
@@ -197,3 +210,49 @@ def test_qdrant_preflight_uses_configured_url_and_real_http_server():
             os.environ.pop("QDRANT_URL", None)
         else:
             os.environ["QDRANT_URL"] = old_url
+
+
+def test_retry_failed_redrives_in_place_from_the_failed_stage(tmp_path):
+    """A pipeline that failed at a preflight is re-driven by retry_failed: the
+    satisfied stage skips, task state survives, the failed stage runs."""
+    from app.services.pipeline.spec import GateResult, Progress, StageSpec
+
+    store = _real_task_store(tmp_path / "pipeline.db")
+    runs = {"download": 0, "extract": 0}
+    allow = tmp_path / "gpu-free"
+
+    def builder(ctx):
+        def done_probe(key):
+            return lambda c: Progress(done=int((tmp_path / f"{key}.done").exists()), total=1)
+
+        def run(key):
+            def _run(c, sink):
+                runs[key] += 1
+                if key == "download":
+                    c.state_set(chunk_id_after=42)
+                (tmp_path / f"{key}.done").write_text("x")
+            return _run
+
+        return [
+            StageSpec(key="download", title="first", run=run("download"), probe=done_probe("download"),
+                      poll_interval_s=0),
+            StageSpec(key="extract", title="second", run=run("extract"), probe=done_probe("extract"),
+                      poll_interval_s=0,
+                      preflight=lambda c: GateResult(allow.exists(), "gpu busy")),
+        ]
+
+    runner = PipelineRunner(store=store, pipeline_builder=builder)
+    task_id = runner.start_ingest("TESTCONF", 2026, wait=True)["task_id"]
+    assert store.get_task(task_id)["status"] == "failed"
+    assert runs == {"download": 1, "extract": 0}
+
+    with pytest.raises(ValueError):
+        runner.retry_failed(task_id + 1000)
+    allow.write_text("x")
+    assert runner.retry_failed(task_id, wait=True) == {"status": "started", "task_id": task_id}
+    task = store.get_task(task_id)
+    assert task["status"] == "completed"
+    assert runs == {"download": 1, "extract": 1}  # the satisfied stage skipped
+    assert task["params"]["state"]["chunk_id_after"] == 42
+    with pytest.raises(ValueError, match="only failed/cancelled"):
+        runner.retry_failed(task_id)

@@ -1,0 +1,193 @@
+{
+ "paper": "jmlr-2022-19-529",
+ "page": 27,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0010000000000000009,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     240,
+     79,
+     977,
+     102
+    ],
+    "block_content": "STRUCTURAL AGNOSTIC MODELING: ADVERSARIAL LEARNING OF CAUSAL GRAPHS"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     185,
+     1047,
+     266
+    ],
+    "block_content": "using random forest algorithms. Nevertheless, this method won the DREAM4 In Silico Multifactorial challenge (Marbach et al., 2009), and is therefore included among the baseline algorithms (using the GENIE3 R package)."
+   },
+   {
+    "block_id": 2,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     175,
+     295,
+     444,
+     320
+    ],
+    "block_content": "6.3 Performance Indicators"
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     171,
+     333,
+     1048,
+     468
+    ],
+    "block_content": "For the sake of robustness, 16 independent runs have been launched for each data set-algorithm pair with a bootstrap ratio of 0.8 on the observational samples. The average causation score  $ c_{i,j} $ for each edge  $ X_i \\to X_j $ is measured as the fraction of runs where this edge belongs to  $ \\widehat{G} $. When an edge is left undirected, e.g with PC algorithm, it is counted as appearing with both orientations with weight 1/2."
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     472,
+     1047,
+     746
+    ],
+    "block_content": "A true positive is an edge  $ X_i \\to X_j $ of the true DAG  $ \\mathcal{G} $ which is correctly recovered by the algorithm;  $ T_p $ is the number of true positive. A false negative is an edge of  $ \\mathcal{G} $ which is missing in  $ \\widehat{\\mathcal{G}} $;  $ F_n $ is the number of false negatives. A false positive is an edge in  $ \\widehat{\\mathcal{G}} $ which is not in  $ \\mathcal{G} $ (reversed edges and edges which are not in the skeleton of  $ \\mathcal{G} $);  $ F_p $ is the number of false positives. The precision-recall curve, showing the tradeoff between precision ( $ T_p/(T_p + F_n) $) and recall ( $ T_p/(T_p + F_n) $) for different causation thresholds (Figure 14), is summarized by the Area under the Precision Recall Curve (AUPR), ranging in [0,1], with 1 being the optimum. The Receiver Operating Characteristic Curve shows the relationship between the sensitivity ( $ T_p/(T_p + F_n) $) and the specificity ( $ F_p/(F_p + T_n) $). It can be summarized by the Area under the Receiver Operating Characteristic Curve (AUC) ranging in [0,1], with 1 being the optimum. $ ^{13} $"
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     748,
+     1048,
+     882
+    ],
+    "block_content": "Another performance indicator used in the causal graph discovery framework is the Structural Hamming Distance (SHD) (Tsamardinos et al., 2006), set to the number of missing edges and redundant edges in the found structure. This SHD score is computed in the following by considering all edges  $ X_i \\to X_j $ with  $ c_{i,j} > .5 $. Note that a reversal error (retaining  $ X_j \\to X_i $ while  $ \\mathcal{G} $ includes edge  $ X_i \\to X_j $) is counted as a single mistake:"
+   },
+   {
+    "block_id": 6,
+    "block_label": "display_formula",
+    "block_bbox": [
+     308,
+     903,
+     911,
+     963
+    ],
+    "block_content": " $$ \\mathrm{S H D}(\\hat{A},A)=\\sum_{i,j}|\\hat{A}_{i,j}-A_{i,j}|-\\frac{1}{2}\\sum_{i,j}(1-m a x(1,\\hat{A}_{i,j}+A_{j,i})), $$ "
+   },
+   {
+    "block_id": 7,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1006,
+     915,
+     1044,
+     938
+    ],
+    "block_content": "(30)"
+   },
+   {
+    "block_id": 8,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     979,
+     908,
+     1008
+    ],
+    "block_content": "with  $ A $ (respectively  $ \\hat{A} $) the adjacency matrix of  $ \\mathcal{G} $ (resp. the found causal graph  $ \\hat{\\mathcal{G}} $)."
+   },
+   {
+    "block_id": 9,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     174,
+     1038,
+     556,
+     1062
+    ],
+    "block_content": "6.4 Experiments on Synthetic Data Sets"
+   },
+   {
+    "block_id": 10,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1074,
+     1047,
+     1129
+    ],
+    "block_content": "We first consider the 6 types of data sets with different causal mechanisms presented in section 5.1. $ ^{14} $ The synthetic data sets include 10 DAGs with 20 variables and 10 DAGs with 100 variables."
+   },
+   {
+    "block_id": 11,
+    "block_label": "footnote",
+    "block_bbox": [
+     176,
+     1145,
+     904,
+     1168
+    ],
+    "block_content": "13. For AUPR and AUC evaluations, we use the scikit-learn v0.20.1 library (Pedregosa et al., 2011)."
+   },
+   {
+    "block_id": 12,
+    "block_label": "footnote",
+    "block_bbox": [
+     178,
+     1168,
+     1046,
+     1212
+    ],
+    "block_content": "14. The data sets GP AM, GP MIX and Sigmoid AM were considered for the experimental validation of the CAM algorithm (Peters et al., 2014)."
+   },
+   {
+    "block_id": 13,
+    "block_label": "number",
+    "block_bbox": [
+     599,
+     1450,
+     624,
+     1469
+    ],
+    "block_content": "27"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['5.1']"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 22,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 0.988,
+   "omission_min_coverage": 0.925,
+   "numbers_unknown": 1,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.993,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

@@ -1,0 +1,270 @@
+{
+ "paper": "jmlr-2022-20-1304",
+ "page": 26,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     422,
+     79,
+     794,
+     102
+    ],
+    "block_content": "RASTOGI, BALAKRISHNAN, SHAH, SINGH"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     209,
+     185,
+     630,
+     211
+    ],
+    "block_content": "Using the law of total expectation, we have"
+   },
+   {
+    "block_id": 2,
+    "block_label": "display_formula",
+    "block_bbox": [
+     414,
+     235,
+     802,
+     421
+    ],
+    "block_content": " $$ \\begin{aligned}\\mathbb{E}\\left[T\\right]&=\\mathbb{E}\\left[\\mathbb{E}\\left[T\\mid\\mathbf{k}^{p},\\mathbf{k}^{q}\\right]\\right]\\\\&=\\sum_{i=1}^{d}\\sum_{j=1}^{d}\\mathbb{E}\\left[\\frac{\\mathbb{I}_{ij}k_{ij}^{p}k_{ij}^{q}}{k_{ij}^{p}+k_{ij}^{q}}(p_{ij}-q_{ij})^{2}\\right]\\\\&=\\mathbb{E}\\left[\\frac{\\mathbb{I}_{ij}k_{ij}^{p}k_{ij}^{q}}{k_{ij}^{p}+k_{ij}^{q}}\\right]\\left\\|P-Q\\right\\|_{\\mathrm{F}}^{2}\\end{aligned} $$ "
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     443,
+     879,
+     471
+    ],
+    "block_content": "Clearly,  $ \\mathbb{E}_{H_0}[T] = 0 $. To find a lower bound for  $ \\mathbb{E}_{H_1}[T] $, we first note that"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     201,
+     494,
+     1018,
+     644
+    ],
+    "block_content": " $$ \\begin{align*}\\mathbb{E}\\left[\\frac{\\mathbb{I}_{ij}k_{ij}^{p}k_{ij}^{q}}{k_{ij}^{p}+k_{ij}^{q}}\\right]&=\\mathbb{E}\\left[\\frac{\\mathbb{I}_{ij}^{0}k_{ij}^{p}k_{ij}^{q}}{k_{ij}^{p}+k_{ij}^{q}}\\right]-2\\sum_{k\\in[d]}\\mathbb{P}(k_{ij}^{p}=1,k_{ij}^{q}=k)\\frac{k}{k+1}+\\frac{1}{2}\\mathbb{P}(k_{ij}^{p}=1,k_{ij}^{q}=1)\\\\&\\geq\\mathbb{E}\\left[\\frac{\\mathbb{I}_{ij}^{0}k_{ij}^{p}k_{ij}^{q}}{k_{ij}^{p}+k_{ij}^{q}}\\right]-2p_{1}.\\tag{1}\\end{align*} $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1005,
+     596,
+     1044,
+     622
+    ],
+    "block_content": "(19)"
+   },
+   {
+    "block_id": 6,
+    "block_label": "text",
+    "block_bbox": [
+     172,
+     667,
+     922,
+     699
+    ],
+    "block_content": "where  $ \\mathbb{I}_{ij}^0 = \\mathbb{I}(k_{ij}^p > 0) \\times \\mathbb{I}(k_{ij}^q > 0) $. Furthermore, we see that for any event  $ E $,"
+   },
+   {
+    "block_id": 7,
+    "block_label": "display_formula",
+    "block_bbox": [
+     411,
+     722,
+     808,
+     794
+    ],
+    "block_content": " $$ \\mathbb{E}\\left[\\frac{\\mathbb{I}_{i j}^{0}k_{i j}^{p}k_{i j}^{q}}{k_{i j}^{p}+k_{i j}^{q}}\\right]\\geq\\mathbb{E}\\left[\\frac{\\mathbb{I}_{i j}^{0}k_{i j}^{p}k_{i j}^{q}}{k_{i j}^{p}+k_{i j}^{q}}\\mid E\\right]\\operatorname*{P r}(E). $$ "
+   },
+   {
+    "block_id": 8,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1005,
+     745,
+     1044,
+     771
+    ],
+    "block_content": "(20)"
+   },
+   {
+    "block_id": 9,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     816,
+     423,
+     841
+    ],
+    "block_content": "We define the event E as"
+   },
+   {
+    "block_id": 10,
+    "block_label": "display_formula",
+    "block_bbox": [
+     476,
+     840,
+     745,
+     908
+    ],
+    "block_content": " $$ \\begin{aligned}\\mu-c\\sigma&\\leq k_{ij}^{p}\\leq\\mu+c\\sigma,and\\\\\\mu-c\\sigma&\\leq k_{ij}^{q}\\leq\\mu+c\\sigma\\end{aligned} $$ "
+   },
+   {
+    "block_id": 11,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1005,
+     860,
+     1043,
+     886
+    ],
+    "block_content": "（21）"
+   },
+   {
+    "block_id": 12,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     922,
+     1047,
+     977
+    ],
+    "block_content": "with some constant $c>1$ such that $\\mu-c\\sigma>0$. Using Chebyshev's inequality, we get that $\\Pr(E)\\geq(1-\\tfrac{1}{c^2})^2$. Finally, we combine (19), (20) and (21), to get"
+   },
+   {
+    "block_id": 13,
+    "block_label": "display_formula",
+    "block_bbox": [
+     394,
+     1002,
+     825,
+     1071
+    ],
+    "block_content": " $$ \\mathbb{E}\\left[\\frac{\\mathbb{I}_{i j}k_{i j}^{p}k_{i j}^{q}}{k_{i j}^{p}+k_{i j}^{q}}\\right]\\geq\\frac{(\\mu-c\\sigma)^{2}}{2(\\mu+c\\sigma)}\\left(1-\\frac{1}{c^{2}}\\right)^{2}-2p_{1}. $$ "
+   },
+   {
+    "block_id": 14,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1005,
+     1024,
+     1043,
+     1050
+    ],
+    "block_content": "(22)"
+   },
+   {
+    "block_id": 15,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1095,
+     1049,
+     1150
+    ],
+    "block_content": "Since $\\mathcal{D}$ obeys the conditions in (9), we have $\\mu \\geq c_1 p_1$ and $\\mu \\geq c_2 \\sigma$. Therefore, there is a constant $c > 0$ that depends on $c_1$, $c_2$, such that $\\mathbb{E}[T] \\geq c \\mu \\| P - Q \\|_\\mathrm{F}^2$. This proves Lemma 10."
+   },
+   {
+    "block_id": 16,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     175,
+     1177,
+     460,
+     1202
+    ],
+    "block_content": "6.1.2 PROOF OF LEMMA 11"
+   },
+   {
+    "block_id": 17,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     1217,
+     1050,
+     1350
+    ],
+    "block_content": "To analyse the variance of the test statistic $T$, we note that pairwise-comparisons for each pair are obtained independently. This allows us to compute the variance for each pair $(i,j)$ separately, as variance of sum is equal to the sum of variances. The following analysis of the variance of the test statistic $T$ applies under both the null and the alternate. The law of total variance states that"
+   },
+   {
+    "block_id": 18,
+    "block_label": "display_formula",
+    "block_bbox": [
+     387,
+     1377,
+     833,
+     1407
+    ],
+    "block_content": " $$ \\operatorname{V a r}[T]=\\mathbb{E}[\\operatorname{V a r}[T|\\mathbf{k}^{p},\\mathbf{k}^{q}]]+\\operatorname{V a r}[\\mathbb{E}[T|\\mathbf{k}^{p},\\mathbf{k}^{q}]]. $$ "
+   },
+   {
+    "block_id": 19,
+    "block_label": "formula_number",
+    "block_bbox": [
+     1005,
+     1379,
+     1044,
+     1404
+    ],
+    "block_content": "(23)"
+   },
+   {
+    "block_id": 20,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1451,
+     625,
+     1469
+    ],
+    "block_content": "26"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "omission: page text 'htwefirstnotethateiijkpijkqijkpijeiijkpijkqijkpijiijkpijkqij' is 48% in the Markdown (< 50%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 22,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.475,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.997,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

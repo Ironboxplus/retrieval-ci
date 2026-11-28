@@ -1,0 +1,138 @@
+{
+ "paper": "jmlr-2022-20-021",
+ "page": 48,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.025999999999999995,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     516,
+     78,
+     699,
+     103
+    ],
+    "block_content": "SHU, QU, AND ZHU"
+   },
+   {
+    "block_id": 1,
+    "block_label": "text",
+    "block_bbox": [
+     208,
+     184,
+     383,
+     212
+    ],
+    "block_content": "By (83) and (84),"
+   },
+   {
+    "block_id": 2,
+    "block_label": "display_formula",
+    "block_bbox": [
+     197,
+     253,
+     1033,
+     480
+    ],
+    "block_content": " $$ \\begin{aligned}&\\delta_{B_{k}\\Sigma_{c}}:=\\left\\|\\widehat{\\mathrm{cov}}(\\boldsymbol{x}_{k},\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\{\\widehat{\\mathrm{cov}}(\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\}^{\\dagger}\\widehat{\\mathbf{C}}^{\\mathcal{I}_{0}}(\\widehat{\\mathbf{C}}^{\\mathcal{I}_{0}})^{\\top}/n-\\mathrm{cov}(\\boldsymbol{x}_{k},\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\{\\mathrm{cov}(\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\}^{\\dagger}\\mathrm{cov}(\\boldsymbol{c}^{\\mathcal{I}_{0}})\\right\\|_{\\max}\\\\&\\leq\\|\\mathrm{cov}(\\boldsymbol{x}_{k},\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\{\\mathrm{cov}(\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\}^{\\dagger}\\|_{\\max}\\sqrt{|\\mathcal{I}_{0}|}\\left\\|\\widehat{\\mathbf{C}}^{\\mathcal{I}_{0}}(\\widehat{\\mathbf{C}}^{\\mathcal{I}_{0}})^{\\top}/n-\\mathrm{cov}(\\boldsymbol{c}^{\\mathcal{I}_{0}})\\right\\|_{2}\\\\&\\quad+\\|\\widehat{\\mathrm{cov}}(\\boldsymbol{x}_{k},\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\{\\widehat{\\mathrm{cov}}(\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\}^{\\dagger}-\\mathrm{cov}(\\boldsymbol{x}_{k},\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\{\\mathrm{cov}(\\boldsymbol{z}^{\\mathcal{I}_{0}}_{k})\\}^{\\dagger}\\|_{\\max}\\sqrt{|\\mathcal{I}_{0}|}\\left\\|\\widehat{\\mathbf{C}}^{\\mathcal{I}_{0}}(\\widehat{\\mathbf{C}}^{\\mathcal{I}_{0}})^{\\top}/n\\right\\|_{2}\\\\&\\lesssim_{P}(\\lambda_{k,1}/p_{k})^{1/2}\\delta_{\\eta}+(\\lambda_{k,1}/p_{k})^{1/2}\\delta_{\\eta}+\\delta_{V_{k}}\\lambda_{k,1}^{1/2}\\\\&\\lesssim_{P}(\\lambda_{k,1}/p_{k})^{1/2}\\delta_{\\eta}+\\delta_{V_{k}}\\lambda_{k,1}^{1/2},\\\\ \\end{aligned} $$ "
+   },
+   {
+    "block_id": 3,
+    "block_label": "text",
+    "block_bbox": [
+     175,
+     519,
+     272,
+     543
+    ],
+    "block_content": "and thus,"
+   },
+   {
+    "block_id": 4,
+    "block_label": "display_formula",
+    "block_bbox": [
+     183,
+     587,
+     1043,
+     854
+    ],
+    "block_content": " $$ \\begin{aligned}&\\|\\widetilde{\\mathrm{cov}}(\\boldsymbol{c}_{k})-\\mathrm{cov}(\\boldsymbol{c}_{k})\\|_{\\max}\\\\&=\\|\\widehat{\\mathrm{cov}}(\\boldsymbol{x}_{k},\\boldsymbol{z}_{k}^{I_{0}})\\{\\widehat{\\mathrm{cov}}(\\boldsymbol{z}_{k}^{I_{0}})\\}^{\\dagger}n^{-1}\\widehat{\\mathbf{C}}^{I_{0}}(\\widehat{\\mathbf{C}}^{I_{0}})^{\\top}(\\widehat{\\mathrm{cov}}(\\boldsymbol{x}_{k},\\boldsymbol{z}_{k}^{I_{0}})\\{\\widehat{\\mathrm{cov}}(\\boldsymbol{z}_{k}^{I_{0}})\\}^{\\dagger})^{\\top}\\\\&\\quad-\\mathrm{cov}(\\boldsymbol{x}_{k},\\boldsymbol{z}_{k}^{I_{0}})\\{\\mathrm{cov}(\\boldsymbol{z}_{k}^{I_{0}})\\}^{\\dagger}\\mathrm{cov}(\\boldsymbol{e}^{I_{0}})(\\mathrm{cov}(\\boldsymbol{x}_{k},\\boldsymbol{z}_{k}^{I_{0}})\\{\\mathrm{cov}(\\boldsymbol{z}_{k}^{I_{0}})\\}^{\\dagger})^{\\top}\\|_{\\max}\\\\&\\leq\\|\\mathrm{cov}(\\boldsymbol{x}_{k},\\boldsymbol{z}_{k}^{I_{0}})\\{\\mathrm{cov}(\\boldsymbol{z}_{k}^{I_{0}})\\}^{\\dagger}\\mathrm{cov}(\\boldsymbol{e}^{I_{0}})\\|_{\\max}|\\mathcal{I}_{0}|\\delta_{B_{k}}+\\delta_{B_{k}\\Sigma_{c}}|\\mathcal{I}_{0}|\\|\\widehat{\\mathrm{cov}}(\\boldsymbol{x}_{k},\\boldsymbol{z}_{k}^{I_{0}})\\{\\widehat{\\mathrm{cov}}(\\boldsymbol{z}_{k}^{I_{0}})\\}^{\\dagger}\\|_{\\max}\\\\&\\lesssim_{P}(\\lambda_{k,1}/p_{k})^{1/2}[(\\lambda_{k,1}/p_{k})^{1/2}\\delta_{\\eta}+\\delta_{V_{k}}\\lambda_{k,1}^{1/2}]\\\\&\\quad+[(\\lambda_{k,1}/p_{k})^{1/2}\\delta_{\\eta}+\\delta_{V_{k}}\\lambda_{k,1}^{1/2}][(\\lambda_{k,1}/p_{k})^{1/2}+(\\lambda_{k,1}/p_{k})^{1/2}\\delta_{\\eta}+\\delta_{V_{k}}\\lambda_{k,1}^{1/2}]\\\\&\\lesssim_{P}[(\\lambda_{k,1}/p_{k})^{1/2}\\delta_{\\eta}+\\delta_{V_{k}}\\lambda_{k,1}^{1/2}](\\lambda_{k,1}/p_{k})^{1/2}.\\tag{85}\\end{aligned} $$ "
+   },
+   {
+    "block_id": 5,
+    "block_label": "text",
+    "block_bbox": [
+     209,
+     918,
+     448,
+     944
+    ],
+    "block_content": "From Assumption 1 (iv),"
+   },
+   {
+    "block_id": 6,
+    "block_label": "display_formula",
+    "block_bbox": [
+     180,
+     986,
+     1044,
+     1223
+    ],
+    "block_content": " $$ \\begin{align*}\\|\\operatorname{cov}(\\boldsymbol{c}_{k})\\|_{\\max}&\\leq\\max_{1\\leq i\\leq p_{k}}|\\operatorname{var}(\\boldsymbol{c}_{k}^{[i]})|\\\\&=\\max_{1\\leq i\\leq p_{k}}|\\mathbf{V}_{x k}^{[i,:]}\\boldsymbol{\\Lambda}_{x k}^{1/2}\\mathbf{H}_{k}^{\\top}[\\operatorname{cov}(\\boldsymbol{z}_{k}^{\\mathcal{I}_{0}})]^{\\dagger}\\mathbf{A}\\mathbf{N}\\operatorname{cov}(\\boldsymbol{f})(\\mathbf{V}_{x k}^{[i,:]}\\boldsymbol{\\Lambda}_{x k}^{1/2}\\mathbf{H}_{k}^{\\top}[\\operatorname{cov}(\\boldsymbol{z}_{k}^{\\mathcal{I}_{0}})]^{\\dagger}\\mathbf{A}\\mathbf{N})^{\\top}|\\\\&\\leq\\max_{1\\leq i\\leq p_{k}}\\{\\|\\mathbf{V}_{x k}^{[i,:]}\\boldsymbol{\\Lambda}_{x k}^{1/2}\\|_{2}^{2}\\|\\mathbf{H}_{k}^{\\top}[\\operatorname{cov}(\\boldsymbol{z}_{k}^{\\mathcal{I}_{0}})]^{\\dagger}\\mathbf{A}\\mathbf{N}\\operatorname{cov}(\\boldsymbol{f})(\\mathbf{H}_{k}^{\\top}[\\operatorname{cov}(\\boldsymbol{z}_{k}^{\\mathcal{I}_{0}})]^{\\dagger}\\mathbf{A}\\mathbf{N})^{\\top}\\|_{2}\\\\&\\lesssim_{P}\\max_{1\\leq i\\leq p_{k}}\\|\\mathbf{V}_{x k}^{[i,:]}\\boldsymbol{\\Lambda}_{x k}^{1/2}\\|_{2}^{2}\\leq\\max_{1\\leq i\\leq p_{k}}\\|\\mathbf{V}_{x k}^{[i,:]}\\boldsymbol{\\Lambda}_{x k}^{1/2}\\|_{\\max}^{2}r_{k}\\\\&\\lesssim_{P}\\lambda_{k,1}/p_{k}.\\end{align*} $$ "
+   },
+   {
+    "block_id": 7,
+    "block_label": "text",
+    "block_bbox": [
+     174,
+     1289,
+     1047,
+     1418
+    ],
+    "block_content": "Denote $\\mathrm{var}(\\boldsymbol{c}_k^{[i]}) = \\|\\widehat{\\boldsymbol{C}}_k^{[i;]}\\|_F^2 / n$ and $\\mathrm{var}(\\boldsymbol{x}_k^{[i]}) = \\|\\widehat{\\boldsymbol{X}}_k^{[i;]}\\|_F^2 / n$. By the triangle inequality, (85), (86), $\\delta_{\\eta} = o(1)$, and $o(1) = \\delta_k \\propto \\delta_{V_k} \\sqrt{p_k}$ (from (41), (79), and $\\lambda_{k,1} \\propto \\lambda_{k,r_k}$ in Assumption 1 (ii)), we have $\\max_{i \\leq p_k} \\widehat{\\mathrm{var}}(\\boldsymbol{c}_k^{[i]}) \\leq \\|\\widehat{\\mathrm{cov}}(\\boldsymbol{c}_k)\\|_{\\max} \\lesssim_P \\lambda_{k,1} / p_k$. By (82) and $\\min_{i \\leq p_k} \\mathrm{var}(\\boldsymbol{x}_k^{[i]}) \\geq M_k \\lambda_{r_k}(\\mathrm{cov}(\\boldsymbol{x}_k)) / p_k$, we obtain $\\min_{i \\leq p_k} \\widehat{\\mathrm{var}}(\\boldsymbol{x}_k^{[i]}) \\geq M_k \\lambda_{r_k}(\\mathrm{cov}(\\boldsymbol{x}_k)) / p_k -$"
+   },
+   {
+    "block_id": 8,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1451,
+     625,
+     1469
+    ],
+    "block_content": "48"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "omission: page text 'dcovxkzikdcovzikzikcovzikcovcimaxzikcovzikcovxkzikdcovzikzik' is 14% in the Markdown (< 50%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 11,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 0.144,
+   "numbers_unknown": 0,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 0.97,
+   "table_cell_min_found": 1.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

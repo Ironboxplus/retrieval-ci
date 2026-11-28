@@ -1,0 +1,133 @@
+{
+ "paper": "jmlr-2022-20-964",
+ "page": 17,
+ "attempt": 0,
+ "scale": 2.0,
+ "fit_err": 0.0009999999999998899,
+ "result": {
+  "parsing_res_list": [
+   {
+    "block_id": 0,
+    "block_label": "header",
+    "block_bbox": [
+     216,
+     78,
+     999,
+     102
+    ],
+    "block_content": "EXTENSIONS TO THE PROXIMAL DISTANCE METHOD OF CONSTRAINED OPTIMIZATION"
+   },
+   {
+    "block_id": 1,
+    "block_label": "table",
+    "block_bbox": [
+     234,
+     183,
+     971,
+     444
+    ],
+    "block_content": "<table><tr><td></td><td colspan=\"3\">Time (s)</td><td colspan=\"3\">Loss  $ \\times 10^{-3} $</td><td colspan=\"3\">Distance  $ \\times 10^{3} $</td><td colspan=\"3\">Iterations</td></tr><tr><td>m</td><td>MM</td><td>SD</td><td>ADMM</td><td>MM</td><td>SD</td><td>ADMM</td><td>MM</td><td>SD</td><td>ADMM</td><td>MM</td><td>SD</td><td>ADMM</td></tr><tr><td>16</td><td>0.0429\\n(0.000709)</td><td>0.0338\\n(0.000137)</td><td>0.107\\n(0.000858)</td><td>0.237</td><td>0.237</td><td>0.237</td><td>9.24</td><td>9.24</td><td>9.24</td><td>4980\\n(37)</td><td>3920\\n(37)</td><td>7030\\n(37)</td></tr><tr><td>32</td><td>1.24\\n(0.00309)</td><td>1.28\\n(0.00617)</td><td>2.6\\n(0.0149)</td><td>1.14</td><td>1.14</td><td>1.14</td><td>9.13</td><td>9.13</td><td>9.13</td><td>16000\\n(41)</td><td>15400\\n(41)</td><td>17300\\n(41)</td></tr><tr><td>64</td><td>19.5\\n(0.00835)</td><td>16.7\\n(0.0148)</td><td>43.9\\n(0.0616)</td><td>4.69</td><td>4.69</td><td>4.69</td><td>8.7</td><td>8.7</td><td>8.7</td><td>30100\\n(44)</td><td>24200\\n(44)</td><td>33700\\n(44)</td></tr><tr><td>128</td><td>171\\n(0.613)</td><td>150\\n(0.28)</td><td>725\\n(0.772)</td><td>18.4</td><td>18.4</td><td>18.4</td><td>9.44</td><td>9.44</td><td>9.44</td><td>29900\\n(44)</td><td>23700\\n(44)</td><td>51900\\n(44)</td></tr><tr><td>256</td><td>1670\\n(0.702)</td><td>1570\\n(5.63)</td><td>9110\\n(75.4)</td><td>75.3</td><td>75.3</td><td>75.3</td><td>8.68</td><td>8.68</td><td>8.68</td><td>32500\\n(46)</td><td>26700\\n(46)</td><td>76100\\n(46)</td></tr></table>"
+   },
+   {
+    "block_id": 2,
+    "block_label": "figure_title",
+    "block_bbox": [
+     175,
+     465,
+     1047,
+     547
+    ],
+    "block_content": "Table 2: Metric projection. Times are averaged over 3 replicates with standard deviations in parentheses. Reported iteration counts reflect the total inner iterations taken with outer iterations in parentheses."
+   },
+   {
+    "block_id": 3,
+    "block_label": "paragraph_title",
+    "block_bbox": [
+     175,
+     610,
+     462,
+     635
+    ],
+    "block_content": "5.2.1 METRIC PROJECTION."
+   },
+   {
+    "block_id": 4,
+    "block_label": "text",
+    "block_bbox": [
+     173,
+     649,
+     1051,
+     1163
+    ],
+    "block_content": "In our comparisons, we use input matrices  $ \\mathbf{Y} \\in \\mathbb{R}^{m \\times m} $ whose iid entries  $ y_{ij} $ are drawn uniformly from the interval  $ [0,10] $ and set weights  $ w_{ij} = 1 $. Each algorithm is allotted a maximum of 200 outer and  $ 10^5 $ inner iterations, respectively, to achieve a gradient norm of  $ \\delta_h = 10^{-3} $ and distance to feasibility of  $ \\delta_d = 10^{-2} $. The relative change parameter is set to  $ \\delta_q = 0 $ and the annealing schedule is set to  $ \\rho(t) = \\min\\{10^8, 1.2^{t-1}\\} $ for the proximal distance methods. Table 2 summarizes the performance of the three algorithms. Best values appear in boldface. All three algorithms converge to a similar solution as indicated by the final loss  $ \\|\\mathbf{y} - \\mathbf{x}\\|^2 $ and distance values. It is clear that SD matches or outperforms MM and ADMM approaches on this example. Notably, the linear system appearing in the MM update admits an exact solution (see Appendix C.5), yet SD has a faster time to solution with fewer iterations taken. The selected convergence metrics in Figure 1 vividly illustrate stability of solutions  $ \\mathbf{x}_\\rho = \\arg\\min h_\\rho(\\mathbf{x}) $ along an annealing path from  $ \\rho = 1 $ to  $ \\rho = 1.2^{40} \\approx 1470 $. Specifically, solving each penalized subproblem along the sequence results in marginal increase in the loss term with appreciable decrease in the distance penalty. Except for the first outer iteration, there is minimal decrease of the loss, distance penalty, or penalized objective within a given outer iteration even as the gradient norm vanishes. The observed tradeoff between minimizing a loss model and minimizing a nonnegative penalty is well-known in penalized optimization literature (Beltrami, 1970; Lange, 2016, see Proposition 7.6.1 on p. 183)."
+   },
+   {
+    "block_id": 5,
+    "block_label": "number",
+    "block_bbox": [
+     600,
+     1450,
+     625,
+     1470
+    ],
+    "block_content": "17"
+   }
+  ],
+  "width": 1224.0,
+  "page_index": 0,
+  "height": 1584.0
+ },
+ "recorded": {
+  "status": "fail",
+  "reasons": [
+   "number: not on the page: ['40']",
+   "table: cell '0429n000709': 0% of its words are in the table region (< 90%)",
+   "table: cell '0338n000137': 0% of its words are in the table region (< 90%)",
+   "table: cell '107n000858': 0% of its words are in the table region (< 90%)",
+   "table: cell '4980n37': 0% of its words are in the table region (< 90%)",
+   "table: cell '3920n37': 0% of its words are in the table region (< 90%)",
+   "table: cell '7030n37': 0% of its words are in the table region (< 90%)",
+   "table: cell '124n00309': 0% of its words are in the table region (< 90%)",
+   "table: cell '128n00617': 0% of its words are in the table region (< 90%)",
+   "table: cell '26n0149': 0% of its words are in the table region (< 90%)",
+   "table: cell '17300n41': 0% of its words are in the table region (< 90%)",
+   "table: cell '195n00835': 0% of its words are in the table region (< 90%)",
+   "table: cell '167n0148': 0% of its words are in the table region (< 90%)",
+   "table: cell '439n0616': 0% of its words are in the table region (< 90%)",
+   "table: cell '30100n44': 0% of its words are in the table region (< 90%)",
+   "table: cell '24200n44': 0% of its words are in the table region (< 90%)",
+   "table: cell '33700n44': 0% of its words are in the table region (< 90%)",
+   "table: cell '171n613': 0% of its words are in the table region (< 90%)",
+   "table: cell '150n28': 0% of its words are in the table region (< 90%)",
+   "table: cell '725n772': 0% of its words are in the table region (< 90%)",
+   "table: cell '29900n44': 0% of its words are in the table region (< 90%)",
+   "table: cell '23700n44': 0% of its words are in the table region (< 90%)",
+   "table: cell '51900n44': 0% of its words are in the table region (< 90%)",
+   "table: cell '1670n702': 0% of its words are in the table region (< 90%)",
+   "table: cell '1570n563': 0% of its words are in the table region (< 90%)",
+   "table: cell '9110n754': 0% of its words are in the table region (< 90%)",
+   "table: cell '32500n46': 0% of its words are in the table region (< 90%)",
+   "table: cell '26700n46': 0% of its words are in the table region (< 90%)",
+   "table: cell '76100n46': 0% of its words are in the table region (< 90%)"
+  ],
+  "metrics": {
+   "reference": "textlayer",
+   "formulas": 15,
+   "formulas_unrenderable": 0,
+   "unwitnessed_blocks": 0,
+   "unwitnessed_share": 0.0,
+   "fabrication_min_coverage": 1.0,
+   "omission_min_coverage": 1.0,
+   "numbers_unknown": 1,
+   "reference_numbers_unknown": 0,
+   "repeated_ngrams": 0,
+   "length_ratio": 1.021,
+   "table_cell_min_found": 0.0,
+   "table_max_missing": 0.0,
+   "formulas_unverifiable": 0,
+   "formulas_witnessed": 0,
+   "formula_symbol_min_coverage": 1.0,
+   "soft_issues": 0
+  }
+ }
+}

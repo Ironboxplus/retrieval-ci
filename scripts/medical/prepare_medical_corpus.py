@@ -46,7 +46,7 @@ from pipeline.medical_corpus.top_journals import (  # noqa: E402
     TOP_MEDICAL_JOURNALS,
     default_top_journal_query,
 )
-from app.services.medical_corpus.service import require_designated_medical_cli_execution  # noqa: E402
+from pipeline.medical_corpus.executor import require_designated_medical_cli_execution  # noqa: E402
 
 
 def _build_parser() -> argparse.ArgumentParser:

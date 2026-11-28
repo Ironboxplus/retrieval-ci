@@ -1,4 +1,10 @@
-"""Marker-based PDF→Markdown extractor.
+"""Marker-based PDF→Markdown extractor. RETIRED: constructing it raises ``RetiredInferencePath``.
+
+Marker runs torch / surya models in the calling process; every model is a vLLM service now (or, for
+PDF→Markdown, the registered PaddleOCR-VL worker: PIPELINE_LOCAL_EXTRACTOR). User decision
+2026-11-14: "Marker 报错，Paddle 保留". The class stays in the tree so old code fails by name instead of
+by an ImportError; ``create_extractor("marker")`` and any ``FallbackExtractor(primary=MarkerExtractor())``
+fail at construction, before a fallback could quietly take over.
 
 Marker (vikparuchuri/marker) is fast on academic born-digital PDFs:
 ~5-10s/PDF on a 2080Ti vs MinerU's 60-100s, while still producing
@@ -19,6 +25,8 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any, Optional
+
+from core.inference_retired import EXTRACTOR_INSTEAD, RetiredInferencePath
 
 from .base import ExtractionResult, ExtractionStatus, PdfExtractor
 
@@ -41,6 +49,7 @@ class MarkerExtractor(PdfExtractor):
         use_llm: bool = False,
         extra_config: Optional[dict] = None,
     ):
+        raise RetiredInferencePath("MarkerExtractor (in-process torch / surya Marker)", EXTRACTOR_INSTEAD)
         self.output_format = output_format
         self.paginate_output = paginate_output
         self.use_llm = use_llm

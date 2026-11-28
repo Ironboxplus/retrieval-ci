@@ -3,11 +3,14 @@
 # Pinned to versions in active use (sweep: 2026-05-16).
 # Python 3.13 + Windows-tested. Most packages also work on Linux.
 # Removed (legacy, no longer imported):
-#   chromadb / llama-index / whoosh / langgraph / langchain-core
+#   chromadb / whoosh / langgraph / langchain-core
+# llama-index-core stays: core/indexing/chunker.py imports its node parsers.
 # =========================================================================
 
 # --- Web framework + task queue ---------------------------------------------
 fastapi>=0.135.0
+starlette<1.4                           # 1.4 made GZipResponder.apply_compression async; app/api/compression.py overrides it synchronously
+mcp<2                                   # mcp_server uses mcp.server.fastmcp; 2.x renamed it (mcp_server tests fail at collection)
 uvicorn[standard]>=0.44.0
 watchfiles>=1.1
 python-multipart>=0.0.24
@@ -27,21 +30,28 @@ torch>=2.8.0                            # CUDA build: see pytorch.org for index 
 
 # --- Text chunking + content tooling ----------------------------------------
 langchain-text-splitters>=1.1.0
+llama-index-core>=0.14.22               # HTML/Markdown node parsers in core/indexing/chunker.py
 beautifulsoup4>=4.14.0
 lxml>=5.4.0
+confusable-homoglyphs>=3.3,<4          # Unicode's confusables table: converters/verify/homoglyphs.py
 pypdf>=6.9.0
 PyMuPDF>=1.23.0                         # `import fitz`
 chardet>=5.2.0
+pypandoc_binary>=1.15,<2                # bundled pandoc: JATS XML -> Markdown (medical full text)
 
 # --- HTTP / async / file ----------------------------------------------------
 httpx>=0.28.0
+curl_cffi==0.17.0                       # browser TLS fingerprint for paper PDF downloads
+httpx-curl-cffi==0.1.5                  # AsyncCurlTransport: curl_cffi as an httpx transport
 zstandard>=0.22.0                       # request/response compression (app/api/compression.py)
 aiohttp>=3.13.0
 aiohttp-socks>=0.11.0,<0.13.0
 aiofiles>=24.1.0
 requests>=2.32.0
 urllib3>=2.5.0
+tenacity>=9.1.4                         # retry policy (pipeline/http_retry.py); chonkie pulls it in too
 filelock>=3.29.0
+APScheduler==3.11.3                     # recurring jobs (app/services/scheduler); 4.x is pre-release
 pathspec>=0.12.1
 psutil>=7.2.0
 

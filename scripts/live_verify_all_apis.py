@@ -413,8 +413,6 @@ def main() -> int:
     clear_proxy_env()
     commands = [
         f"{sys.executable} scripts/live_verify_all_apis.py",
-        f"{sys.executable} scripts/test_api.py --base-url {BASE_URL}",
-        f"{sys.executable} scripts/test_e2e.py --api {BASE_URL}",
     ]
     state = RunState()
     openapi: dict[str, Any] = {"paths": {}}

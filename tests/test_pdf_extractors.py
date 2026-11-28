@@ -15,6 +15,7 @@ paper_pipeline.py call site that uses ``convert_paper(paper)``.
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -92,14 +93,15 @@ class TestMinerUExtractor(unittest.TestCase):
             MinerUExtractor,
         )
 
-        try:
-            import mineru  # noqa: F401
-            self.skipTest("mineru is installed, skipping missing-dep test")
-        except ImportError:
-            pass
-
         extractor = MinerUExtractor()
-        result = extractor.extract(Path("does_not_exist.pdf"))
+        if extractor._resolve_cmd() is not None:
+            self.skipTest("mineru CLI is installed, skipping missing-dep test")
+
+        # Pre-flight rejects a missing file before the CLI lookup, so the PDF must exist.
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "present.pdf"
+            pdf.write_bytes(b"%PDF-1.4")
+            result = extractor.extract(pdf)
         self.assertEqual(result.status, ExtractionStatus.FAILED)
         self.assertIn("mineru", (result.error or "").lower())
 

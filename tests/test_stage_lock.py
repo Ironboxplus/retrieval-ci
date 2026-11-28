@@ -168,3 +168,134 @@ def test_all_waiters_eventually_served(locks):
     for t in threads:
         t.join(timeout=2.0)
     assert sorted(served) == ["B", "C", "D"]
+
+
+# --- grant order -----------------------------------------------------------
+# Real threads on a real StageLockSet. "Queued" is observed through the
+# test-only `locks._waiting(resource)` (no sleeps to guess at arrival order).
+
+
+def _wait_queued(locks, resource, n, timeout=3.0):
+    deadline = time.monotonic() + timeout
+    while locks._waiting(resource) < n:
+        assert time.monotonic() < deadline, f"only {locks._waiting(resource)} of {n} queued"
+        time.sleep(0.002)
+
+
+def _start_waiter(locks, resource, owner, priority, grants, abort=None):
+    """Thread that acquires `resource`, records its owner while holding it,
+    and releases. Appending under the lock makes `grants` the grant order."""
+    abort = abort or threading.Event()
+
+    def run():
+        if locks.acquire(resource, abort, poll_s=0.01, owner=owner, priority=priority):
+            grants.append(owner)
+            locks.release(resource)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
+
+
+def _queue(locks, resource, waiters, grants, *, already=0):
+    """Start waiters (owner, priority) one by one, each confirmed queued before
+    the next starts, so the arrival order is exactly the list order."""
+    threads = []
+    for i, (owner, priority) in enumerate(waiters):
+        threads.append(_start_waiter(locks, resource, owner, priority, grants))
+        _wait_queued(locks, resource, already + i + 1)
+    return threads
+
+
+def _drain(locks, resource, threads):
+    locks.release(resource)
+    for t in threads:
+        t.join(timeout=5.0)
+        assert not t.is_alive()
+
+
+def test_waiters_granted_in_priority_order(locks, abort):
+    assert locks.acquire("gpu", abort, owner="H") is True
+    grants: list = []
+    threads = _queue(locks, "gpu", [(30, (1, 30)), (10, (1, 10)), (20, (1, 20))], grants)
+    _drain(locks, "gpu", threads)
+    assert grants == [10, 20, 30]
+
+
+def test_low_priority_stream_does_not_starve_older_task(locks, abort):
+    """2026-11-13 shape: task 1305 (its embed) queues AFTER a stream of younger
+    tasks' extracts (1307..1316) while 1306 holds the GPU. On 1306's release
+    1305 must be the next holder, however late it arrived."""
+    assert locks.acquire("gpu-local", abort, owner=1306, priority=(1, 1306)) is True
+    grants: list = []
+    stream = [(tid, (1, tid)) for tid in range(1316, 1306, -1)]  # 1316 .. 1307
+    threads = _queue(locks, "gpu-local", stream + [(1305, (1, 1305))], grants)
+    _drain(locks, "gpu-local", threads)
+    assert grants[0] == 1305
+    assert grants == [1305] + list(range(1307, 1317))
+
+
+def test_resumed_stage_goes_first(locks, abort):
+    assert locks.acquire("gpu", abort, owner="H") is True
+    grants: list = []
+    threads = _queue(locks, "gpu", [(5, (1, 5)), (40, (0, 40))], grants)
+    _drain(locks, "gpu", threads)
+    assert grants == [40, 5]
+
+
+def test_unprioritized_waiters_fifo_and_after_prioritized(locks, abort):
+    assert locks.acquire("gpu", abort, owner="H") is True
+    grants: list = []
+    threads = _queue(
+        locks, "gpu",
+        [("u1", None), ("u2", None), ("p", (1, 99)), ("u3", None)],
+        grants,
+    )
+    _drain(locks, "gpu", threads)
+    assert grants == ["p", "u1", "u2", "u3"]
+
+
+def test_abort_while_queued_removes_waiter_and_next_is_granted(locks, abort):
+    assert locks.acquire("gpu", abort, owner="H") is True
+    grants: list = []
+    first_abort = threading.Event()
+    first_result: list = []
+
+    def first():
+        first_result.append(
+            locks.acquire("gpu", first_abort, poll_s=0.01, owner=1, priority=(1, 1))
+        )
+
+    t1 = threading.Thread(target=first, daemon=True)
+    t1.start()
+    _wait_queued(locks, "gpu", 1)
+    others = _queue(locks, "gpu", [(2, (1, 2)), (3, (1, 3))], grants, already=1)
+
+    first_abort.set()  # the head of the queue gives up
+    t1.join(timeout=2.0)
+    assert first_result == [False]
+    assert locks._waiting("gpu") == 2
+    assert "gpu" in locks.holders()  # the aborted waiter never took the lock
+
+    _drain(locks, "gpu", others)
+    assert grants == [2, 3]
+
+
+def test_reentry_same_thread_then_other_thread_can_acquire(locks, abort):
+    assert locks.acquire("gpu", abort, owner="me") is True
+    assert locks.acquire("gpu", abort, owner="me") is True  # re-entry, no queueing
+    assert locks._waiting("gpu") == 0
+
+    result: list = []
+    t = _start_waiter(locks, "gpu", "other", None, result)
+    _wait_queued(locks, "gpu", 1)
+
+    locks.release("gpu")  # depth 2 -> 1: still held
+    time.sleep(0.05)
+    assert result == []
+    assert locks.holders() == {"gpu": "me"}
+
+    locks.release("gpu")  # depth 1 -> 0: the other thread gets it
+    t.join(timeout=2.0)
+    assert result == ["other"]  # _start_waiter records its owner once granted
+    assert locks.holders() == {}

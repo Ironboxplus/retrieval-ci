@@ -5,7 +5,7 @@
 # ///
 """Retrieval MCP — a self-contained, installable MCP server.
 
-Package release: 0.5.7.
+Package release: 0.5.15.
 
 THIS file is standalone: it only talks to the Retrieval REST API over HTTP, so it
 installs anywhere with no checkout, no GPU, no models. Paper search + journal + ACE
@@ -61,12 +61,14 @@ if __name__ == "__main__":
         _redirect_daemon_output()
 
 import asyncio
+import contextvars
 import fnmatch
 import glob
 import hashlib
 import inspect
 import json
 import logging
+import math
 import ntpath
 import os
 import posixpath
@@ -84,7 +86,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import dataclasses
 from dataclasses import dataclass
-from typing import Annotated, Any, Awaitable, Callable, Sequence
+from typing import Annotated, Any, Awaitable, Callable, NamedTuple, Sequence
 from urllib.parse import quote
 
 import httpx
@@ -536,6 +538,10 @@ def _journal_known_in_envelope(known: dict, patterns: list[str], max_depth: int 
     """Keep the catalog diff scoped to this pattern/depth scan only."""
     def matches(rel_path: str) -> bool:
         normalized = rel_path.replace("\\", "/").strip("/")
+        # The walker skips dot-directories, so rows under one (.conversations/) were never
+        # scanned and must not feed the snapshot diff / replace guard.
+        if any(s.startswith(".") and s not in {".", ".."} for s in normalized.split("/")[:-1]):
+            return False
         if max_depth is not None and normalized.count("/") > max_depth:
             return False
         basename = normalized.rsplit("/", 1)[-1]
@@ -572,28 +578,58 @@ def _discover_files(root: str, pattern: str, recursive: bool, max_depth: int | N
     return _dedupe_paths(matches)
 
 
-def _gitignore_allowed(root: str) -> set[str] | None:
+_GIT_LIST_TIMEOUT_S = 30
+_GIT_CHECK_IGNORE_TIMEOUT_S = 10
+_CHECK_IGNORE_BATCH = 2000
+
+
+class GitIgnoreCheckFailed(RuntimeError):
+    """Git was asked which paths are ignored and did not answer (timeout, corrupt index,
+    any exit other than "not a repository"). Every ignore check fails closed: a caller
+    that cannot learn what is ignored must not treat everything as allowed.
+    NOTE: mirrors core.code_kb.chunker.GitIgnoreCheckFailed."""
+
+
+def _gitignore_allowed(root: str, pathspecs: Sequence[str] = ()) -> set[str] | None:
     """Repo-relative paths (forward slashes) git does NOT ignore under `root`, or None
-    if `root` isn't a git working tree (callers then apply no gitignore filtering).
+    if `root` isn't a git working tree / git isn't installed (callers then apply no
+    gitignore filtering). ``pathspecs`` (relative to `root`, matched literally) narrow the
+    listing to those paths; the output stays relative to `root`.
 
     Delegates the resolution to git itself, so nested .gitignore / negation (``!``) rules
     / ``.git/info/exclude`` / global ``core.excludesFile`` all hold — a hand-rolled parser
     gets those subtly wrong. --cached = tracked, --others = untracked, --exclude-standard
     drops ignored, -z NUL-separates so unicode/space paths match our os.walk rels.
     Decoded as UTF-8 (git's path encoding), not the ambient locale, so non-ASCII paths
-    resolve the same on any host. NOTE: mirrors core.code_kb.chunker.gitignore_allowed."""
+    resolve the same on any host.
+
+    Fails closed: any outcome other than an answer, "git not installed" or "not a git
+    repository" raises GitIgnoreCheckFailed instead of returning None.
+    NOTE: mirrors core.code_kb.chunker.gitignore_allowed."""
+    command = ["git", "--literal-pathspecs", "-C", root, "ls-files",
+               "--cached", "--others", "--exclude-standard", "-z"]
+    if pathspecs:
+        command += ["--", *pathspecs]
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"  # git's "not a git repository" text is matched below
     try:
         # stdin=DEVNULL: as an MCP stdio server this process's stdin is the JSON-RPC pipe;
         # a child inheriting it can wedge on that handle (W159, same as _git_commit).
         out = subprocess.run(
-            ["git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-            stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
-            encoding="utf-8", errors="surrogateescape")
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if out.returncode != 0:
-        return None  # not a git repo (or git unavailable) → caller does no filtering
-    return {p for p in out.stdout.split("\x00") if p}
+            command, stdin=subprocess.DEVNULL, capture_output=True,
+            timeout=_GIT_LIST_TIMEOUT_S, encoding="utf-8", errors="surrogateescape",
+            env=env)
+    except FileNotFoundError:
+        return None  # git is not installed → caller does no filtering
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise GitIgnoreCheckFailed(f"git ls-files did not finish in {root}: {exc!r}") from exc
+    if out.returncode == 0:
+        return {p for p in out.stdout.split("\x00") if p}
+    stderr = (out.stderr or "").strip()
+    if out.returncode == 128 and "not a git repository" in stderr:
+        return None  # not a git repo → caller does no filtering
+    raise GitIgnoreCheckFailed(
+        f"git ls-files failed in {root} (exit {out.returncode}): {stderr[:200]}")
 
 
 def _drop_gitignored(paths: list[str], root: str,
@@ -610,24 +646,17 @@ def _drop_gitignored(paths: list[str], root: str,
 
 
 SEARCH_PRIORITY_INSTRUCTIONS = (
-    "Retrieval-first: when a user asks to search/find/locate code, search papers, or "
-    "query Journal/project history, try this Retrieval MCP first even when they did "
-    "not name it: use search_code for code (your indexed repositories, the curated "
-    "public corpus, or both), search_papers, search_arxiv (arXiv preprints) and "
-    "search_within_paper for papers, and journal_search for Journal/project history. "
-    "Over shell and web search it adds: exact-symbol lookup ranked by relevance and "
-    "returned with the surrounding function (search_code mode=\"keyword\", the grep "
-    "replacement); "
-    "search by meaning when the names are unknown (mode=\"hybrid\"/\"dense\"); "
-    "top-venue papers and arXiv preprints searchable by content; and recall of past "
-    "project decisions. "
-    "Those five tools accept either one query string or an ordered list when several "
-    "independent searches would otherwise be serial; each list item runs independently "
-    "with the same other arguments, and results keep input order, labeled by query. "
-    "This is not Retrieval-only: rg, Git history, direct working-tree reads, official "
-    "paper sources, and other evidence remain appropriate for unindexed/current files, "
-    "exhaustive every-occurrence listing, cross-checking, supplementation, or MCP/tool "
-    "failure. Do not skip Retrieval MCP by default for those retrieval requests."
+    "Retrieval-first rule: in any task that needs to locate code, symbols, text in "
+    "files, papers or project history, your FIRST search must be a Retrieval MCP call: "
+    "search_code (mode=\"keyword\" for exact identifiers and strings, the grep "
+    "replacement; mode=\"hybrid\" when names are unknown), journal_search for project "
+    "history and past decisions, search_papers / search_arxiv / search_within_paper for "
+    "papers. Do not start with grep, rg, find, git grep, Grep or Glob. After at least "
+    "one Retrieval call in the task, use them freely to verify, list every occurrence, "
+    "or read new or unindexed files. Skip the Retrieval call only when you already know "
+    "the exact file path and just need to read it, the content was written in this "
+    "session, or Retrieval failed or reported the scope is not indexed. Batch "
+    "independent queries as one list."
 )
 
 mcp = FastMCP("retrieval", instructions=SEARCH_PRIORITY_INSTRUCTIONS)
@@ -640,6 +669,24 @@ def _multi_query_tool_description(description: str) -> str:
     # here so both runtimes advertise byte-identical descriptions and daemon
     # surface digests. The list contract itself is on the `query` parameter.
     return inspect.cleandoc(description).rstrip()
+
+
+# A server-decided, deliver-once message about a scope (`scope_notice` on the search and
+# job responses). A tool puts it verbatim at the very top of its output and keeps no
+# state: the backend already marked it delivered. A list call collects the notices its
+# queries receive here instead, so they appear once above the per-query blocks.
+_SCOPE_NOTICE_SINK: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "scope_notice_sink", default=None)
+
+
+def _with_scope_notice(text: str, notice: object) -> str:
+    if not isinstance(notice, str) or not notice.strip():
+        return text
+    sink = _SCOPE_NOTICE_SINK.get()
+    if sink is not None:
+        sink.append(notice)
+        return text
+    return f"{notice}\n\n{text}"
 
 
 async def _run_query_batch(
@@ -667,7 +714,12 @@ async def _run_query_batch(
         except Exception as exc:
             return f"ERROR: {type(exc).__name__}: {exc}"
 
-    tasks = [asyncio.create_task(run_one(item)) for item in query]
+    notices: list[str] = []
+    token = _SCOPE_NOTICE_SINK.set(notices)  # each task copies this context at creation
+    try:
+        tasks = [asyncio.create_task(run_one(item)) for item in query]
+    finally:
+        _SCOPE_NOTICE_SINK.reset(token)
     try:
         results = await asyncio.gather(*tasks)
     except BaseException:
@@ -675,10 +727,13 @@ async def _run_query_batch(
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
-    return "\n\n".join(
+    body = "\n\n".join(
         f"Query {index + 1}/{len(query)}: {item!r}\n{result}"
         for index, (item, result) in enumerate(zip(query, results, strict=True))
     )
+    if notices:
+        body = "\n\n".join([*dict.fromkeys(notices), body])
+    return body
 
 
 _CLIENT: httpx.AsyncClient | None = None
@@ -1510,11 +1565,15 @@ async def search_papers(query: str, top_k: int = 10, venue: str | None = None,
 
 
 @mcp.tool()
-async def search_arxiv(query: str, top_k: int = 10, year: int | None = None) -> str:
+async def search_arxiv(query: str, top_k: int = 10, year: int | None = None,
+                       include_withdrawn: bool = False) -> str:
     """search_papers for arXiv computer-science preprints, which search_papers leaves out:
     use it for recent work that may not be published at a venue yet. Phrase the query as
     for search_papers. Returns paper_ids like "arxiv-2606.32000" that search_within_paper
     and get_paper_markdown accept.
+
+    Withdrawn papers are left out; include_withdrawn=true brings them back, marked
+    [WITHDRAWN]. search_within_paper on a withdrawn paper_id works either way.
 
     Example: search_arxiv(query="test-time compute scaling for reasoning language models",
                           year=2026, top_k=5)
@@ -1527,7 +1586,10 @@ async def search_arxiv(query: str, top_k: int = 10, year: int | None = None) -> 
                                "dedup_by_paper": True, "venue_tier": "preprint"}
     if year:
         payload["year"] = year
-    logger.info("search_arxiv.start query=%r top_k=%s year=%s", query, top_k, year)
+    if include_withdrawn:
+        payload["include_withdrawn"] = True
+    logger.info("search_arxiv.start query=%r top_k=%s year=%s include_withdrawn=%s",
+                query, top_k, year, include_withdrawn)
     try:
         resp = await asyncio.wait_for(
             _post("/api/search", payload), timeout=_SEARCH_PAPERS_TIMEOUT_S)
@@ -1795,6 +1857,64 @@ async def journal_record(body: str, title: str | None = None,
             f"(chunks={resp.get('chunk_count', 0)}, indexed={resp.get('indexed', False)}).")
 
 
+_CONVERSATION_SYNCER: Any = None
+
+
+def _conversations_module() -> Any:
+    """The sibling ``retrieval_mcp_conversations`` module, imported only when enabled."""
+    try:
+        import retrieval_mcp_conversations as module
+    except ImportError:  # loaded by path (tests, direct execution outside site-packages)
+        import importlib.util
+        name = "retrieval_mcp_conversations"
+        module = sys.modules.get(name)
+        if module is None:
+            path = Path(__file__).with_name(f"{name}.py")
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+    return module
+
+
+def _conversation_state_dir() -> Path:
+    override = _env("RETRIEVAL_MCP_STATE_DIR")
+    if override:
+        return Path(override).expanduser()
+    try:
+        from retrieval_mcp_daemon import resolve_runtime_dir
+        return resolve_runtime_dir()
+    except Exception:  # noqa: BLE001 — only the state location, never worth failing a tool
+        return Path.home() / ".retrieval-mcp"
+
+
+def _conversation_sync_line(scope_dir: str) -> str | None:
+    """Start the background Claude Code/Codex conversation sync for ``scope_dir`` and
+    return the one-line status to append to the tool output (None when disabled).
+
+    Uses the tool's already-resolved scope, never the daemon's own cwd, and only syncs a
+    scope that is a local directory (a remote scope has no local transcripts)."""
+    if (os.environ.get("RETRIEVAL_JOURNAL_CONVERSATIONS") or "0").strip() in {"", "0"}:
+        return None
+    global _CONVERSATION_SYNCER
+    try:
+        root = _session_abspath(scope_dir)
+        if not os.path.isdir(root):
+            return None
+        if _CONVERSATION_SYNCER is None:
+            _CONVERSATION_SYNCER = _conversations_module().ConversationSyncer(
+                post=_post, get=_get, state_dir=_conversation_state_dir)
+        host = _env("RETRIEVAL_HOST", "RETRIVAL_HOST", default=socket.gethostname()) or ""
+        return _CONVERSATION_SYNCER.kick(host, _scope_path(root))
+    except Exception as exc:  # noqa: BLE001 — conversation sync must not fail a search
+        logger.warning("conversation sync could not start: %s", exc)
+        return f"Conversations sync failed: {exc}"
+
+
+def _with_conversation_line(text: str, line: str | None) -> str:
+    return f"{text}\n\n{line}" if line else text
+
+
 @mcp.tool()
 async def journal_search(query: str, top_k: int = 5,
                          mode: str = "keyword", dedup_by_entry: bool = True,
@@ -1845,6 +1965,7 @@ async def journal_search(query: str, top_k: int = 5,
     """
     chunk_limit = _validate_journal_chunk_count(chunk_limit)
     normalized_path_glob = _normalize_path_glob(path_glob) if path_glob else None
+    conversation_line = _conversation_sync_line(scope_dir)
     body = {"project_slug": _scope_path(scope_dir),
             "query": query, "top_k": top_k, "mode": mode,
             "dedup_by_entry": dedup_by_entry, "include_chunks": True,
@@ -1852,6 +1973,7 @@ async def journal_search(query: str, top_k: int = 5,
     if normalized_path_glob:
         body["path_glob"] = normalized_path_glob
     resp = await _post("/api/journal/search", body)
+    notice = resp.get("scope_notice")
     hits = resp.get("hits") or []
     if not hits:
         guidance = _format_scope_miss(
@@ -1865,7 +1987,9 @@ async def journal_search(query: str, top_k: int = 5,
         )
         # Preserve the backend's path_glob-specific diagnosis, then add the scope
         # diagnosis requested by the caller instead of returning a bare miss.
-        return f"{resp['notice']}\n\n{guidance}" if resp.get("notice") else guidance
+        return _with_scope_notice(_with_conversation_line(
+            f"{resp['notice']}\n\n{guidance}" if resp.get("notice") else guidance,
+            conversation_line), notice)
     lines = [f"Found {len(hits)} journal entries:", ""]
     for i, hit in enumerate(hits, 1):
         e = hit.get("entry") or {}
@@ -1878,7 +2002,8 @@ async def journal_search(query: str, top_k: int = 5,
             prefix = f"   ▸ [{label}] " if label else "   ▸ "
             lines.append(prefix + _snippet(chunk.get("content", ""), _JOURNAL_SNIPPET_LIMIT))
         lines.append("")
-    return "\n".join(lines).rstrip()
+    return _with_scope_notice(
+        _with_conversation_line("\n".join(lines).rstrip(), conversation_line), notice)
 
 
 @mcp.tool()
@@ -1928,7 +2053,11 @@ async def journal_index_dir(
     max_depth: int | None = None,
     respect_gitignore: bool = True,
 ) -> str:
-    """Batch-index the text files in a LOCAL directory into the journal (searchable with
+    """Deprecated: index_code now indexes documents too (.md .mdx .markdown .rst .adoc
+    .txt) and keeps them fresh; use index_code instead. This tool is removed in the
+    next release.
+
+    Batch-index the text files in a LOCAL directory into the journal (searchable with
     journal_search) and list them in index_inventory — the bulk counterpart to
     journal_record. The scope, respect_gitignore and nested-scope rules are index_code's.
 
@@ -1959,6 +2088,7 @@ async def journal_index_dir(
         project, host or "", "doc", respect_gitignore)
     if block:
         return block
+    conversation_line = _conversation_sync_line(root)
     patterns = _expand_brace_patterns(pattern)
     matched = sorted({p for pat in patterns
                       for p in _discover_files(root, pat, recursive, max_depth)
@@ -1973,32 +2103,100 @@ async def journal_index_dir(
                          f"{skipped_gitignored} gitignored" if skipped_gitignored else None) if n]
     skip_note = f", {', '.join(notes)}" if notes else ""
     if not files:
-        return (f"No indexable text files matching {pattern!r} in {root} "
-                f"(recursive={recursive}, max_depth={max_depth}{skip_note}).")
+        return _with_conversation_line(
+            f"No indexable text files matching {pattern!r} in {root} "
+            f"(recursive={recursive}, max_depth={max_depth}{skip_note}).", conversation_line)
 
+    effective_max_depth = None if (recursive and max_depth is None) else (max_depth if recursive else 0)
+    outcome = await _index_doc_files(
+        root, project, host, files, patterns, effective_max_depth,
+        nested_warning=nested_warning, skip_note=skip_note)
+    return _with_conversation_line(outcome.message, conversation_line)
+
+
+@dataclass
+class _DocIndexOutcome:
+    """What one document pass did. ``message`` is the sentence journal_index_dir returns;
+    ``job_id`` is the Journal bulk-index job still running for the changed files (None
+    when the pass finished inline); ``records`` is the doc catalog snapshot the pass
+    reported (changed rows with chunk_count 0 until their job completes)."""
+    message: str
+    job_id: str | None = None
+    records: list[dict] = dataclasses.field(default_factory=list)
+    queued: int = 0
+    unchanged: int = 0
+    failed: int = 0
+    inventory_ok: bool = True
+
+
+def _doc_catalog_row(candidate: _JournalFileCandidate, chunk_count: int) -> dict:
+    return {"rel_path": candidate.rel_path, "kind": "doc", "collection": "journal_chunks",
+            "chunk_count": chunk_count, "content_hash": candidate.content_hash,
+            "size_bytes": candidate.size_bytes}
+
+
+async def _index_doc_files(
+    root: str, project: str, host: str | None, files: list[str],
+    patterns: list[str], max_depth: int | None, *,
+    known: dict | None = None, snapshot: bool = True,
+    nested_warning: str = "", skip_note: str = "",
+) -> _DocIndexOutcome:
+    """The shared document pipeline behind index_code and journal_index_dir: diff ``files``
+    (absolute paths, already gated by the caller) against the scope's doc catalog, send
+    only the changed bodies through /api/journal/bulk-index, and let the sweep envelope
+    (``patterns`` + ``max_depth``; None = unbounded) bound what a snapshot may remove.
+
+    ``snapshot=False`` is a partial update (the watcher's changed files): nothing may be
+    swept, and ``known`` (the caller's doc baseline) replaces the inventory lookup."""
     # The full-text POST is the expensive half of Journal indexing.  Diff against
     # this scope's durable catalog first, so unchanged files do not enter HTTP,
     # SQL/FTS, embedding or Qdrant.  An inventory outage deliberately falls back
     # to backend latest-wins dedupe rather than risking a missed update.
-    known: dict = {}
     inventory_note = ""
-    try:
-        inventory = await _get("/api/index/inventory", {
-            "host": host, "project": project, "kind": "doc", "detail": True,
-        })
-        known = _flatten_inventory_doc_files(inventory)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("journal_index_dir: doc inventory unavailable; no local unchanged skip: %s", exc)
-        inventory_note = "; local unchanged skip unavailable (inventory lookup failed)"
+    if known is None:
+        known = {}
+        try:
+            inventory = await _get("/api/index/inventory", {
+                "host": host, "project": project, "kind": "doc", "detail": True, "lean": True,
+            })
+            known = _flatten_inventory_doc_files(inventory)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("document index: doc inventory unavailable; no local unchanged skip: %s", exc)
+            inventory_note = "; local unchanged skip unavailable (inventory lookup failed)"
     candidates = await asyncio.to_thread(
         lambda: [_journal_file_candidate(path, root) for path in files])
-    effective_max_depth = None if (recursive and max_depth is None) else (max_depth if recursive else 0)
-    known_in_envelope = _journal_known_in_envelope(known, patterns, effective_max_depth)
+    known_in_envelope = _journal_known_in_envelope(known, patterns, max_depth)
     unchanged, replace_safe, replace_block_reason = _journal_snapshot_diff(
         candidates, known_in_envelope, case_sensitive=not _is_windows_absolute_path(root))
-    if not replace_safe:
-        logger.warning("journal_index_dir: snapshot replace disabled for %s: %s",
+    if not snapshot:
+        # A watcher batch names only what changed; it is not a snapshot of the scope.
+        replace_safe, replace_block_reason = False, "partial update"
+    elif not replace_safe:
+        logger.warning("document index: snapshot replace disabled for %s: %s",
                        project, replace_block_reason)
+
+    # A re-run that finds nothing to do: every file is readable and byte-identical to its
+    # catalog row, and no cataloged file of this pattern/depth is missing locally. The
+    # full-snapshot report (replace=True) and the stale-doc reconcile below would then
+    # rewrite the same rows and remove nothing, so skip both round trips. The text is the
+    # one that unchanged path prints today.
+    local_paths = {candidate.rel_path for candidate in candidates}
+    if (not inventory_note and replace_safe
+            and all(candidate.readable and candidate.rel_path in unchanged
+                    for candidate in candidates)
+            and known_in_envelope.keys() <= local_paths):
+        count = len(candidates)
+        prefix = f"{nested_warning} " if nested_warning else ""
+        return _DocIndexOutcome(
+            message=(
+                f"{prefix}Indexed {count} file(s) into journal '{project}' "
+                f"({count} unchanged, 0 failed{skip_note}); "
+                f"reported {count} to inventory (host={host}); 0 stale doc(s) removed."),
+            records=[
+                _doc_catalog_row(candidate, int(
+                    known_in_envelope[candidate.rel_path].get("chunk_count", 0) or 0))
+                for candidate in candidates],
+            unchanged=count)
 
     if any(candidate.rel_path not in unchanged and candidate.readable for candidate in candidates):
         report_files: list[dict] = []
@@ -2010,9 +2208,8 @@ async def journal_index_dir(
                 continue
             if candidate.rel_path in unchanged:
                 previous = known_in_envelope[candidate.rel_path]
-                report_files.append({"rel_path": candidate.rel_path, "kind": "doc",
-                    "collection": "journal_chunks", "chunk_count": int(previous.get("chunk_count", 0) or 0),
-                    "content_hash": candidate.content_hash, "size_bytes": candidate.size_bytes})
+                report_files.append(_doc_catalog_row(
+                    candidate, int(previous.get("chunk_count", 0) or 0)))
                 continue
             try:
                 content = await asyncio.to_thread(
@@ -2021,16 +2218,14 @@ async def journal_index_dir(
                     lambda path=candidate.abs_path: open(
                         path, encoding="utf-8", errors="replace", newline="").read())
             except OSError:
-                logger.exception("journal_index_dir: failed to read %s", candidate.abs_path)
+                logger.exception("document index: failed to read %s", candidate.abs_path)
                 failed_reads += 1
                 continue
             if not content.strip():
                 continue
             bulk_files.append({"title": candidate.rel_path, "body": content,
                                "content_hash": candidate.content_hash, "size_bytes": candidate.size_bytes})
-            report_files.append({"rel_path": candidate.rel_path, "kind": "doc",
-                "collection": "journal_chunks", "chunk_count": 0,
-                "content_hash": candidate.content_hash, "size_bytes": candidate.size_bytes})
+            report_files.append(_doc_catalog_row(candidate, 0))
         if bulk_files:
             try:
                 job = await _post("/api/journal/bulk-index", {
@@ -2038,12 +2233,17 @@ async def journal_index_dir(
                     "files": bulk_files, "report_files": report_files,
                     "replace": replace_safe and failed_reads == 0,
                     "live_titles": [row["rel_path"] for row in report_files],
-                    "patterns": patterns, "max_depth": effective_max_depth,
+                    "patterns": patterns, "max_depth": max_depth,
                 })
                 if job.get("job_id"):
-                    return (f"Queued Journal bulk index job '{job.get('job_id')}' for {len(bulk_files)} changed "
+                    return _DocIndexOutcome(
+                        message=(
+                            f"Queued Journal bulk index job '{job.get('job_id')}' for {len(bulk_files)} changed "
                             f"file(s) in '{project}' ({len(unchanged)} unchanged locally, {failed_reads} failed); "
-                            f"poll journal_index_status(job_id='{job.get('job_id')}').")
+                            f"poll journal_index_status(job_id='{job.get('job_id')}')."),
+                        job_id=str(job.get("job_id")), records=report_files,
+                        queued=len(bulk_files), unchanged=len(unchanged), failed=failed_reads,
+                        inventory_ok=not inventory_note)
             except Exception:
                 logger.warning("journal bulk endpoint unavailable; using compatibility path", exc_info=True)
 
@@ -2052,11 +2252,7 @@ async def journal_index_dir(
     _sem = asyncio.Semaphore(_JOURNAL_INDEX_CONCURRENCY)
 
     def _record(candidate: _JournalFileCandidate, *, chunk_count: int) -> dict:
-        return {
-            "rel_path": candidate.rel_path, "kind": "doc", "collection": "journal_chunks",
-            "chunk_count": chunk_count, "content_hash": candidate.content_hash,
-            "size_bytes": candidate.size_bytes,
-        }
+        return _doc_catalog_row(candidate, chunk_count)
 
     async def _index_one(candidate: _JournalFileCandidate) -> tuple[str, dict | None, bool, int]:
         async with _sem:
@@ -2080,7 +2276,7 @@ async def journal_index_dir(
                 return ("ok", rec, bool(resp.get("deduped")),
                         int(resp.get("duplicates_updated", 0) or 0))
             except Exception:  # noqa: BLE001 — keep going; one bad file shouldn't abort the batch
-                logger.exception("journal_index_dir: failed to index %s", candidate.abs_path)
+                logger.exception("document index: failed to index %s", candidate.abs_path)
                 return "fail", None, False, 0
 
     # Bounded fan-out; gather preserves submission order so `records` (and thus the
@@ -2109,12 +2305,15 @@ async def journal_index_dir(
         # pattern/depth envelope further scopes the sweep to what this run could have indexed.
         rep = await _post("/api/index/report", {
             "host": host, "project": project, "root_dir": root, "files": records,
-            "replace": failed == 0 and replace_safe, "patterns": patterns, "max_depth": effective_max_depth,
+            "replace": failed == 0 and replace_safe, "patterns": patterns, "max_depth": max_depth,
         })
         reported = rep.get("total_files", len(records))
     except Exception as exc:  # noqa: BLE001 — inventory reporting is best-effort
-        return (f"{prefix}Indexed {indexed} file(s) into journal '{project}' "
-                f"({deduped} unchanged, {failed} failed{skip_note}{dup_note}); inventory report skipped: {exc}")
+        return _DocIndexOutcome(
+            message=(
+                f"{prefix}Indexed {indexed} file(s) into journal '{project}' "
+                f"({deduped} unchanged, {failed} failed{skip_note}{dup_note}); inventory report skipped: {exc}"),
+            records=records, unchanged=deduped, failed=failed, inventory_ok=not inventory_note)
     reconcile_note = ""
     if failed:
         reconcile_note = "; stale doc reconcile skipped because some files failed"
@@ -2125,7 +2324,7 @@ async def journal_index_dir(
             reconciled = await _post("/api/journal/docs/reconcile", {
                 "project_slug": project,
                 "live_titles": [record["rel_path"] for record in records],
-                "max_depth": effective_max_depth,
+                "max_depth": max_depth,
                 "patterns": patterns,
             })
             if reconciled.get("skipped"):
@@ -2134,9 +2333,12 @@ async def journal_index_dir(
                 reconcile_note = f"; {reconciled.get('removed_entries', 0)} stale doc(s) removed"
         except Exception as exc:  # noqa: BLE001
             reconcile_note = f"; stale doc reconcile skipped: {exc}"
-    return (f"{prefix}Indexed {indexed} file(s) into journal '{project}' "
+    return _DocIndexOutcome(
+        message=(
+            f"{prefix}Indexed {indexed} file(s) into journal '{project}' "
             f"({deduped} unchanged, {failed} failed{skip_note}{dup_note}); "
-            f"reported {reported} to inventory (host={host}){inventory_note}{reconcile_note}.")
+            f"reported {reported} to inventory (host={host}){inventory_note}{reconcile_note}."),
+        records=records, unchanged=deduped, failed=failed, inventory_ok=not inventory_note)
 
 
 @mcp.tool()
@@ -2147,6 +2349,7 @@ async def journal_index_status(job_id: str) -> str:
             f"files={job.get('files_done', 0)}/{job.get('files_total', 0)} "
             f"chunks={job.get('chunks_done', 0)}/{job.get('chunks_total', 0)} "
             f"indexed={job.get('indexed', 0)} progress={job.get('progress', 0):.0%}"
+            + (f" skipped_binary={', '.join(job['skipped_binary'])}" if job.get('skipped_binary') else "")
             + (f" error={job.get('error')}" if job.get('error') else ""))
 
 
@@ -2164,8 +2367,9 @@ async def index_inventory(host: str | None = None, project: str | None = None,
             "E:/JETB".
         limit: Most projects to list.
     """
-    params = {k: v for k, v in {"host": host}.items() if v}
+    params = {k: v for k, v in {"host": host, "project_contains": project}.items() if v}
     resp = await _get("/api/index/inventory", params)
+    # Filtered again here: a backend that predates project_contains returns every project.
     return _format_inventory_summary(resp, project=project, limit=limit)
 
 
@@ -2281,7 +2485,8 @@ def _fmt_papers(resp: dict) -> str:
         year = meta.get("year") or p.get("year") or "?"
         title = p.get("doc_title") or p.get("title") or "(untitled)"
         score = p.get("max_score", p.get("score", 0.0))
-        lines.append(f"{i}. {title}  [{venue} {year}]  score={score:.3f}")
+        withdrawn = "  [WITHDRAWN]" if meta.get("withdrawn") else ""
+        lines.append(f"{i}. {title}  [{venue} {year}]  score={score:.3f}{withdrawn}")
         # An upload/webpage has no paper_id; emit its doc: handle so the id on
         # this line is always one a follow-up tool can actually use. Printing an
         # empty paper_id made books un-drillable: search found them, then
@@ -2350,6 +2555,12 @@ LANG_BY_NAME = {"dockerfile": "dockerfile", "makefile": "make", "cmakelists.txt"
 # Grammarless (or grammar-mismatched, e.g. indented .sass) code-adjacent text → line
 # windows. NOT ".txt" (would sweep requirements.txt / LICENSE / data into the code KB).
 FALLBACK_EXTS = {".env", ".properties", ".cfg", ".conf", ".editorconfig", ".sass"}
+# Documentation: index_code hands these to the journal pipeline in the same walk. ".txt"
+# is a document here (CMakeLists.txt still resolves to code first, see _walk_repo_files).
+DOC_EXTS = frozenset({".md", ".mdx", ".markdown", ".rst", ".adoc", ".txt"})
+# The sweep envelope of that pipeline: reconcile only ever removes docs matching these
+# basenames, so a scope's other doc rows (journal_index_dir "*.json") stay untouched.
+DOC_GLOBS = ["*.md", "*.mdx", "*.markdown", "*.rst", "*.adoc", "*.txt"]
 _MAX_CHUNK_SIZE = 1500  # chars per chunk (chonkie tokenizer="character")
 # Sources this large are cut at blank lines before chunking (see _segments): a 9,255-line
 # C++ file used to come back as one 567K-char hit (2026-10-13).
@@ -2575,27 +2786,29 @@ def _chunk_lines(path: str, source: str) -> list[_CodeChunk]:
             out.append(_CodeChunk(path=path, start_line=lineno, end_line=lineno,
                                   content=f"# path: {path}\n{piece}", code=piece))
 
+    def _flush(end_line: int) -> None:
+        """Emit the buffer as one chunk — only when it holds non-whitespace text (an
+        all-blank window would be an empty `code`, which the server rejects with 422) —
+        and always empty it; the next window starts after `end_line`."""
+        nonlocal buf, buf_start, size
+        if buf and "".join(buf).strip():
+            code = "\n".join(buf)
+            out.append(_CodeChunk(path=path, start_line=buf_start, end_line=end_line,
+                                  content=f"# path: {path}\n{code}", code=code))
+        buf, buf_start, size = [], end_line + 1, 0
+
     for i, line in enumerate(lines, 1):
         if len(line) > hard_cap:
-            if buf and "".join(buf).strip():
-                code = "\n".join(buf)
-                out.append(_CodeChunk(path=path, start_line=buf_start, end_line=i - 1,
-                                      content=f"# path: {path}\n{code}", code=code))
-            buf, buf_start, size = [], i + 1, 0
+            _flush(i - 1)
+            buf_start = i + 1
             _flush_hard_split(line, i)
             continue
         line_nws = len(re.sub(r"\s", "", line))
         if buf and size + line_nws > _MAX_CHUNK_SIZE:
-            code = "\n".join(buf)
-            out.append(_CodeChunk(path=path, start_line=buf_start, end_line=i - 1,
-                                  content=f"# path: {path}\n{code}", code=code))
-            buf, buf_start, size = [], i, 0
+            _flush(i - 1)
         buf.append(line)
         size += line_nws
-    if buf and "".join(buf).strip():
-        code = "\n".join(buf)
-        out.append(_CodeChunk(path=path, start_line=buf_start, end_line=len(lines),
-                              content=f"# path: {path}\n{code}", code=code))
+    _flush(len(lines))
     return out
 
 
@@ -2657,11 +2870,29 @@ def _effective_excludes(repo_root: str, exclude_globs: list[str] | None) -> list
     return list(dict.fromkeys(_load_retrievalignore(repo_root) + list(exclude_globs or [])))
 
 
-def _iter_repo_files(repo_root: str, respect_gitignore: bool = True,
-                     exclude_globs: list[str] | None = None):
-    """(abs_path, rel_path) for every file that WOULD be chunked — a resolvable language
-    or a fallback ext — WITHOUT parsing. Lets incremental indexing hash candidates
-    cheaply and AST-chunk only the changed subset. Mirrors _collect_code_files's gate.
+def _is_hidden_rel_path(rel_path: str) -> bool:
+    """True when any segment of a scope-relative path is a dot name (``.github/x.md``,
+    ``docs/.draft.md``)."""
+    return any(part.startswith(".") for part in rel_path.replace("\\", "/").split("/"))
+
+
+def _is_doc_path(path: str, rel_path: str) -> bool:
+    """A documentation file the journal pipeline owns: a DOC_EXTS extension outside every
+    dot path. Dot paths are excluded because the journal's sweep envelope never covers
+    them (``.conversations/`` holds synced chat docs), so a doc indexed there could
+    neither be skipped as unchanged nor reconciled away."""
+    return _ext_of(path) in DOC_EXTS and not _is_hidden_rel_path(rel_path)
+
+
+def _walk_repo_files(repo_root: str, respect_gitignore: bool = True,
+                     exclude_globs: list[str] | None = None, docs: bool = True):
+    """(abs_path, rel_path, kind) for every indexable file, from ONE directory walk.
+
+    kind is "code" — a resolvable language or a fallback ext, i.e. what would be
+    chunked, decided WITHOUT parsing — or "doc" for DOC_EXTS files (``docs=False`` omits
+    them). Code wins when a name qualifies as both (``CMakeLists.txt``). The skipped
+    directories, exclude globs, ``.retrievalignore`` and git's ignore rules gate both
+    kinds identically.
 
     respect_gitignore (default True) skips files git ignores — see _gitignore_allowed."""
     allowed = _gitignore_allowed(repo_root) if respect_gitignore else None
@@ -2671,14 +2902,33 @@ def _iter_repo_files(repo_root: str, respect_gitignore: bool = True,
             os.path.relpath(os.path.join(root, d), repo_root).replace("\\", "/"), excludes)]
         for fn in files:
             path = os.path.join(root, fn)
-            if not (_resolve_language(path) or _ext_of(path) in FALLBACK_EXTS):
+            if _resolve_language(path) or _ext_of(path) in FALLBACK_EXTS:
+                kind = "code"
+            elif docs and _ext_of(path) in DOC_EXTS:
+                kind = "doc"
+            else:
                 continue
             rel = os.path.relpath(path, repo_root).replace("\\", "/")
+            if kind == "doc" and _is_hidden_rel_path(rel):
+                continue
             if _excluded(rel, excludes):
                 continue
             if allowed is not None and rel not in allowed:
                 continue
-            yield path, rel
+            yield path, rel, kind
+
+
+def _iter_repo_files(repo_root: str, respect_gitignore: bool = True,
+                     exclude_globs: list[str] | None = None):
+    """(abs_path, rel_path) for every file that WOULD be chunked — a resolvable language
+    or a fallback ext — WITHOUT parsing. Lets incremental indexing hash candidates
+    cheaply and AST-chunk only the changed subset. Mirrors _collect_code_files's gate.
+
+    The code-only view of _walk_repo_files."""
+    for path, rel, _kind in _walk_repo_files(
+            repo_root, respect_gitignore=respect_gitignore,
+            exclude_globs=exclude_globs, docs=False):
+        yield path, rel
 
 
 def _file_content_hash(path: str) -> str | None:
@@ -2794,15 +3044,19 @@ def _collect_code_files(
     respect_gitignore: bool = True,
     exclude_globs: list[str] | None = None,
     progress_cb: CollectProgressCb | None = None,
+    files: list[tuple[str, str]] | None = None,
 ) -> list[dict]:
     """Full walk: AST-chunk every supported file into per-file upload payloads.
 
     Files are chunked CONCURRENTLY on a bounded thread pool; results are stored by
     submission index so output stays byte-identical to a serial walk. ``progress_cb``
     (if set) receives file-level ticks without changing the returned payloads.
+    ``files`` is the already-walked (abs_path, rel_path) code list when the caller
+    shares one walk with the document pass; None walks here.
     """
-    files = list(_iter_repo_files(
-        repo_root, respect_gitignore=respect_gitignore, exclude_globs=exclude_globs))
+    if files is None:
+        files = list(_iter_repo_files(
+            repo_root, respect_gitignore=respect_gitignore, exclude_globs=exclude_globs))
     total = len(files)
     stride = _collect_progress_stride(total)
     _emit_collect_progress(
@@ -2846,8 +3100,11 @@ def _collect_incremental(
     respect_gitignore: bool = True,
     exclude_globs: list[str] | None = None,
     progress_cb: CollectProgressCb | None = None,
+    files: list[tuple[str, str]] | None = None,
 ) -> tuple[list[dict], list[str], dict]:
     """Hash every candidate; AST-chunk ONLY files whose hash differs from known_hashes.
+    ``files`` is the already-walked code list when the caller shares one walk with the
+    document pass (None walks here).
     Returns (changed_payloads, manifest, current_hashes).
 
     manifest = paths that should hold vectors after this op = unchanged-already-indexed ∪
@@ -2859,8 +3116,9 @@ def _collect_incremental(
     results are assembled in walk order so payloads/manifest match the serial version.
     ``progress_cb`` reports files_done/files_total while the pool runs (observability only).
     """
-    files = list(_iter_repo_files(
-        repo_root, respect_gitignore=respect_gitignore, exclude_globs=exclude_globs))
+    if files is None:
+        files = list(_iter_repo_files(
+            repo_root, respect_gitignore=respect_gitignore, exclude_globs=exclude_globs))
     total = len(files)
     stride = _collect_progress_stride(total)
     _emit_collect_progress(
@@ -3262,9 +3520,11 @@ async def _known_code_hashes(project: str) -> dict:
     """The server's inventory of this project's code files, {rel_path: node}, as the
     incremental diff baseline. Failure (offline / no auth) degrades to {} → a full pass."""
     try:
-        # detail=True: the summary inventory omits the per-file content hashes we diff against.
+        # detail=True: the summary inventory omits the per-file content hashes we diff
+        # against. lean=True asks for just the compared columns; a backend that predates
+        # the flag ignores it and returns the full tree, which flattens identically.
         inv = await _get("/api/index/inventory",
-                         {"project": project, "kind": "code", "detail": True})
+                         {"project": project, "kind": "code", "detail": True, "lean": True})
         return _flatten_inventory_code_files(inv)
     except Exception as exc:  # noqa: BLE001 — offline/degraded → treat as no prior index
         logger.warning("index_code: inventory fetch failed (%s) — indexing all files", exc)
@@ -3291,6 +3551,58 @@ async def _get_code_policy(*, project: str, host: str) -> dict | None:
         return None
 
 
+async def _set_doc_policy(
+    *, project: str, host: str, root_dir: str, auto_refresh: bool,
+    respect_gitignore: bool, exclude_globs: list[str],
+) -> dict:
+    """Record, under kind="doc" of the same policy endpoint, whether this scope's
+    documents ride along with its code index (the watcher reads it)."""
+    return await _post("/api/index/policy", {
+        "host": host, "project": project, "kind": "doc", "root_dir": root_dir,
+        "auto_refresh": auto_refresh, "respect_gitignore": respect_gitignore,
+        "exclude_globs": exclude_globs,
+    })
+
+
+async def _get_doc_policy(*, project: str, host: str) -> dict | None:
+    """The scope's document policy; None when none is registered (HTTP 404). Any other
+    failure raises, so a caller cannot mistake an outage for "documents are off"."""
+    try:
+        return await _get("/api/index/policy", {
+            "host": host, "project": project, "kind": "doc"})
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return None
+        raise
+
+
+async def _sync_doc_policy(
+    *, project: str, host: str, root_dir: str, docs: bool, auto_refresh: bool,
+    respect_gitignore: bool, exclude_globs: list[str],
+) -> str:
+    """Persist what this index_code call decided about the scope's documents, before any
+    watcher can look. Returns a warning sentence (empty when saved).
+
+    docs=False must also switch OFF a scope an earlier run enabled — "do not manage this
+    scope's documents" has to survive a daemon restart — but only ever by an explicit
+    write: a scope that never had document policy costs one read and no write."""
+    try:
+        if docs:
+            await _set_doc_policy(
+                project=project, host=host, root_dir=root_dir, auto_refresh=auto_refresh,
+                respect_gitignore=respect_gitignore, exclude_globs=exclude_globs)
+        else:
+            existing = await _get_doc_policy(project=project, host=host)
+            if existing and existing.get("auto_refresh"):
+                await _set_doc_policy(
+                    project=project, host=host, root_dir=root_dir, auto_refresh=False,
+                    respect_gitignore=respect_gitignore, exclude_globs=exclude_globs)
+    except Exception as exc:  # noqa: BLE001 — a policy outage must not stop indexing
+        logger.warning("index_code: document policy persistence failed: %s", exc)
+        return " Warning: document auto-refresh policy could not be saved."
+    return ""
+
+
 RefreshKey = tuple[str, str]
 _AUTO_REFRESH_TASKS: dict[RefreshKey, asyncio.Task] = {}
 _AUTO_REFRESH_RESULTS: dict[RefreshKey, dict] = {}
@@ -3304,7 +3616,12 @@ _CODE_WATCH_STATUS: dict[RefreshKey, dict] = {}
 _CODE_WATCH_RETRY_AT: dict[RefreshKey, float] = {}
 _CODE_WATCH_RETRY_SECONDS = 60
 _CODE_WATCH_DEBOUNCE_MS = 800
+# Automatic indexing (the watcher and _auto_refresh_code) runs at most once per this many
+# seconds per scope: the user's rule of 2026-11-15, enforced by the backend as the floor of
+# the policy's min_check_interval_s. Explicit tool calls are never throttled.
+_AUTO_INDEX_MIN_INTERVAL_S = 300
 _CODE_JOB_POLL_SECONDS = 0.5
+_CODE_JOB_POLL_MAX_SECONDS = 5.0  # a long index run must not be queried twice a second
 _CODE_JOB_RETRY_MAX_SECONDS = 5.0
 _CODE_JOB_RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
 _CODE_JOB_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -3322,6 +3639,16 @@ _CODE_PREPARATION_STATUS: dict[str, dict] = {}
 _CODE_PREPARATION_BY_SCOPE: dict[RefreshKey, str] = {}
 _CODE_JOB_WAIT_TASKS: dict[str, asyncio.Task] = {}
 _CODE_SCOPE_OPERATION_LOCKS: dict[RefreshKey, asyncio.Lock] = {}
+# Documents ride along with the code index through the Journal bulk-index queue; their
+# jobs are polled on a different endpoint, so they get their own wait registry.
+_DOC_JOB_WAIT_TASKS: dict[str, asyncio.Task] = {}
+# The bulk-index job index_code last submitted for a scope: a watcher that lazily loads
+# the document baseline waits for it, so it never diffs against a half-written catalog.
+_DOC_PENDING_JOBS: dict[RefreshKey, str] = {}
+_DOC_JOB_ACTIVE_STATUSES = frozenset({"preparing", "queued", "running"})
+# A scope without document policy is re-checked at most this often, not on every batch.
+_WATCH_DOCS_OFF_TTL_SECONDS = 30
+_WATCH_CONTROL_FILES = frozenset({".gitignore", ".retrievalignore"})
 
 
 @dataclass(frozen=True)
@@ -3330,6 +3657,27 @@ class _WatchSubmission:
     updated_nodes: dict[str, dict]
     removed_paths: list[str]
     refresh_inventory: bool = False
+    # The baseline a completed refresh leaves in the catalog: exactly the records the
+    # refresh job reports, so the watcher need not download the inventory again.
+    refreshed_known: dict[str, dict] | None = None
+    # Documents: the Journal bulk-index job still to wait for, and what the catalog
+    # holds once it (or the inline deletion/reconcile) is done.
+    doc_job_id: str | None = None
+    updated_doc_nodes: dict[str, dict] = dataclasses.field(default_factory=dict)
+    removed_doc_paths: list[str] = dataclasses.field(default_factory=list)
+    refresh_docs: bool = False
+    refreshed_known_docs: dict[str, dict] | None = None
+
+
+@dataclass
+class _WatchDocs:
+    """One watcher's view of its scope's documents. Resolved lazily — by the first batch
+    that touches a document or an ignore file — so a code-only session never reads the
+    document catalog. ``known`` is the baseline ({rel_path: node}, restricted to the
+    document sweep envelope) while the scope's documents are kept fresh, None otherwise;
+    ``off_checked_at`` rate-limits the policy lookup that last said "off"."""
+    known: dict[str, dict] | None = None
+    off_checked_at: float = 0.0
 
 
 def _cache_refresh_result(key: RefreshKey, result: dict, interval: int) -> dict:
@@ -3361,6 +3709,7 @@ def _invalidate_refresh(project: str, host: str | None = None) -> None:
             task.cancel()
         _CODE_WATCH_STATUS.pop(key, None)
         _CODE_WATCH_RETRY_AT.pop(key, None)
+        _DOC_PENDING_JOBS.pop(key, None)
 
 
 async def _active_code_job(project: str) -> dict | None:
@@ -3371,8 +3720,20 @@ async def _active_code_job(project: str) -> dict | None:
                  and job.get("status") in {"queued", "running"}), None)
 
 
+def _auto_index_interval_s(policy: dict) -> int:
+    """The automatic-indexing interval of a policy. The floor also applies here because a
+    backend that predates it still answers min_check_interval_s=10."""
+    return max(_AUTO_INDEX_MIN_INTERVAL_S,
+               int(policy.get("min_check_interval_s", _AUTO_INDEX_MIN_INTERVAL_S)))
+
+
 async def _auto_refresh_code(*, project: str, host: str, repo_root: str,
-                             force: bool = False) -> dict:
+                             force: bool = False,
+                             on_baseline: Callable[[dict[str, dict]], None] | None = None,
+                             ) -> dict:
+    """Diff the tree against the catalog and submit one incremental job for the delta.
+    ``on_baseline`` receives the baseline the catalog holds once that job completes
+    (see ``_known_from_records``) whenever a job was submitted."""
     key = (host, project)
     try:
         now = time.monotonic()
@@ -3400,7 +3761,7 @@ async def _auto_refresh_code(*, project: str, host: str, repo_root: str,
                 _AUTO_REFRESH_DISABLED_TTL_SECONDS,
             )
 
-        interval = max(0, int(policy.get("min_check_interval_s", 10)))
+        interval = _auto_index_interval_s(policy)
         _AUTO_REFRESH_INTERVALS[key] = interval
         respect_gitignore = bool(policy.get("respect_gitignore", True))
         known = await _known_code_hashes(project)
@@ -3424,10 +3785,16 @@ async def _auto_refresh_code(*, project: str, host: str, repo_root: str,
                 request = {
                     "project": project, "host": host, "root_dir": root,
                     "files": payloads, "incremental": True, "manifest": manifest,
+                    # `removed` was diffed against the catalog inventory above, so the
+                    # server need not enumerate the project's paths to find it. `manifest`
+                    # stays for a backend that predates removed_paths_complete.
+                    "removed_paths": removed, "removed_paths_complete": True,
                     "report": {"files": records, "replace": True},
                 }
                 job = await _submit_code_index_with_receipt(
                     key=key, client_job_id=uuid.uuid4().hex, request=request)
+                if on_baseline is not None:
+                    on_baseline(_known_from_records(records))
                 result = {
                     "state": "refresh_started", "job_id": job.get("job_id"),
                     "status": job.get("status", "queued"),
@@ -3455,43 +3822,78 @@ def _watch_rel_path(repo_root: str, path: str) -> str | None:
 
 
 def _git_ignored_watch_paths(repo_root: str, rel_paths: set[str]) -> set[str]:
-    """Ask Git only about touched paths; never enumerate the repository."""
+    """Ask Git only about touched paths; never enumerate the repository.
+
+    The paths go to git in sorted batches of _CHECK_IGNORE_BATCH, each under its own
+    timeout. Fails closed: a batch git did not answer raises GitIgnoreCheckFailed (never
+    "nothing is ignored"); only a non-repository / missing git answers set()."""
     if not rel_paths:
         return set()
-    encoded = ("\0".join(sorted(rel_paths)) + "\0").encode(
-        "utf-8", errors="surrogateescape")
     env = os.environ.copy()
     env["GIT_OPTIONAL_LOCKS"] = "0"
-    try:
-        result = subprocess.run(
-            ["git", "-C", repo_root, "check-ignore", "--stdin", "-z"],
-            input=encoded,
-            capture_output=True,
-            timeout=10,
-            env=env,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return set()
-    if result.returncode not in {0, 1}:
-        return set()
-    return {
-        path.decode("utf-8", errors="surrogateescape")
-        for path in result.stdout.split(b"\0") if path
-    }
+    env["LC_ALL"] = "C"
+    ordered = sorted(rel_paths)
+    ignored: set[str] = set()
+    for start in range(0, len(ordered), _CHECK_IGNORE_BATCH):
+        encoded = ("\0".join(ordered[start:start + _CHECK_IGNORE_BATCH]) + "\0").encode(
+            "utf-8", errors="surrogateescape")
+        try:
+            result = subprocess.run(
+                ["git", "-C", repo_root, "check-ignore", "--stdin", "-z"],
+                input=encoded,
+                capture_output=True,
+                timeout=_GIT_CHECK_IGNORE_TIMEOUT_S,
+                env=env,
+            )
+        except FileNotFoundError:
+            return set()  # git is not installed: no filtering, as _gitignore_allowed
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise GitIgnoreCheckFailed(
+                f"git check-ignore did not finish in {repo_root}: {exc!r}") from exc
+        if result.returncode not in {0, 1}:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            if result.returncode == 128 and "not a git repository" in stderr:
+                return set()
+            raise GitIgnoreCheckFailed(
+                f"git check-ignore failed in {repo_root} (exit {result.returncode}): "
+                f"{stderr[:200]}")
+        ignored.update(
+            path.decode("utf-8", errors="surrogateescape")
+            for path in result.stdout.split(b"\0") if path)
+    return ignored
 
 
-def _collect_watched_code_changes(
+class _WatchedChanges(NamedTuple):
+    """One resolved filesystem event batch. The first four fields are the code result;
+    ``doc_changed`` / ``doc_removed`` are the documents (empty unless the scope's
+    documents are kept fresh)."""
+    payloads: list[dict]
+    removed: list[str]
+    current: dict[str, str]
+    requires_reconcile: bool
+    doc_changed: list[_JournalFileCandidate]
+    doc_removed: list[str]
+
+
+def _collect_watched_changes(
     repo_root: str,
     changed_paths: set[str],
     known: dict[str, dict],
+    known_docs: dict[str, dict] | None,
     respect_gitignore: bool,
     exclude_globs: list[str],
-) -> tuple[list[dict], list[str], dict[str, str], bool]:
-    """Resolve one filesystem event batch without walking unrelated directories."""
+) -> _WatchedChanges:
+    """Resolve one filesystem event batch without walking unrelated directories.
+
+    ``known_docs`` is the scope's document baseline ({rel_path: node}); None means the
+    scope's documents are not kept fresh, and then no document is even looked at — the
+    code result is exactly the code-only one."""
     root = os.path.abspath(repo_root)
     excludes = _effective_excludes(root, exclude_globs)
     candidates: dict[str, str] = {}
+    doc_candidates: dict[str, str] = {}
     removed: set[str] = set()
+    doc_removed: set[str] = set()
     requires_reconcile = False
 
     def add_candidate(path: str) -> None:
@@ -3508,6 +3910,11 @@ def _collect_watched_code_changes(
         if not (_resolve_language(path) or _ext_of(path) in FALLBACK_EXTS):
             if rel in known:
                 removed.add(rel)
+            if known_docs is not None:
+                if _is_doc_path(path, rel) and not _excluded(rel, excludes):
+                    doc_candidates[rel] = path
+                elif rel in known_docs:
+                    doc_removed.add(rel)
             return
         if _excluded(rel, excludes):
             if rel in known:
@@ -3515,35 +3922,63 @@ def _collect_watched_code_changes(
             return
         candidates[rel] = path
 
-    for changed in changed_paths:
-        absolute = os.path.abspath(changed)
-        rel = _watch_rel_path(root, absolute)
-        if rel is None:
-            continue
-        if os.path.basename(rel) == ".gitignore" or rel == ".retrievalignore":
-            requires_reconcile = True
-            continue
-        if os.path.isdir(absolute):
-            if not rel or any(part in _SKIP_DIRS for part in rel.split("/")):
+    try:
+        for changed in changed_paths:
+            absolute = os.path.abspath(changed)
+            rel = _watch_rel_path(root, absolute)
+            if rel is None:
                 continue
-            for walk_root, dirs, files in os.walk(absolute):
-                dirs[:] = [name for name in dirs if name not in _SKIP_DIRS]
-                for filename in files:
-                    add_candidate(os.path.join(walk_root, filename))
-        elif os.path.isfile(absolute):
-            add_candidate(absolute)
-        else:
-            removed.update(
-                path for path in known
-                if path == rel or (rel and path.startswith(rel.rstrip("/") + "/"))
-            )
+            if os.path.basename(rel) == ".gitignore" or rel == ".retrievalignore":
+                requires_reconcile = True
+                continue
+            if os.path.isdir(absolute):
+                if not rel or any(part in _SKIP_DIRS for part in rel.split("/")):
+                    continue
+                # Git enumerates the directory (ignored files never become candidates);
+                # the os.walk below is only for scopes git cannot answer for.
+                listed = _gitignore_allowed(root, [rel]) if respect_gitignore else None
+                if listed is not None:
+                    for listed_rel in sorted(listed):
+                        listed_parts = listed_rel.split("/")
+                        if any(part in _SKIP_DIRS for part in listed_parts[:-1]):
+                            continue
+                        listed_path = os.path.join(root, *listed_parts)
+                        if os.path.isfile(listed_path):  # tracked-but-deleted is not one
+                            add_candidate(listed_path)
+                    continue
+                for walk_root, dirs, files in os.walk(absolute):
+                    dirs[:] = [name for name in dirs if name not in _SKIP_DIRS]
+                    for filename in files:
+                        add_candidate(os.path.join(walk_root, filename))
+            elif os.path.isfile(absolute):
+                add_candidate(absolute)
+            else:
+                def under_deleted(path: str) -> bool:
+                    return path == rel or bool(rel and path.startswith(rel.rstrip("/") + "/"))
 
-    if respect_gitignore and candidates:
-        ignored = _git_ignored_watch_paths(root, set(candidates))
-        for rel in ignored:
-            candidates.pop(rel, None)
-            if rel in known:
-                removed.add(rel)
+                removed.update(path for path in known if under_deleted(path))
+                if known_docs is not None:
+                    doc_removed.update(path for path in known_docs if under_deleted(path))
+
+        if respect_gitignore and (candidates or doc_candidates):
+            ignored = _git_ignored_watch_paths(root, set(candidates) | set(doc_candidates))
+            for rel in ignored:
+                candidates.pop(rel, None)
+                doc_candidates.pop(rel, None)
+                if rel in known:
+                    removed.add(rel)
+                if known_docs is not None and rel in known_docs:
+                    doc_removed.add(rel)
+    except GitIgnoreCheckFailed as exc:
+        # Fail closed: nothing may be chunked on an ignore answer git did not give. The
+        # whole batch becomes a reconcile (a full, explicit ignore-aware pass that reports
+        # the same failure); deletions already collected need no ignore answer and stay.
+        logger.warning(
+            "gitignore check failed for %s: %s; dropped %d candidate(s), reconcile required",
+            root, exc, len(candidates) + len(doc_candidates))
+        candidates.clear()
+        doc_candidates.clear()
+        requires_reconcile = True
 
     def inspect_file(item: tuple[str, str]) -> tuple[str, str | None, dict | None]:
         rel, path = item
@@ -3574,74 +4009,261 @@ def _collect_watched_code_changes(
             continue
         payloads.append(payload)
         removed.discard(rel)
-    return payloads, sorted(removed), current, requires_reconcile
+
+    doc_changed: list[_JournalFileCandidate] = []
+    for rel, doc_path in sorted(doc_candidates.items()):
+        candidate = _journal_file_candidate(doc_path, root)
+        doc_removed.discard(rel)
+        # A file that cannot be read right now (editor lock, antivirus) is not a deletion
+        # and not a change: leave the catalog as it is until the next event.
+        if not candidate.readable:
+            continue
+        if candidate.content_hash == (known_docs.get(rel, {}).get("content_hash") or None):
+            continue
+        doc_changed.append(candidate)
+    return _WatchedChanges(
+        payloads, sorted(removed), current, requires_reconcile, doc_changed, sorted(doc_removed))
+
+
+def _collect_watched_code_changes(
+    repo_root: str,
+    changed_paths: set[str],
+    known: dict[str, dict],
+    respect_gitignore: bool,
+    exclude_globs: list[str],
+) -> tuple[list[dict], list[str], dict[str, str], bool]:
+    """The code half of _collect_watched_changes (documents not looked at)."""
+    changes = _collect_watched_changes(
+        repo_root, changed_paths, known, None, respect_gitignore, exclude_globs)
+    return changes.payloads, changes.removed, changes.current, changes.requires_reconcile
+
+
+def _may_touch_documents(changed_paths: set[str]) -> bool:
+    """Cheap, filesystem-light test: could this event batch concern the scope's documents?
+    A document, an ignore file (it re-reconciles documents too), or a directory — which
+    may hold documents — and, for a path that no longer exists, an extensionless name
+    (a deleted directory)."""
+    for path in changed_paths:
+        name = os.path.basename(path)
+        if name in _WATCH_CONTROL_FILES or _ext_of(path) in DOC_EXTS or os.path.isdir(path):
+            return True
+        if not os.path.exists(path) and not os.path.splitext(name)[1]:
+            return True
+    return False
+
+
+async def _known_doc_inventory(project: str, host: str) -> dict[str, dict]:
+    """The scope's document baseline from the doc inventory, restricted to the sweep
+    envelope index_code manages. Raises on failure: unlike the code baseline, a wrong
+    (empty) answer here would let a deletion reconcile remove live documents."""
+    inventory = await _get("/api/index/inventory", {
+        "host": host, "project": project, "kind": "doc", "detail": True, "lean": True,
+    })
+    return _journal_known_in_envelope(_flatten_inventory_doc_files(inventory), DOC_GLOBS, None)
+
+
+def _known_doc_nodes(records: list[dict]) -> dict[str, dict]:
+    return {
+        record["rel_path"]: {
+            "rel_path": record["rel_path"],
+            "kind": "doc",
+            "content_hash": record.get("content_hash"),
+            "chunk_count": record.get("chunk_count", 0),
+            "size_bytes": record.get("size_bytes"),
+        }
+        for record in records
+    }
+
+
+async def _resolve_watch_docs(docs: _WatchDocs, *, project: str, host: str) -> dict | None:
+    """The document baseline when this scope's documents are kept fresh, else None.
+
+    Kept fresh = the scope has a kind="doc" policy with auto_refresh (index_code writes it
+    next to the code policy). A transient lookup failure returns None WITHOUT being
+    remembered, so the next batch retries instead of treating an outage as "off"."""
+    if docs.known is not None:
+        return docs.known
+    if docs.off_checked_at and time.monotonic() - docs.off_checked_at < _WATCH_DOCS_OFF_TTL_SECONDS:
+        return None
+    try:
+        policy = await _get_doc_policy(project=project, host=host)
+        if not policy or not policy.get("auto_refresh", False):
+            docs.off_checked_at = time.monotonic()
+            return None
+        pending = _DOC_PENDING_JOBS.get((host, project))
+        if pending:
+            with suppress(Exception):
+                await _wait_doc_job_shared(pending)
+        docs.known = await _known_doc_inventory(project, host)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("document refresh baseline unavailable for %s: %s", project, exc)
+        return None
+    return docs.known
+
+
+async def _refresh_scope_docs(
+    *, project: str, host: str, repo_root: str, respect_gitignore: bool,
+    exclude_globs: list[str],
+) -> _DocIndexOutcome:
+    """A full document pass over the scope (walk + diff + snapshot job) — what an ignore
+    file change needs, since it can add or remove any number of documents."""
+    root = os.path.abspath(os.path.expanduser(repo_root))
+    walked = await asyncio.to_thread(lambda: list(_walk_repo_files(
+        root, respect_gitignore, exclude_globs, docs=True)))
+    doc_files = [path for path, _rel, kind in walked if kind == "doc"]
+    if not doc_files:
+        return _DocIndexOutcome(message="no documents found")
+    return await _index_doc_files(root, project, host, doc_files, DOC_GLOBS, None)
+
+
+async def _remove_watched_docs(
+    *, project: str, host: str, root: str, known_docs: dict[str, dict],
+    removed: list[str], keep: list[str],
+) -> bool:
+    """Drop deleted documents from the catalog and the journal. The sweep is bounded by the
+    document envelope and its live set is the known set minus the removed ones (plus the
+    documents this very batch submits). Returns False when it was refused: the backend
+    skips an empty snapshot, and the catalog must not change without the journal."""
+    gone = set(removed)
+    remaining = {rel: node for rel, node in known_docs.items() if rel not in gone}
+    if not remaining:
+        logger.info("document refresh: %s would lose its last document; use index_code",
+                    project)
+        return False
+    rows = [
+        {"rel_path": rel, "kind": "doc", "collection": "journal_chunks",
+         "chunk_count": int(node.get("chunk_count", 0) or 0),
+         "content_hash": node.get("content_hash"), "size_bytes": node.get("size_bytes")}
+        for rel, node in sorted(remaining.items())
+    ]
+    await _post("/api/index/report", {
+        "host": host, "project": project, "root_dir": root, "files": rows,
+        "replace": True, "patterns": DOC_GLOBS, "max_depth": None,
+    })
+    await _post("/api/journal/docs/reconcile", {
+        "project_slug": project,
+        "live_titles": sorted(set(remaining) | set(keep)),
+        "max_depth": None,
+        "patterns": DOC_GLOBS,
+    })
+    return True
 
 
 async def _submit_watched_code_paths(
     *, project: str, host: str, repo_root: str, changed_paths: set[str],
     known: dict[str, dict], respect_gitignore: bool, exclude_globs: list[str],
+    docs: _WatchDocs | None = None,
 ) -> _WatchSubmission:
-    payloads, removed, current, requires_reconcile = await asyncio.to_thread(
-        _collect_watched_code_changes,
+    doc_known = docs.known if docs is not None else None
+    if docs is not None and doc_known is None and _may_touch_documents(changed_paths):
+        doc_known = await _resolve_watch_docs(docs, project=project, host=host)
+    changes = await asyncio.to_thread(
+        _collect_watched_changes,
         repo_root,
         changed_paths,
         known,
+        doc_known,
         respect_gitignore,
         exclude_globs,
     )
-    if requires_reconcile:
+    payloads, removed, current = changes.payloads, changes.removed, changes.current
+    if changes.requires_reconcile:
+        refreshed: list[dict[str, dict]] = []
         status = await _auto_refresh_code(
-            project=project, host=host, repo_root=repo_root, force=True)
+            project=project, host=host, repo_root=repo_root, force=True,
+            on_baseline=refreshed.append)
+        doc_outcome = None
+        if doc_known is not None:
+            doc_outcome = await _refresh_scope_docs(
+                project=project, host=host, repo_root=repo_root,
+                respect_gitignore=respect_gitignore, exclude_globs=exclude_globs)
         return _WatchSubmission(
             status=status,
             updated_nodes={},
             removed_paths=[],
             refresh_inventory=True,
+            refreshed_known=refreshed[-1] if refreshed else None,
+            doc_job_id=doc_outcome.job_id if doc_outcome else None,
+            refresh_docs=doc_outcome is not None,
+            refreshed_known_docs=(
+                _known_doc_nodes(doc_outcome.records) if doc_outcome is not None
+                and doc_outcome.inventory_ok else None),
         )
-    if not payloads and not removed:
+    if not payloads and not removed and not changes.doc_changed and not changes.doc_removed:
         return _WatchSubmission(
             status={"state": "current", "files": len(known)},
             updated_nodes={},
             removed_paths=[],
         )
 
-    records = _inventory_records(
-        [payload["rel_path"] for payload in payloads],
-        payloads,
-        known,
-        current,
-        "",
-    )
-    request = {
-        "project": project,
-        "host": host,
-        "root_dir": repo_root,
-        "files": payloads,
-        "incremental": True,
-        "removed_paths": removed,
-        "report": {"files": records, "replace": False},
-    }
-    job = await _submit_code_index_with_receipt(
-        key=(host, project), client_job_id=uuid.uuid4().hex, request=request)
-    updated_nodes = {
-        payload["rel_path"]: {
-            "rel_path": payload["rel_path"],
-            "content_hash": payload.get("content_hash"),
-            "chunk_count": len(payload.get("chunks") or []),
-            "language": payload.get("language"),
+    status: dict = {"state": "current", "files": len(known)}
+    updated_nodes: dict[str, dict] = {}
+    if payloads or removed:
+        records = _inventory_records(
+            [payload["rel_path"] for payload in payloads],
+            payloads,
+            known,
+            current,
+            "",
+        )
+        request = {
+            "project": project,
+            "host": host,
+            "root_dir": repo_root,
+            "files": payloads,
+            "incremental": True,
+            "removed_paths": removed,
+            "report": {"files": records, "replace": False},
         }
-        for payload in payloads
-    }
-    return _WatchSubmission(
-        status={
+        job = await _submit_code_index_with_receipt(
+            key=(host, project), client_job_id=uuid.uuid4().hex, request=request)
+        updated_nodes = {
+            payload["rel_path"]: {
+                "rel_path": payload["rel_path"],
+                "content_hash": payload.get("content_hash"),
+                "chunk_count": len(payload.get("chunks") or []),
+                "language": payload.get("language"),
+            }
+            for payload in payloads
+        }
+        status = {
             "state": "refresh_started",
             "job_id": job.get("job_id"),
             "status": job.get("status", "queued"),
             "changed": len(payloads),
             "removed": len(removed),
-        },
+        }
+
+    doc_job_id: str | None = None
+    updated_doc_nodes: dict[str, dict] = {}
+    removed_doc_paths: list[str] = []
+    if doc_known is not None and (changes.doc_removed or changes.doc_changed):
+        root = os.path.abspath(repo_root)
+        if changes.doc_removed and await _remove_watched_docs(
+                project=project, host=host, root=root, known_docs=doc_known,
+                removed=changes.doc_removed,
+                keep=[candidate.rel_path for candidate in changes.doc_changed]):
+            removed_doc_paths = list(changes.doc_removed)
+        if changes.doc_changed:
+            outcome = await _index_doc_files(
+                root, project, host, [candidate.abs_path for candidate in changes.doc_changed],
+                DOC_GLOBS, None, known=doc_known, snapshot=False)
+            doc_job_id = outcome.job_id
+            updated_doc_nodes = _known_doc_nodes(outcome.records)
+        if status.get("state") == "current":
+            status = {"state": "refresh_started", "doc_job_id": doc_job_id,
+                      "status": "queued" if doc_job_id else "completed"}
+        status["doc_changed"] = len(changes.doc_changed)
+        status["doc_removed"] = len(removed_doc_paths)
+    return _WatchSubmission(
+        status=status,
         updated_nodes=updated_nodes,
         removed_paths=removed,
+        doc_job_id=doc_job_id,
+        updated_doc_nodes=updated_doc_nodes,
+        removed_doc_paths=removed_doc_paths,
     )
 
 
@@ -3655,10 +4277,21 @@ def _watch_changes(repo_root: str):
 
 
 async def _wait_code_job(job_id: str) -> dict:
+    return await _wait_backend_job(lambda: _get(f"/api/code/jobs/{job_id}"))
+
+
+async def _wait_doc_job(job_id: str) -> dict:
+    return await _wait_backend_job(
+        lambda: _get(f"/api/journal/bulk-index/jobs/{quote(job_id, safe='')}"))
+
+
+async def _wait_backend_job(fetch: Callable[[], Awaitable[dict]]) -> dict:
+    """Poll one backend job receipt (``fetch`` reads it) until it is terminal."""
     retry_delay = _CODE_JOB_POLL_SECONDS
+    poll_delay = _CODE_JOB_POLL_SECONDS
     while True:
         try:
-            job = await _get(f"/api/code/jobs/{job_id}")
+            job = await fetch()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code not in _CODE_JOB_RETRYABLE_STATUS_CODES:
                 raise
@@ -3676,7 +4309,8 @@ async def _wait_code_job(job_id: str) -> dict:
         # for a "completed" that a cancelled job will never reach.
         if job.get("status") in _CODE_JOB_TERMINAL_STATUSES:
             return job
-        await asyncio.sleep(_CODE_JOB_POLL_SECONDS)
+        await asyncio.sleep(poll_delay)
+        poll_delay = min(max(poll_delay * 2, _CODE_JOB_POLL_SECONDS), _CODE_JOB_POLL_MAX_SECONDS)
 
 
 async def _wait_code_job_shared(job_id: str) -> dict:
@@ -3694,10 +4328,48 @@ async def _wait_code_job_shared(job_id: str) -> dict:
     return await asyncio.shield(task)
 
 
+async def _wait_doc_job_shared(job_id: str) -> dict:
+    """One polling loop per Journal bulk-index job, shared by the preparation tracker, the
+    status tool's waiters and the watcher."""
+    task = _DOC_JOB_WAIT_TASKS.get(job_id)
+    if task is None or task.done():
+        task = asyncio.create_task(_wait_doc_job(job_id))
+        _DOC_JOB_WAIT_TASKS[job_id] = task
+
+        def cleanup(done: asyncio.Task) -> None:
+            if _DOC_JOB_WAIT_TASKS.get(job_id) is done:
+                _DOC_JOB_WAIT_TASKS.pop(job_id, None)
+
+        task.add_done_callback(cleanup)
+    return await asyncio.shield(task)
+
+
 def _apply_watch_submission(known: dict[str, dict], submission: _WatchSubmission) -> None:
     for rel in submission.removed_paths:
         known.pop(rel, None)
     known.update(submission.updated_nodes)
+
+
+async def _settle_watch_docs(
+    docs: _WatchDocs, submission: _WatchSubmission, *, project: str, host: str,
+) -> str | None:
+    """Wait for the submission's document job, then fold what the catalog now holds into
+    the watcher's baseline. Returns an error sentence when the job did not complete (the
+    baseline is then left alone, so the next event diffs against what is really there)."""
+    if submission.doc_job_id:
+        job = await _wait_doc_job_shared(submission.doc_job_id)
+        if job.get("status") != "completed":
+            return job.get("error") or (
+                f"document job {submission.doc_job_id} {job.get('status', 'failed')}")
+    if submission.refresh_docs:
+        docs.known = (dict(submission.refreshed_known_docs)
+                      if submission.refreshed_known_docs is not None
+                      else await _known_doc_inventory(project, host))
+    elif docs.known is not None:
+        for rel in submission.removed_doc_paths:
+            docs.known.pop(rel, None)
+        docs.known.update(submission.updated_doc_nodes)
+    return None
 
 
 def _known_from_records(records: list[dict]) -> dict[str, dict]:
@@ -3744,6 +4416,11 @@ async def _watch_code_scope(
 
         respect_gitignore = bool(policy.get("respect_gitignore", True))
         excludes = list(policy.get("exclude_globs") or [])
+        interval = _auto_index_interval_s(policy)
+        last_submit: float | None = None
+        # Why the last attempt submitted nothing (git could not answer, reconcile failed);
+        # the countdown status keeps showing it until an attempt succeeds.
+        last_error: str | None = None
         pending_paths: set[str] = set()
         paths_ready = asyncio.Event()
         event_reader = asyncio.create_task(
@@ -3766,24 +4443,64 @@ async def _watch_code_scope(
             known = await _known_code_hashes(project)
 
         _CODE_WATCH_STATUS[key] = {"state": "watching", "files": len(known)}
+        docs = _WatchDocs()
 
         while True:
             await paths_ready.wait()
+            # At most one automatic submission per interval. The first change after a
+            # quiet period goes out at once (after awatch's debounce); later ones wait
+            # here while the event reader keeps collecting paths, and go out as one
+            # batch. The re-queue paths below (failed job, deferred control-file
+            # reconcile) come back through this same wait.
+            while last_submit is not None:
+                remaining = interval - (time.monotonic() - last_submit)
+                if remaining <= 0:
+                    break
+                _CODE_WATCH_STATUS[key] = {
+                    "state": "watching", "files": len(known),
+                    "pending_changes": len(pending_paths),
+                    "next_refresh_in_s": math.ceil(remaining),
+                    **({"last_error": last_error} if last_error else {}),
+                }
+                # Sleep in slices so the status keeps counting down and the pending count
+                # keeps following the event reader.
+                await asyncio.sleep(min(remaining, 1.0))
             changed_paths = set(pending_paths)
             pending_paths.clear()
             paths_ready.clear()
-            submission = await _submit_watched_code_paths(
-                project=project,
-                host=host,
-                repo_root=root,
-                changed_paths=changed_paths,
-                known=known,
-                respect_gitignore=respect_gitignore,
-                exclude_globs=excludes,
-            )
+            last_submit = time.monotonic()
+            try:
+                submission = await _submit_watched_code_paths(
+                    project=project,
+                    host=host,
+                    repo_root=root,
+                    changed_paths=changed_paths,
+                    known=known,
+                    respect_gitignore=respect_gitignore,
+                    exclude_globs=excludes,
+                    docs=docs,
+                )
+            except GitIgnoreCheckFailed as exc:
+                # git could not say what is ignored (e.g. the document reconcile walk):
+                # nothing was submitted. Keep the event and retry after the interval.
+                logger.warning("gitignore check failed for %s: %s", project, exc)
+                _CODE_WATCH_STATUS[key] = {"state": "failed", "message": str(exc)}
+                last_error = str(exc)
+                pending_paths.update(changed_paths)
+                paths_ready.set()
+                continue
             _CODE_WATCH_STATUS[key] = submission.status
             state = submission.status.get("state")
             job_id = submission.status.get("job_id")
+            if state == "failed" and submission.refresh_inventory:
+                # The reconcile itself failed (_auto_refresh_code reports instead of
+                # raising, e.g. GitIgnoreCheckFailed in its walk): nothing was submitted
+                # and the event must not be dropped. Retry after the interval.
+                last_error = str(submission.status.get("message") or "reconcile failed")
+                pending_paths.update(changed_paths)
+                paths_ready.set()
+                continue
+            last_error = None
             if state in {"refresh_started", "refresh_running"} and job_id:
                 job = await _wait_code_job_shared(str(job_id))
                 if job.get("status") != "completed":
@@ -3804,9 +4521,16 @@ async def _watch_code_scope(
                     paths_ready.set()
                     continue
                 if submission.refresh_inventory:
-                    known = await _known_code_hashes(project)
+                    known = (dict(submission.refreshed_known)
+                             if submission.refreshed_known is not None
+                             else await _known_code_hashes(project))
                 else:
                     _apply_watch_submission(known, submission)
+            doc_error = await _settle_watch_docs(
+                docs, submission, project=project, host=host)
+            if doc_error:
+                _CODE_WATCH_STATUS[key] = {"state": "failed", "message": doc_error}
+                continue
             _CODE_WATCH_STATUS[key] = {"state": "watching", "files": len(known)}
     except asyncio.CancelledError:
         raise
@@ -3861,15 +4585,32 @@ def _format_refresh_status(status: dict | None) -> str:
         return "Index freshness: checking in background."
     state = status.get("state")
     if state == "watching":
-        return f"Index freshness: filesystem watcher active ({status.get('files', 0)} files)."
+        waiting = ""
+        if "next_refresh_in_s" in status:
+            waiting = (f"; {status.get('pending_changes', 0)} pending change(s), "
+                       f"next refresh in {status['next_refresh_in_s']}s")
+        failure = (f"; last refresh failed: {status['last_error']}"
+                   if status.get("last_error") else "")
+        return (f"Index freshness: filesystem watcher active ({status.get('files', 0)} files)"
+                f"{waiting}{failure}.")
     if state == "current":
         if status.get("message"):
             return f"Index freshness: current ({status.get('message')})."
         return f"Index freshness: current ({status.get('files', 0)} files checked)."
     if state == "refresh_started":
+        documents = ""
+        if status.get("doc_changed") or status.get("doc_removed"):
+            documents = (f" Documents: {status.get('doc_changed', 0)} changed/new, "
+                         f"{status.get('doc_removed', 0)} removed"
+                         + (f" (journal job {status['doc_job_id']})." if status.get("doc_job_id")
+                            else "."))
+        if not status.get("job_id") and documents:
+            return ("Index freshness: automatic document refresh."
+                    f"{documents} Results below use the previous completed snapshot.")
         return ("Index freshness: automatic incremental refresh "
                 f"job {status.get('job_id', '?')} [{status.get('status', 'queued')}]; "
-                f"{status.get('changed', 0)} changed/new, {status.get('removed', 0)} removed. "
+                f"{status.get('changed', 0)} changed/new, {status.get('removed', 0)} removed."
+                f"{documents} "
                 "Results below use the previous completed snapshot.")
     if state == "refresh_running":
         return (f"Index freshness: refresh job {status.get('job_id', '?')} "
@@ -3880,6 +4621,28 @@ def _format_refresh_status(status: dict | None) -> str:
     return ""
 
 
+def _preparation_finished(status: dict) -> bool:
+    """The whole index_code job is over: the code job reached a terminal state and no
+    document job is still preparing, queued or running."""
+    return (status.get("status") in {"completed", "failed", "cancelled"}
+            and status.get("doc_status") not in _DOC_JOB_ACTIVE_STATUSES)
+
+
+def _overall_job_status(job: dict) -> str | None:
+    """The one status shown for an index_code job: failed as soon as either the code or
+    the document job failed, still running while a document job outlives a finished code
+    job, otherwise the code job's own status."""
+    status = job.get("status")
+    doc_status = job.get("doc_status")
+    if doc_status is None:
+        return status
+    if doc_status == "failed":
+        return "failed"
+    if status in _CODE_JOB_TERMINAL_STATUSES and doc_status in _DOC_JOB_ACTIVE_STATUSES:
+        return "running"
+    return status
+
+
 def _trim_code_preparation_history() -> None:
     if len(_CODE_PREPARATION_STATUS) <= _CODE_PREPARATION_HISTORY_LIMIT:
         return
@@ -3887,7 +4650,7 @@ def _trim_code_preparation_history() -> None:
     removable = [
         job_id for job_id, status in _CODE_PREPARATION_STATUS.items()
         if job_id not in active_ids
-        and status.get("status") in {"completed", "failed", "cancelled"}
+        and _preparation_finished(status)
     ]
     for job_id in removable[:len(_CODE_PREPARATION_STATUS) - _CODE_PREPARATION_HISTORY_LIMIT]:
         _CODE_PREPARATION_STATUS.pop(job_id, None)
@@ -3898,7 +4661,7 @@ def _active_code_preparation(key: RefreshKey) -> tuple[str, dict] | None:
     if not job_id:
         return None
     status = _CODE_PREPARATION_STATUS.get(job_id)
-    if not status or status.get("status") in {"completed", "failed", "cancelled"}:
+    if not status or _preparation_finished(status):
         _CODE_PREPARATION_BY_SCOPE.pop(key, None)
         return None
     return job_id, status
@@ -4007,10 +4770,80 @@ async def _refresh_preparation_from_backend(status: dict) -> str | None:
     return None
 
 
+def _apply_doc_outcome(status: dict, outcome: _DocIndexOutcome, key: RefreshKey,
+                       notes: tuple[str, ...] = ()) -> None:
+    """Record the document pass on the preparation view. ``notes`` are warnings to show
+    with it (those the pass's own message already carries are not repeated)."""
+    extra = "".join(f" {note.strip()}" for note in notes
+                    if note.strip() and note.strip() not in outcome.message)
+    if outcome.job_id:
+        unreadable = f", {outcome.failed} unreadable" if outcome.failed else ""
+        status.update({
+            "doc_job_id": outcome.job_id,
+            "doc_status": "queued",
+            "doc_files_total": outcome.queued,
+            "doc_files_done": 0,
+            "doc_message": f"{outcome.queued} changed, {outcome.unchanged} unchanged{unreadable}{extra}",
+        })
+        _DOC_PENDING_JOBS[key] = outcome.job_id
+        return
+    status["doc_message"] = f"{outcome.message}{extra}"
+    if outcome.failed:
+        status.update({"doc_status": "failed", "doc_error": outcome.message})
+    else:
+        status["doc_status"] = "completed"
+
+
+def _close_doc_phase(status: dict, doc_status: str, reason: str) -> None:
+    """The preparation ended abnormally: a document phase that would otherwise stay open
+    forever (and keep the scope 'busy') is closed with the reason."""
+    if status.get("doc_status") in _DOC_JOB_ACTIVE_STATUSES:
+        status.update({"doc_status": doc_status, "doc_error": reason})
+
+
+def _update_doc_from_backend(status: dict, job: dict) -> None:
+    """Fold a Journal bulk-index job receipt into the preparation view (never backwards)."""
+    new_status = str(job.get("status", status.get("doc_status", "queued")))
+    current = str(status.get("doc_status", "queued"))
+    if _CODE_JOB_STATUS_RANK.get(new_status, -1) < _CODE_JOB_STATUS_RANK.get(current, -1):
+        return
+    if current in _CODE_JOB_TERMINAL_STATUSES:
+        return
+    status.update({
+        "doc_status": new_status,
+        "doc_files_done": int(job.get("files_done", 0) or 0),
+        "doc_files_total": int(job.get("files_total", status.get("doc_files_total", 0)) or 0),
+        "doc_chunks_done": int(job.get("chunks_done", 0) or 0),
+        "doc_chunks_total": int(job.get("chunks_total", 0) or 0),
+    })
+    if job.get("error"):
+        status["doc_error"] = str(job["error"])
+
+
+async def _refresh_doc_job_from_backend(status: dict) -> str | None:
+    """Refresh the document half of a local preparation view while its job is live."""
+    doc_job_id = status.get("doc_job_id")
+    if not doc_job_id or status.get("doc_status") in _CODE_JOB_TERMINAL_STATUSES:
+        return None
+    try:
+        job = await _get(f"/api/journal/bulk-index/jobs/{quote(str(doc_job_id), safe='')}")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return (f"document job {doc_job_id} not found; backend restarted or no longer "
+                    "retains the job; showing cached local status.")
+        if exc.response.status_code not in _CODE_JOB_RETRYABLE_STATUS_CODES:
+            raise
+        return f"document job refresh unavailable ({exc}); showing cached local status."
+    except httpx.RequestError as exc:
+        return f"document job refresh unavailable ({exc}); showing cached local status."
+    _update_doc_from_backend(status, job)
+    return None
+
+
 async def _run_code_index_preparation(
     *, local_job_id: str, project: str, host: str, repo_root: str,
     incremental: bool, respect_gitignore: bool, auto_refresh: bool,
-    exclude_globs: list[str],
+    exclude_globs: list[str], docs: bool = False,
 ) -> None:
     key = (host, project)
     status = _CODE_PREPARATION_STATUS[local_job_id]
@@ -4018,156 +4851,261 @@ async def _run_code_index_preparation(
         status["phase"] = "checking scope overlap"
         block, nested_warning = await _nested_scope_guard(
             project, host, "code", respect_gitignore)
+        doc_block: str | None = None
+        doc_warning = ""
+        doc_policy_warning = ""
+        if docs:
+            # The document scope is checked on its own: a block on one side never stops
+            # the other, it is only reported next to it.
+            doc_block, doc_warning = await _nested_scope_guard(
+                project, host, "doc", respect_gitignore)
+        if not docs or doc_block is None:
+            doc_policy_warning = await _sync_doc_policy(
+                project=project, host=host, root_dir=repo_root, docs=docs,
+                auto_refresh=auto_refresh, respect_gitignore=respect_gitignore,
+                exclude_globs=exclude_globs)
+
+        walked: list[tuple[str, str, str]] | None = None
+
+        async def ensure_walk() -> list[tuple[str, str, str]]:
+            """The single directory walk code and documents share."""
+            nonlocal walked
+            if walked is None:
+                walked = await asyncio.to_thread(lambda: list(_walk_repo_files(
+                    repo_root, respect_gitignore, exclude_globs, docs=True)))
+            return walked
+
+        docs_started = False
+
+        async def run_docs() -> None:
+            """The document pass: submit changed documents through the Journal pipeline.
+            It never raises: a document failure must not hide a good code index; it is
+            recorded and surfaces in the job's overall status."""
+            nonlocal docs_started
+            if not docs or docs_started:
+                return
+            docs_started = True
+            if doc_block is not None:
+                status.update({"doc_status": "blocked", "doc_message": doc_block})
+                return
+            try:
+                doc_files = [path for path, _rel, kind in await ensure_walk() if kind == "doc"]
+                if not doc_files:
+                    status.update({"doc_status": "completed",
+                                   "doc_message": f"no documents found{doc_policy_warning}"})
+                    return
+                outcome = await _index_doc_files(
+                    repo_root, project, host, doc_files, DOC_GLOBS, None,
+                    nested_warning=doc_warning)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("document indexing failed for %s", project)
+                status.update({"doc_status": "failed", "doc_error": str(exc)})
+                return
+            _apply_doc_outcome(status, outcome, key, (doc_warning, doc_policy_warning))
+
+        async def run_code() -> tuple[str | None, str]:
+            """The code pass. Returns (backend job to wait for, message to show once it
+            has finished)."""
+            policy_warning = ""
+            status["phase"] = "saving refresh policy"
+            try:
+                await _set_code_policy(
+                    project=project,
+                    host=host,
+                    root_dir=repo_root,
+                    auto_refresh=auto_refresh,
+                    respect_gitignore=respect_gitignore,
+                    exclude_globs=exclude_globs,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "index_code: policy persistence failed; indexing continues: %s", exc)
+                policy_warning = " Warning: auto-refresh policy could not be saved."
+
+            known: dict[str, dict] = {}
+            manifest: list[str] | None = None
+            current: dict[str, str] = {}
+            status["phase"] = "scanning and chunking local files"
+            walk_kwargs: dict[str, Any] = {}
+            if docs and doc_block is None:
+                walk_kwargs["files"] = [
+                    (path, rel) for path, rel, kind in await ensure_walk() if kind == "code"]
+            status.setdefault("files_done", 0)
+            status.setdefault("files_total", 0)
+            status.setdefault("files_changed", 0)
+            status.setdefault("chunks_ready", 0)
+
+            def _on_local_progress(update: dict) -> None:
+                """Tick local file/chunk counters while AST walk runs in a worker thread."""
+                files_total = int(update.get("files_total") or 0)
+                files_done = int(update.get("files_done") or 0)
+                files_changed = int(update.get("files_changed") or 0)
+                chunks_ready = int(update.get("chunks_ready") or 0)
+                local_progress = (files_done / files_total) if files_total else 0.0
+                status.update({
+                    "phase": str(update.get("phase") or status.get("phase")
+                                 or "scanning and chunking local files"),
+                    "files_total": files_total,
+                    "files_done": files_done,
+                    "files_changed": files_changed,
+                    "chunks_ready": chunks_ready,
+                    # Local phase owns progress until backend embed starts.
+                    "progress": local_progress,
+                })
+
+            if incremental:
+                known = await _known_code_hashes(project)
+                known_hashes = {
+                    rel: node["content_hash"] for rel, node in known.items()
+                    if node.get("content_hash")
+                }
+                payloads, manifest, current = await asyncio.to_thread(
+                    _collect_incremental, repo_root, known_hashes,
+                    respect_gitignore, exclude_globs, _on_local_progress,
+                    **walk_kwargs)
+                if not payloads and set(manifest) == set(known):
+                    status.update({
+                        "status": "completed", "progress": 1.0,
+                        "result_message": (
+                            f"already up to date ({len(manifest)} files, nothing changed)"
+                            f"{policy_warning}"
+                        ),
+                    })
+                    if auto_refresh:
+                        _ensure_code_watcher(
+                            project=project, host=host, repo_root=repo_root,
+                            initial_known=known, allow_during_preparation=True)
+                    return None, ""
+                commit = await asyncio.to_thread(_git_commit, repo_root)
+                records = _inventory_records(manifest, payloads, known, current, commit)
+                request = {
+                    "project": project, "host": host, "root_dir": repo_root,
+                    "files": payloads, "incremental": True, "manifest": manifest,
+                    # Diffed against the catalog inventory fetched above; see _auto_refresh_code.
+                    "removed_paths": sorted(set(known) - set(manifest)),
+                    "removed_paths_complete": True,
+                }
+                summary = (
+                    f"incremental: {len(payloads)} changed file(s), "
+                    f"{sum(len(item['chunks']) for item in payloads)} chunk(s), "
+                    f"{len(manifest)} in tree"
+                )
+            else:
+                payloads = await asyncio.to_thread(
+                    _collect_code_files, repo_root, respect_gitignore, exclude_globs,
+                    _on_local_progress, **walk_kwargs)
+                if not payloads:
+                    status.update({
+                        "status": "completed", "progress": 1.0,
+                        "result_message": (
+                            f"no indexable source files found under {repo_root}; the existing "
+                            "index was kept unchanged. Use delete_code to clear it explicitly."
+                            f"{policy_warning}"
+                        ),
+                    })
+                    if auto_refresh:
+                        _ensure_code_watcher(
+                            project=project, host=host, repo_root=repo_root,
+                            allow_during_preparation=True)
+                    return None, ""
+                commit = await asyncio.to_thread(_git_commit, repo_root)
+                records = _inventory_records(
+                    [item["rel_path"] for item in payloads], payloads, {}, {}, commit)
+                request = {
+                    "project": project, "host": host, "root_dir": repo_root,
+                    "files": payloads, "incremental": False,
+                }
+                summary = (
+                    f"full: {len(payloads)} file(s), "
+                    f"{sum(len(item['chunks']) for item in payloads)} chunk(s)"
+                )
+
+            if nested_warning:
+                summary = f"{nested_warning} {summary}"
+            request["report"] = {"files": records, "replace": True}
+            chunks_total = sum(len(item["chunks"]) for item in payloads)
+            status.update({
+                "phase": "submitting prepared chunks",
+                "summary": summary,
+                "chunks_total": chunks_total,
+                "chunks_ready": chunks_total,
+                "files_changed": len(payloads),
+                # Local walk finished; keep progress at 1.0 until backend embed ticks.
+                "progress": 1.0 if status.get("files_total") else status.get("progress", 0.0),
+            })
+            logger.info("%s — submitting to %s", summary, BASE_URL)
+            backend_job = await _submit_code_index_with_receipt(
+                key=key, client_job_id=local_job_id, request=request)
+            backend_job_id = str(backend_job.get("job_id", "?"))
+            status["backend_job_id"] = backend_job_id
+            _update_preparation_from_backend(status, backend_job)
+            status["phase"] = "backend embedding and upsert"
+            await run_docs()
+            if auto_refresh:
+                _ensure_code_watcher(
+                    project=project, host=host, repo_root=repo_root,
+                    bootstrap_job_id=backend_job_id if backend_job_id != "?" else None,
+                    initial_known=_known_from_records(records),
+                    allow_during_preparation=True,
+                )
+            wait_for = (backend_job_id
+                        if backend_job_id != "?" and status.get("status") not in _CODE_JOB_TERMINAL_STATUSES
+                        else None)
+            return wait_for, policy_warning.strip()
+
         if block:
             status.update({
                 "status": "completed", "progress": 1.0,
                 "result_message": block,
             })
-            return
-        policy_warning = ""
-        status["phase"] = "saving refresh policy"
-        try:
-            await _set_code_policy(
-                project=project,
-                host=host,
-                root_dir=repo_root,
-                auto_refresh=auto_refresh,
-                respect_gitignore=respect_gitignore,
-                exclude_globs=exclude_globs,
-            )
-        except Exception as exc:
-            logger.warning(
-                "index_code: policy persistence failed; indexing continues: %s", exc)
-            policy_warning = " Warning: auto-refresh policy could not be saved."
-
-        known: dict[str, dict] = {}
-        manifest: list[str] | None = None
-        current: dict[str, str] = {}
-        status["phase"] = "scanning and chunking local files"
-        status.setdefault("files_done", 0)
-        status.setdefault("files_total", 0)
-        status.setdefault("files_changed", 0)
-        status.setdefault("chunks_ready", 0)
-
-        def _on_local_progress(update: dict) -> None:
-            """Tick local file/chunk counters while AST walk runs in a worker thread."""
-            files_total = int(update.get("files_total") or 0)
-            files_done = int(update.get("files_done") or 0)
-            files_changed = int(update.get("files_changed") or 0)
-            chunks_ready = int(update.get("chunks_ready") or 0)
-            local_progress = (files_done / files_total) if files_total else 0.0
-            status.update({
-                "phase": str(update.get("phase") or status.get("phase")
-                             or "scanning and chunking local files"),
-                "files_total": files_total,
-                "files_done": files_done,
-                "files_changed": files_changed,
-                "chunks_ready": chunks_ready,
-                # Local phase owns progress until backend embed starts.
-                "progress": local_progress,
-            })
-
-        if incremental:
-            known = await _known_code_hashes(project)
-            known_hashes = {
-                rel: node["content_hash"] for rel, node in known.items()
-                if node.get("content_hash")
-            }
-            payloads, manifest, current = await asyncio.to_thread(
-                _collect_incremental, repo_root, known_hashes,
-                respect_gitignore, exclude_globs, _on_local_progress)
-            if not payloads and set(manifest) == set(known):
-                status.update({
-                    "status": "completed", "progress": 1.0,
-                    "result_message": (
-                        f"already up to date ({len(manifest)} files, nothing changed)"
-                        f"{policy_warning}"
-                    ),
-                })
-                if auto_refresh:
-                    _ensure_code_watcher(
-                        project=project, host=host, repo_root=repo_root,
-                        initial_known=known, allow_during_preparation=True)
-                return
-            commit = await asyncio.to_thread(_git_commit, repo_root)
-            records = _inventory_records(manifest, payloads, known, current, commit)
-            request = {
-                "project": project, "host": host, "root_dir": repo_root,
-                "files": payloads, "incremental": True, "manifest": manifest,
-            }
-            summary = (
-                f"incremental: {len(payloads)} changed file(s), "
-                f"{sum(len(item['chunks']) for item in payloads)} chunk(s), "
-                f"{len(manifest)} in tree"
-            )
+            wait_code_job, final_message = None, ""
         else:
-            payloads = await asyncio.to_thread(
-                _collect_code_files, repo_root, respect_gitignore, exclude_globs,
-                _on_local_progress)
-            if not payloads:
-                status.update({
-                    "status": "completed", "progress": 1.0,
-                    "result_message": (
-                        f"no indexable source files found under {repo_root}; the existing "
-                        "index was kept unchanged. Use delete_code to clear it explicitly."
-                        f"{policy_warning}"
-                    ),
-                })
-                if auto_refresh:
-                    _ensure_code_watcher(
-                        project=project, host=host, repo_root=repo_root,
-                        allow_during_preparation=True)
-                return
-            commit = await asyncio.to_thread(_git_commit, repo_root)
-            records = _inventory_records(
-                [item["rel_path"] for item in payloads], payloads, {}, {}, commit)
-            request = {
-                "project": project, "host": host, "root_dir": repo_root,
-                "files": payloads, "incremental": False,
-            }
-            summary = (
-                f"full: {len(payloads)} file(s), "
-                f"{sum(len(item['chunks']) for item in payloads)} chunk(s)"
-            )
+            wait_code_job, final_message = await run_code()
+        await run_docs()  # a no-op unless the code pass ended before submitting (or was blocked)
 
-        if nested_warning:
-            summary = f"{nested_warning} {summary}"
-        request["report"] = {"files": records, "replace": True}
-        chunks_total = sum(len(item["chunks"]) for item in payloads)
-        status.update({
-            "phase": "submitting prepared chunks",
-            "summary": summary,
-            "chunks_total": chunks_total,
-            "chunks_ready": chunks_total,
-            "files_changed": len(payloads),
-            # Local walk finished; keep progress at 1.0 until backend embed ticks.
-            "progress": 1.0 if status.get("files_total") else status.get("progress", 0.0),
-        })
-        logger.info("%s — submitting to %s", summary, BASE_URL)
-        backend_job = await _submit_code_index_with_receipt(
-            key=key, client_job_id=local_job_id, request=request)
-        backend_job_id = str(backend_job.get("job_id", "?"))
-        status["backend_job_id"] = backend_job_id
-        _update_preparation_from_backend(status, backend_job)
-        status["phase"] = "backend embedding and upsert"
-        if auto_refresh:
-            _ensure_code_watcher(
-                project=project, host=host, repo_root=repo_root,
-                bootstrap_job_id=backend_job_id if backend_job_id != "?" else None,
-                initial_known=_known_from_records(records),
-                allow_during_preparation=True,
-            )
-        if backend_job_id != "?" and status.get("status") not in _CODE_JOB_TERMINAL_STATUSES:
-            completed = await _wait_code_job_shared(backend_job_id)
-            _update_preparation_from_backend(status, completed)
-        if policy_warning:
-            status["result_message"] = policy_warning.strip()
+        async def wait_code() -> None:
+            if wait_code_job is not None and status.get("status") not in _CODE_JOB_TERMINAL_STATUSES:
+                completed = await _wait_code_job_shared(wait_code_job)
+                _update_preparation_from_backend(status, completed)
+            if final_message:
+                status["result_message"] = final_message
+
+        async def wait_docs() -> None:
+            doc_job_id = status.get("doc_job_id")
+            if not doc_job_id or status.get("doc_status") not in _DOC_JOB_ACTIVE_STATUSES:
+                return
+            try:
+                job = await _wait_doc_job_shared(str(doc_job_id))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("document job %s could not be tracked: %s", doc_job_id, exc)
+                status.update({"doc_status": "failed",
+                               "doc_error": f"document job {doc_job_id}: {exc}"})
+                return
+            _update_doc_from_backend(status, job)
+
+        results = await asyncio.gather(wait_code(), wait_docs(), return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        if docs and _DOC_PENDING_JOBS.get(key) == status.get("doc_job_id"):
+            _DOC_PENDING_JOBS.pop(key, None)
+        if status.get("doc_status") == "failed" and status.get("status") != "failed":
+            status.update({
+                "status": "failed",
+                "error": f"document indexing failed: {status.get('doc_error') or 'unknown error'}",
+            })
     except asyncio.CancelledError:
         status.update({"status": "cancelled", "error": "local preparation cancelled"})
+        _close_doc_phase(status, "cancelled", "local preparation cancelled")
         raise
     except Exception as exc:  # keep failures pollable instead of losing a background task
         logger.exception("code index preparation failed for %s", project)
         status.update({"status": "failed", "error": str(exc)})
+        _close_doc_phase(status, "failed", "code preparation failed; document job not tracked")
     finally:
         if _CODE_PREPARATION_BY_SCOPE.get(key) == local_job_id:
             _CODE_PREPARATION_BY_SCOPE.pop(key, None)
@@ -4176,6 +5114,7 @@ async def _run_code_index_preparation(
 def _start_code_index_preparation(
     *, project: str, host: str, repo_root: str, incremental: bool,
     respect_gitignore: bool, auto_refresh: bool, exclude_globs: list[str],
+    docs: bool = False,
 ) -> tuple[str, bool]:
     key = (host, project)
     existing = _active_code_preparation(key)
@@ -4195,6 +5134,9 @@ def _start_code_index_preparation(
         "files_changed": 0,
         "phase": "starting local repository scan",
     }
+    if docs:
+        _CODE_PREPARATION_STATUS[local_job_id].update(
+            {"doc_status": "preparing", "doc_message": ""})
     _CODE_PREPARATION_BY_SCOPE[key] = local_job_id
     task = asyncio.create_task(_run_code_index_preparation(
         local_job_id=local_job_id,
@@ -4205,6 +5147,7 @@ def _start_code_index_preparation(
         respect_gitignore=respect_gitignore,
         auto_refresh=auto_refresh,
         exclude_globs=exclude_globs,
+        docs=docs,
     ))
     _CODE_PREPARATION_TASKS[local_job_id] = task
 
@@ -4581,7 +5524,8 @@ async def _search_public_code(
 async def index_code(repo_root: str = ".",
                      incremental: bool = False, respect_gitignore: bool = True,
                      auto_refresh: bool = True,
-                     exclude_globs: list[str] | None = None) -> str:
+                     exclude_globs: list[str] | None = None,
+                     docs: bool = True) -> str:
     """Index a code repository so you can later search it semantically with search_code.
 
     Walks repo_root and AST-chunks every supported source file with a `# path:` scope
@@ -4597,11 +5541,19 @@ async def index_code(repo_root: str = ".",
     Coverage: 40+ languages via tree-sitter (Python, TS/TSX/JS/JSX/React, Java, Kotlin,
     Swift, Go, Rust, C/C++, C#, Ruby, PHP, Lua, Scala, Dart, SQL, HTML/CSS/SCSS,
     YAML/JSON/TOML, shell, Dockerfile, and more); grammarless config/text files fall
-    back to line-window chunks. Binary/doc files (.md, images) are skipped.
+    back to line-window chunks. Images and other binary files are skipped.
+
+    Documents: the same walk also finds documentation files (.md .mdx .markdown .rst
+    .adoc .txt) and indexes them into the JOURNAL, not the code index — find them with
+    journal_search(scope_dir=repo_root), never search_code. They are whole-document,
+    latest-wins entries: an unchanged file is a no-op, an edited one replaces its
+    previous version, and a deleted one is removed. Dot-directories and ignored paths
+    are skipped like code. Set docs=False to index code only.
 
     Indexing is ASYNC and non-blocking end to end: it returns a local job_id before the
     repository walk, hashing, AST chunking, upload, GPU embedding, or Qdrant upsert
-    finishes. Poll the same job_id with index_code_status through every phase.
+    finishes. Poll the same job_id with index_code_status through every phase; it shows
+    the code job and the document job side by side.
 
     Args:
         repo_root: Path to the repo/dir to index (default: current directory "."). Its
@@ -4616,12 +5568,16 @@ async def index_code(repo_root: str = ".",
             vendored deps) so they never pollute the index. Resolution is delegated to
             git, so nested .gitignore / negation / global excludes all hold; set False to
             index every supported file regardless. A no-op when repo_root isn't a git repo.
+        docs: Default True — also index documentation files into the journal in this
+            same run and keep them fresh with the code (see Documents). False indexes
+            code only and switches document refresh off for this scope.
 
     Nested scopes: indexing a directory already fully covered by an indexed PARENT scope
     is refused (no coverage benefit); indexing a PARENT over an already-indexed child
     proceeds with a warning (it adds files outside the child). Exception: passing
     respect_gitignore=False under a parent indexed with it ON proceeds with a warning —
-    that is how you index an ignored subtree without deleting the parent scope.
+    that is how you index an ignored subtree without deleting the parent scope. Code and
+    documents are checked separately; a block on one never stops the other.
 
     Example: index_code(repo_root="~/Prd/retrival", incremental=True)
     """
@@ -4635,7 +5591,7 @@ async def index_code(repo_root: str = ".",
     existing = _active_code_preparation((host, proj))
     if existing:
         return (f"Code indexing is already running for project '{proj}' — job "
-                f"{existing[0]} [{existing[1].get('status', 'preparing')}]. Poll "
+                f"{existing[0]} [{_overall_job_status(existing[1]) or 'preparing'}]. Poll "
                 f"index_code_status(job_id={existing[0]!r}); no duplicate scan was started.")
     excludes = list(exclude_globs or [])
     _invalidate_refresh(proj, host)
@@ -4647,14 +5603,18 @@ async def index_code(repo_root: str = ".",
         respect_gitignore=respect_gitignore,
         auto_refresh=auto_refresh,
         exclude_globs=excludes,
+        docs=docs,
     )
     if not started:
         return (f"Code indexing is already running for project '{proj}' — job "
                 f"{local_job_id}. No duplicate scan was started.")
+    documents = (" Documentation files are indexed into the journal in the same run "
+                 "(search them with journal_search)." if docs else "")
     return (f"Indexing started in the background — job {local_job_id} [preparing]. "
             "Local scanning, hashing, AST chunking, upload, GPU embedding, and Qdrant "
             f"upsert all continue asynchronously. Poll index_code_status(job_id="
-            f"{local_job_id!r}) for progress. Source files never leave this machine.")
+            f"{local_job_id!r}) for progress. Source files never leave this machine."
+            f"{documents}")
 
 
 def _fmt_preparing_work(job: dict) -> str:
@@ -4672,6 +5632,27 @@ def _fmt_preparing_work(job: dict) -> str:
     if chunks_ready > 0:
         parts.append(f"{chunks_ready} chunks ready")
     return "; ".join(parts)
+
+
+def _fmt_doc_part(job: dict) -> str:
+    """The document half of an index_code job line: the Journal bulk-index job that
+    carried this run's documents (``docs: job <id> [status] ...``), or why there is none."""
+    status = job.get("doc_status")
+    if job.get("doc_job_id"):
+        part = f"docs: job {job['doc_job_id']} [{status}]"
+        files_total = int(job.get("doc_files_total") or 0)
+        if files_total:
+            part += f" {int(job.get('doc_files_done') or 0)}/{files_total} files"
+        chunks_total = int(job.get("doc_chunks_total") or 0)
+        if chunks_total:
+            part += f", {int(job.get('doc_chunks_done') or 0)}/{chunks_total} chunks"
+    else:
+        part = f"docs: [{status}]"
+    if job.get("doc_message"):
+        part += f" {job['doc_message']}"
+    if job.get("doc_error"):
+        part += f" — docs error: {job['doc_error']}"
+    return part
 
 
 def _fmt_job_line(job: dict) -> str:
@@ -4692,7 +5673,7 @@ def _fmt_job_line(job: dict) -> str:
         work = f"removed {removed} path(s)"
     else:
         work = "0 chunks"
-    line = (f"{job.get('job_id')} [{job.get('status')}] project={job.get('project')} "
+    line = (f"{job.get('job_id')} [{_overall_job_status(job)}] project={job.get('project')} "
             f"{work} ({pct}%)")
     if pos := job.get("queue_position", 0):
         line += f", queue position {pos}"
@@ -4710,6 +5691,8 @@ def _fmt_job_line(job: dict) -> str:
         line += f" — {message}"
     if job.get("error"):
         line += f" — error: {job['error']}"
+    if job.get("doc_status"):
+        line += f" — {_fmt_doc_part(job)}"
     return line
 
 
@@ -4724,16 +5707,22 @@ async def index_code_status(job_id: str | None = None) -> str:
     if job_id:
         if local := _CODE_PREPARATION_STATUS.get(job_id):
             notice = await _refresh_preparation_from_backend(local)
+            doc_notice = await _refresh_doc_job_from_backend(local)
             line = "Job " + _fmt_job_line(local)
-            return f"{line} — {notice}" if notice else line
+            for note in (notice, doc_notice):
+                if note:
+                    line = f"{line} — {note}"
+            return line
         try:
-            job = await _get(f"/api/code/jobs/{job_id}")
+            # Opt in to the scope's deliver-once message: only a person asking about this
+            # job should consume it, not the client's own progress polling.
+            job = await _get(f"/api/code/jobs/{job_id}", {"scope_notice": "true"})
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 return (f"Job {job_id} not found — it may have finished long ago or the "
                         f"backend restarted (queue is in-memory). Re-run index_code if needed.")
             raise
-        return "Job " + _fmt_job_line(job)
+        return _with_scope_notice("Job " + _fmt_job_line(job), job.get("scope_notice"))
     local_jobs = list(reversed(list(_CODE_PREPARATION_STATUS.values())))
     list_notice = None
     try:
@@ -4759,6 +5748,9 @@ async def index_code_status(job_id: str | None = None) -> str:
         backend = backend_jobs_by_id.get(status.get("backend_job_id"))
         if backend:
             _update_preparation_from_backend(status, backend)
+        doc_notice = await _refresh_doc_job_from_backend(status)
+        if doc_notice and not list_notice:
+            list_notice = doc_notice
     missing_active_backend_jobs = [
         status for status in local_jobs
         if status.get("backend_job_id")
@@ -4873,7 +5865,7 @@ async def _search_private_code(query: str, top_k: int = 8, repo_root: str = ".",
         proj, len(hits), len(out),
         (t_http - t0) * 1000, (time.perf_counter() - t0) * 1000,
     )
-    return out
+    return _with_scope_notice(out, resp.get("scope_notice"))
 
 
 def _format_federated_code_search(response: dict, *, show_line_numbers: bool = True) -> str:
@@ -5275,6 +6267,9 @@ async def delete_journal_docs(dir: str = ".") -> str:
         dir: The directory you gave journal_index_dir; its absolute path is the scope.
     """
     scope = _scope_path(dir)
+    # The scope's watcher holds a document baseline that is about to stop being true (and
+    # the backend drops the scope's document policy with its rows): let it re-resolve.
+    _invalidate_refresh(scope)
     resp = await _delete("/api/journal/docs", {"project_slug": scope})
     removed = resp.get("removed_entries", 0)
     vectors = resp.get("deleted_vectors", 0)
@@ -5436,10 +6431,11 @@ def _install_multi_query_tools() -> None:
 
     async def multi_search_arxiv(
         query: str | list[str], top_k: int = 10, year: int | None = None,
+        include_withdrawn: bool = False,
     ) -> str:
         return await _run_query_batch(
             query, tool_name="search_arxiv",
-            invoke=lambda item: single_search_arxiv(item, top_k, year),
+            invoke=lambda item: single_search_arxiv(item, top_k, year, include_withdrawn),
         )
 
     async def multi_search_within_paper(

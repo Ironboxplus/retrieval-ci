@@ -73,6 +73,9 @@ class MedicalPaperRecord:
     pdf_path: Optional[str] = None
     pdf_sha256: Optional[str] = None
     pdf_bytes: Optional[int] = None
+    # JATS full text beside the PDF (PMC OA bucket), the formula-faithful source.
+    jats_path: Optional[str] = None
+    jats_sha256: Optional[str] = None
     download_status: str = "pending"  # pending|planned|downloaded|skipped|failed|blocked
     download_error: Optional[str] = None
     shield_status: Optional[str] = None
@@ -106,6 +109,8 @@ class MedicalPaperRecord:
             pdf_path=data.get("pdf_path"),
             pdf_sha256=data.get("pdf_sha256"),
             pdf_bytes=data.get("pdf_bytes"),
+            jats_path=data.get("jats_path"),
+            jats_sha256=data.get("jats_sha256"),
             download_status=str(data.get("download_status") or "pending"),
             download_error=data.get("download_error"),
             shield_status=data.get("shield_status"),

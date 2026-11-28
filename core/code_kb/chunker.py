@@ -28,7 +28,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Iterator, List, Optional, Set, Tuple
+from typing import Iterator, List, Optional, Sequence, Set, Tuple
 
 from chonkie import CodeChunker
 from core.code_kb.models import CodeChunk
@@ -38,6 +38,7 @@ from core.code_kb.source_policy import (
     LANG_BY_EXT,
     LANG_BY_NAME,
     MAX_FILE_BYTES,
+    DOC_EXTS,
     resolve_language,
     source_extension,
 )
@@ -325,27 +326,29 @@ def chunk_lines(path: str, source: str,
             chunks.append(CodeChunk(path=path, start_line=lineno, end_line=lineno,
                                     content=f"# path: {path}\n{piece}", code=piece))
 
+    def _flush(end_line: int) -> None:
+        """Emit the buffer as one chunk — only when it holds non-whitespace text (an
+        all-blank window would be an empty `code`, which the server rejects with 422) —
+        and always empty it; the next window starts after `end_line`."""
+        nonlocal buf, buf_start, size
+        if buf and "".join(buf).strip():
+            code = "\n".join(buf)
+            chunks.append(CodeChunk(path=path, start_line=buf_start, end_line=end_line,
+                                    content=f"# path: {path}\n{code}", code=code))
+        buf, buf_start, size = [], end_line + 1, 0
+
     for i, line in enumerate(lines, 1):
         if len(line) > hard_cap:
-            if buf and "".join(buf).strip():
-                code = "\n".join(buf)
-                chunks.append(CodeChunk(path=path, start_line=buf_start, end_line=i - 1,
-                                        content=f"# path: {path}\n{code}", code=code))
-            buf, buf_start, size = [], i + 1, 0
+            _flush(i - 1)
+            buf_start = i + 1
             _flush_hard_split(line, i)
             continue
         line_nws = len(re.sub(r"\s", "", line))
         if buf and size + line_nws > max_chunk_size:
-            code = "\n".join(buf)
-            chunks.append(CodeChunk(path=path, start_line=buf_start, end_line=i - 1,
-                                    content=f"# path: {path}\n{code}", code=code))
-            buf, buf_start, size = [], i, 0
+            _flush(i - 1)
         buf.append(line)
         size += line_nws
-    if buf and "".join(buf).strip():
-        code = "\n".join(buf)
-        chunks.append(CodeChunk(path=path, start_line=buf_start, end_line=len(lines),
-                                content=f"# path: {path}\n{code}", code=code))
+    _flush(len(lines))
     return chunks
 
 
@@ -435,9 +438,22 @@ def path_excluded(rel_path: str, patterns: List[str]) -> bool:
     return False
 
 
-def gitignore_allowed(root: str) -> Optional[Set[str]]:
+_GIT_LIST_TIMEOUT_S = 30
+
+
+class GitIgnoreCheckFailed(RuntimeError):
+    """Git was asked which paths are ignored and did not answer (timeout, corrupt index,
+    any exit other than "not a repository"). Every ignore check fails closed: a caller
+    that cannot learn what is ignored must not treat everything as allowed.
+    NOTE: mirrors mcp_plugin/retrieval_mcp.py GitIgnoreCheckFailed."""
+
+
+def gitignore_allowed(root: str, pathspecs: Sequence[str] = ()) -> Optional[Set[str]]:
     """Repo-relative paths (forward slashes) that git does NOT ignore under `root`, or
-    None if `root` isn't a git working tree (callers then apply no gitignore filtering).
+    None if `root` isn't a git working tree / git isn't installed (callers then apply no
+    gitignore filtering). ``pathspecs`` (relative to `root`, matched literally) narrow the
+    listing to those paths; the output stays relative to `root`. Any other failure raises
+    GitIgnoreCheckFailed (fail closed).
 
     Delegates the ignore resolution to git itself, so nested .gitignore files, negation
     (``!``) rules, ``.git/info/exclude`` and the user's global ``core.excludesFile`` are
@@ -446,18 +462,30 @@ def gitignore_allowed(root: str) -> Optional[Set[str]]:
     ``-z`` NUL-separates so unicode/space paths match our os.walk rels without quoting.
     Decoded as UTF-8 (git's path encoding) rather than the ambient locale, so non-ASCII
     paths resolve identically on the Windows (cp936) and Linux (UTF-8) deploy hosts."""
+    command = ["git", "--literal-pathspecs", "-C", root, "ls-files",
+               "--cached", "--others", "--exclude-standard", "-z"]
+    if pathspecs:
+        command += ["--", *pathspecs]
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"  # git's "not a git repository" text is matched below
     try:
         # stdin=DEVNULL: as an MCP stdio server this process's stdin is the JSON-RPC pipe,
         # and a child inheriting it can wedge on that handle (W159, same as _git_commit).
         out = subprocess.run(
-            ["git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-            stdin=subprocess.DEVNULL, capture_output=True, timeout=30,
-            encoding="utf-8", errors="surrogateescape")
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if out.returncode != 0:
-        return None  # not a git repo (or git unavailable) → caller does no filtering
-    return {p for p in out.stdout.split("\x00") if p}
+            command, stdin=subprocess.DEVNULL, capture_output=True,
+            timeout=_GIT_LIST_TIMEOUT_S, encoding="utf-8", errors="surrogateescape",
+            env=env)
+    except FileNotFoundError:
+        return None  # git is not installed → caller does no filtering
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise GitIgnoreCheckFailed(f"git ls-files did not finish in {root}: {exc!r}") from exc
+    if out.returncode == 0:
+        return {p for p in out.stdout.split("\x00") if p}
+    stderr = (out.stderr or "").strip()
+    if out.returncode == 128 and "not a git repository" in stderr:
+        return None  # not a git repo → caller does no filtering
+    raise GitIgnoreCheckFailed(
+        f"git ls-files failed in {root} (exit {out.returncode}): {stderr[:200]}")
 
 
 def drop_gitignored(paths: List[str], root: str,
@@ -509,7 +537,36 @@ def iter_repo_files(repo_root: str, skip_dirs: Optional[set] = None,
     full index skips post-gate — too big, unreadable, empty — simply produce no chunks
     and drop out of the manifest naturally; see the incremental collectors).
 
-    respect_gitignore (default True) skips files git ignores — see gitignore_allowed."""
+    respect_gitignore (default True) skips files git ignores — see gitignore_allowed.
+
+    The code-only view of walk_repo_files."""
+    for path, rel, _kind in walk_repo_files(
+            repo_root, skip_dirs=skip_dirs, respect_gitignore=respect_gitignore,
+            exclude_globs=exclude_globs, docs=False):
+        yield path, rel
+
+
+def is_hidden_rel_path(rel_path: str) -> bool:
+    """True when any segment of a scope-relative path is a dot name (``.github/x.md``)."""
+    return any(part.startswith(".") for part in rel_path.replace("\\", "/").split("/"))
+
+
+def is_doc_path(path: str, rel_path: str) -> bool:
+    """A documentation file the journal pipeline owns: a DOC_EXTS extension outside every
+    dot path (the journal's sweep envelope never covers those)."""
+    return _ext_of(path) in DOC_EXTS and not is_hidden_rel_path(rel_path)
+
+
+def walk_repo_files(repo_root: str, skip_dirs: Optional[set] = None,
+                    respect_gitignore: bool = True,
+                    exclude_globs: Optional[List[str]] = None,
+                    docs: bool = True) -> Iterator[Tuple[str, str, str]]:
+    """Yield (abs_path, rel_path, kind) for every indexable file from ONE directory walk.
+
+    kind is "code" (a resolvable language or a fallback ext) or "doc" (DOC_EXTS; ``docs=False``
+    omits them). Code wins when a name qualifies as both (``CMakeLists.txt``). The skipped
+    directories, exclude globs, ``.retrievalignore`` and git's ignore rules gate both kinds
+    identically."""
     skip = skip_dirs or DEFAULT_SKIP_DIRS
     allowed = gitignore_allowed(repo_root) if respect_gitignore else None
     excludes = list(dict.fromkeys(load_retrievalignore(repo_root) + list(exclude_globs or [])))
@@ -518,14 +575,20 @@ def iter_repo_files(repo_root: str, skip_dirs: Optional[set] = None,
             os.path.relpath(os.path.join(root, d), repo_root).replace("\\", "/"), excludes)]
         for fn in files:
             path = os.path.join(root, fn)
-            if not (resolve_language(path) or _ext_of(path) in FALLBACK_EXTS):
+            if resolve_language(path) or _ext_of(path) in FALLBACK_EXTS:
+                kind = "code"
+            elif docs and _ext_of(path) in DOC_EXTS:
+                kind = "doc"
+            else:
                 continue
             rel = os.path.relpath(path, repo_root).replace("\\", "/")
+            if kind == "doc" and is_hidden_rel_path(rel):
+                continue
             if path_excluded(rel, excludes):
                 continue
             if allowed is not None and rel not in allowed:
                 continue
-            yield path, rel
+            yield path, rel, kind
 
 
 def file_content_hash(path: str) -> Optional[str]:

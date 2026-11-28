@@ -1,0 +1,184 @@
+name: ci-env
+description: Everything the test suite finds on the dev box and a fresh runner lacks - Python venv, node deps, a real Qdrant, HF models, tree-sitter grammars, an OpenList node, an initialised app database
+
+runs:
+  using: composite
+  steps:
+    # test_medical_* refuse to start below a 20 GiB free floor; a fresh runner has ~14 GiB.
+    # These preinstalled toolchains are never used by this workflow.
+    - name: Free disk space
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h / | tail -1
+
+    - uses: astral-sh/setup-uv@v6
+      with:
+        python-version: '3.13'
+        enable-cache: true
+        cache-dependency-glob: |
+          requirements.txt
+          requirements-ci.txt
+
+    - name: Install Python dependencies (CPU torch)
+      shell: bash
+      run: |
+        uv venv .venv
+        # requirements.txt cannot be resolved as written: marker-pdf needs pillow<11
+        # while browser-use needs pillow>=12.  marker is imported lazily inside
+        # pipeline/paper_crawler/converters/extractors/marker.py and no test needs it
+        # (the dev venv only "works" because pip left an inconsistent pillow 10.4),
+        # so it is left out here.
+        grep -viE '^marker-pdf' requirements.txt > "$RUNNER_TEMP/requirements-runtime.txt"
+        # --torch-backend cpu resolves torch/torchvision from the CPU wheel index;
+        # the CUDA wheels are gigabytes the runner can never use.
+        uv pip install --python .venv/bin/python --torch-backend cpu \
+          -r "$RUNNER_TEMP/requirements-runtime.txt" -r requirements-ci.txt
+        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+    # test_mcp_package_artifact installs the built wheel with `uv pip install --offline`,
+    # i.e. from the uv cache only.  The dev box has the plugin's own pinned dependencies
+    # (mcp 1.29, chonkie 1.6) cached from its releases; here they are fetched once into
+    # the cache through a throwaway venv, since the main venv's mcp (1.28) is resolved
+    # against browser-use and is older than the plugin's.
+    - name: Warm the uv cache with the published plugin's dependencies
+      shell: bash
+      run: |
+        uv venv "$RUNNER_TEMP/plugin-venv"
+        uv pip install --python "$RUNNER_TEMP/plugin-venv/bin/python" -r mcp_plugin/pyproject.toml
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: tools/katex_check/package-lock.json
+
+    - name: Install katex_check
+      shell: bash
+      working-directory: tools/katex_check
+      run: npm ci
+
+    # Same server version .88 runs, pinned by manifest-list digest so the tag cannot
+    # move under a run.  Started after checkout (not as a service container) because
+    # test_qdrant_payload_indexes_real_qdrant reads the on-disk segment config from
+    # tools/qdrant/storage, so the data directory must be the repo-relative bind mount
+    # the dev box uses.  6334 is gRPC, which core/storage/qdrant_store.py prefers.
+    - name: Start Qdrant
+      shell: bash
+      run: |
+        mkdir -p tools/qdrant/storage
+        docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
+          -v "$PWD/tools/qdrant/storage:/qdrant/storage" \
+          qdrant/qdrant:v1.18.0@sha256:b3063c673f3973877c038eeecc392bad5011f072ee7892b56c9a8e204a3bdea9
+        curl -fsS --retry 60 --retry-delay 1 --retry-all-errors http://127.0.0.1:6333/readyz
+
+    # test_public_source_catalog commits into a fixture repository; the dev box has
+    # a global identity, a fresh runner does not.
+    - name: Git identity for fixture repositories
+      shell: bash
+      run: |
+        git config --global user.name ci
+        git config --global user.email ci@example.invalid
+        git config --global init.defaultBranch main
+
+    # The tests call the Windows spellings; pwsh (preinstalled on ubuntu-latest) runs
+    # the same -NoProfile/-Command invocations.
+    - name: powershell -> pwsh
+      shell: bash
+      run: |
+        sudo ln -s "$(command -v pwsh)" /usr/local/bin/powershell
+        sudo ln -s "$(command -v pwsh)" /usr/local/bin/powershell.exe
+
+    # conftest.py forces HF_HUB_OFFLINE=1 (the dev box has the weights cached), so the
+    # cache has to hold them.  Keyed by the repositories' current revisions.
+    - name: HF model revisions
+      id: hf
+      shell: bash
+      run: |
+        key=$(python - <<'EOF'
+        from huggingface_hub import HfApi
+        api = HfApi()
+        print("hf-" + "-".join(api.model_info(r).sha[:12]
+              for r in ("BAAI/bge-m3", "sentence-transformers/all-MiniLM-L6-v2")))
+        EOF
+        )
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@v4
+      id: hf-cache
+      with:
+        path: ~/.cache/huggingface
+        key: ${{ steps.hf.outputs.key }}
+
+    - name: Download HF models
+      if: steps.hf-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        HF_HUB_OFFLINE: '0'
+      run: |
+        python - <<'EOF'
+        from huggingface_hub import snapshot_download
+        # onnx exports and images are never loaded.
+        snapshot_download("BAAI/bge-m3", ignore_patterns=["onnx/*", "imgs/*", "*.onnx", "*.onnx_data"])
+        snapshot_download("sentence-transformers/all-MiniLM-L6-v2",
+                          ignore_patterns=["onnx/*", "openvino/*", "*.onnx", "*.h5", "*.ot", "rust_model.ckpt"])
+        EOF
+
+    # core/code_kb/chunker.py refuses to index unless the language pack already holds
+    # more than 19 grammars; it never downloads on its own.
+    - name: tree-sitter grammar cache location
+      id: tslp
+      shell: bash
+      run: |
+        python - <<'EOF' >> "$GITHUB_OUTPUT"
+        import importlib.metadata as m, tree_sitter_language_pack as t
+        print("dir=" + str(t.cache_dir()))
+        print("version=" + m.version("tree-sitter-language-pack"))
+        EOF
+
+    - uses: actions/cache@v4
+      with:
+        path: ${{ steps.tslp.outputs.dir }}
+        key: tslp-${{ steps.tslp.outputs.version }}
+
+    - name: Download tree-sitter grammars
+      shell: bash
+      run: |
+        python - <<'EOF'
+        import tree_sitter_language_pack as t
+        t.download_all()
+        n = len(t.downloaded_languages())
+        assert n > 19 and t.has_language("python"), n
+        print("grammars:", n)
+        EOF
+
+    # tests/openlist_node.py finds `openlist` on PATH; it is the binary the volume
+    # tests start as a real node.
+    - uses: actions/cache@v4
+      id: openlist-cache
+      with:
+        path: ~/openlist-bin
+        key: openlist-v4.2.9
+
+    - name: Install OpenList
+      shell: bash
+      run: |
+        if [ ! -x ~/openlist-bin/openlist ]; then
+          mkdir -p ~/openlist-bin
+          curl -fsSL https://github.com/OpenListTeam/OpenList/releases/download/v4.2.9/openlist-linux-amd64.tar.gz \
+            | tar -xz -C ~/openlist-bin
+        fi
+        echo "$HOME/openlist-bin" >> "$GITHUB_PATH"
+
+    # Several tests write into the application's default SQLite database
+    # (core/db/database.py::DB_PATH) and assume the schema is already there, as it is
+    # on a box that has ever started the app.
+    - name: Initialise the application database
+      shell: bash
+      run: |
+        python - <<'EOF'
+        from core.db.database import DB_PATH, init_db
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        init_db()
+        print("db:", DB_PATH)
+        EOF

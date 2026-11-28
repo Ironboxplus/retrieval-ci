@@ -1,0 +1,27 @@
+# vLLM server of BGE-M3 (dense + sparse in one forward pass) for core/indexing/embedders/vllm_client.py.
+# Keys are `vllm serve` options, hyphenated; vLLM 0.33.0 with the bge_m3_sparse_plugin IO processor
+# (scripts/remote_embed/bge_m3_sparse_plugin, pinned to that vLLM). One set of keys for every host; only
+# the model directory, the port and gpu-memory-utilization are the host's (passed on the command line).
+# cuBLAS fp16 accumulation comes from scripts/remote_embed/fp16_accumulation/sitecustomize.py on PYTHONPATH,
+# which no `vllm serve` key can set: arc99 (WSL) starts the server through scripts/remote_embed/bge_m3_service.sh,
+# which puts it there; .88 sets the same PYTHONPATH in deploy/compute88/arc-vllm-embed.service.
+# Every host runs with it: 123 -> 171 chunks/s on the 3090, dense cos min 0.998 / mean 0.99996
+# against FlagEmbedding fp16 (user's choice 2026-11-14). Measurements: PLAN-2026-11-14-vllm-embed-host.md §5.
+served-model-name: bge-m3
+host: 127.0.0.1
+runner: pooling
+hf-overrides: '{"architectures": ["BgeM3EmbeddingModel"]}'
+io-processor-plugin: bge_m3_sparse_plugin
+# the profile's dtype and sequence limit (core/indexing/embedding_profile.py); an over-long input is a 400,
+# never cut (the client raises InputTooLong before it would send one)
+dtype: float16
+max-model-len: 8192
+# tokens per engine step: an encoder has no chunked prefill, so one step is whole sequences up to this
+max-num-batched-tokens: 32768
+# lower runs first; interactive callers send a lower priority than bulk re-embeds (a top-level request field)
+scheduling-policy: priority
+# one API server: the engine core is the limit once requests carry 32 texts each
+api-server-count: 1
+# a pooling model has no KV cache, so this is not a cap: the footprint is weights + CUDA graphs + one step's
+# activations (1.7 GiB idle, 2.5 GiB at 32768 tokens per step)
+gpu-memory-utilization: 0.2

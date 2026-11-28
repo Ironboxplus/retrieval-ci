@@ -7,7 +7,8 @@ def test_generic_batch_size_does_not_change_reranker(monkeypatch):
     from config import Settings
 
     monkeypatch.setenv("BATCH_SIZE", "17")
-    assert Settings().reranker.batch_size == 128
+    assert Settings().reranker.batch_size == 32
+    assert not hasattr(Settings().embedding, "batch_size")     # the encode batch is the model profile's
 
 
 def test_nested_reranker_batch_size_is_honoured(monkeypatch):
