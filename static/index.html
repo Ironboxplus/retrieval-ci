@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retrieval System - Task Manager</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Retrieval System</h1>
+            <p class="subtitle">Multi-modal Document Retrieval with Task Management</p>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="tasks">Tasks</button>
+            <button class="tab" data-tab="documents">Documents</button>
+            <button class="tab" data-tab="crawl">Crawl</button>
+            <button class="tab" data-tab="search">Search</button>
+        </nav>
+
+        <!-- Tasks Tab -->
+        <section id="tasks" class="tab-content active">
+            <div class="section-header">
+                <h3>Task Management</h3>
+                <div class="header-actions">
+                    <select id="taskStatusFilter">
+                        <option value="">All Status</option>
+                        <option value="pending">Pending</option>
+                        <option value="running">Running</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                    <button class="btn" id="refreshTasks">Refresh</button>
+                    <label class="auto-refresh-label">
+                        <input type="checkbox" id="autoRefreshTasks" checked>
+                        Auto Refresh
+                    </label>
+                </div>
+            </div>
+            <div id="tasksList" class="tasks-list">
+                <p class="placeholder">Loading tasks...</p>
+            </div>
+            <div class="pagination" id="tasksPagination"></div>
+        </section>
+
+        <!-- Documents Tab -->
+        <section id="documents" class="tab-content">
+            <div class="section-header">
+                <h3>Document Management</h3>
+                <div class="header-actions">
+                    <select id="sourceTypeFilter">
+                        <option value="">All Types</option>
+                        <option value="webpage">Webpage</option>
+                        <option value="paper">Paper</option>
+                        <option value="upload">Upload</option>
+                    </select>
+                    <select id="dataSourceFilter">
+                        <option value="">All Sources</option>
+                        <option value="system">System</option>
+                        <option value="user">User</option>
+                    </select>
+                    <button class="btn" id="refreshDocs">Refresh</button>
+                </div>
+            </div>
+            <div id="docsList" class="documents-list">
+                <p class="placeholder">Loading documents...</p>
+            </div>
+            <div class="pagination" id="docsPagination"></div>
+        </section>
+
+        <!-- Crawl Tab -->
+        <section id="crawl" class="tab-content">
+            <div class="crawl-section">
+                <div class="crawl-input-area">
+                    <h3>Submit URLs for Crawling</h3>
+                    <textarea id="urlList" placeholder="Enter URLs (one per line)..."></textarea>
+                    <div class="crawl-options">
+                        <label>
+                            <input type="checkbox" id="useProxy">
+                            Use Proxy
+                        </label>
+                        <label>
+                            <input type="checkbox" id="autoIndex" checked>
+                            Auto Index
+                        </label>
+                        <label>
+                            Max Concurrent:
+                            <input type="number" id="maxConcurrent" value="5" min="1" max="20">
+                        </label>
+                    </div>
+                    <button id="crawlBtn" class="btn primary">Start Crawling</button>
+                    <div id="crawlStatus"></div>
+                </div>
+
+                <div class="crawl-upload-area">
+                    <h3>Upload HTML to Extract Links</h3>
+                    <div class="drop-zone" id="htmlDropZone">
+                        <p>Drag and drop HTML file here or click to select</p>
+                        <input type="file" id="htmlFileInput" accept=".html,.htm" hidden>
+                    </div>
+                    <div class="html-options">
+                        <label>
+                            <input type="checkbox" id="htmlUseProxy">
+                            Use Proxy
+                        </label>
+                        <label>
+                            <input type="checkbox" id="htmlAutoIndex" checked>
+                            Auto Index
+                        </label>
+                        <label>
+                            <input type="checkbox" id="htmlAutoCrawl" checked>
+                            Auto Start Crawl
+                        </label>
+                    </div>
+                    <div id="htmlUploadStatus"></div>
+                </div>
+            </div>
+
+            <div class="crawl-records-section">
+                <div class="section-header">
+                    <h3>Crawl Records</h3>
+                    <div class="header-actions">
+                        <select id="crawlStatusFilter">
+                            <option value="">All Status</option>
+                            <option value="pending">Pending</option>
+                            <option value="success">Success</option>
+                            <option value="failed">Failed</option>
+                            <option value="skipped">Skipped</option>
+                        </select>
+                        <button class="btn" id="refreshCrawlRecords">Refresh</button>
+                    </div>
+                </div>
+                <div id="crawlRecordsList" class="crawl-records-list">
+                    <p class="placeholder">Loading crawl records...</p>
+                </div>
+                <div class="pagination" id="crawlRecordsPagination"></div>
+            </div>
+        </section>
+
+        <!-- Search Tab -->
+        <section id="search" class="tab-content">
+            <div class="search-box">
+                <input type="text" id="searchQuery" placeholder="Enter your search query...">
+                <div class="search-options">
+                    <label>Method:</label>
+                    <select id="searchMethod">
+                        <option value="enhanced">Enhanced RAG</option>
+                        <option value="hybrid">Hybrid (BM25 + Vector)</option>
+                        <option value="vector">Vector Only</option>
+                        <option value="bm25">BM25 Only</option>
+                    </select>
+                    <label>Top K:</label>
+                    <input type="number" id="topK" value="20" min="1" max="100">
+                    <label>
+                        <input type="checkbox" id="aggregateByDoc" checked>
+                        Aggregate by Document
+                    </label>
+                </div>
+                <div class="search-filters">
+                    <label>Source Type:</label>
+                    <select id="searchSourceType">
+                        <option value="">All Types</option>
+                        <option value="webpage">Webpage</option>
+                        <option value="paper">Paper</option>
+                        <option value="upload">Upload</option>
+                    </select>
+                    <label>Data Source:</label>
+                    <select id="searchDataSource">
+                        <option value="">All Sources</option>
+                        <option value="system">System</option>
+                        <option value="user">User</option>
+                    </select>
+                </div>
+                <button id="searchBtn" class="btn primary">Search</button>
+            </div>
+
+            <div id="searchResults" class="results-container">
+                <p class="placeholder">Enter a query to search</p>
+            </div>
+        </section>
+    </div>
+
+    <!-- Modal for document details -->
+    <div id="docModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <div id="docModalBody"></div>
+        </div>
+    </div>
+
+    <!-- Modal for task details -->
+    <div id="taskModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <div id="taskModalBody"></div>
+        </div>
+    </div>
+
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/tasks.js"></script>
+    <script src="/static/js/documents.js"></script>
+    <script src="/static/js/crawl.js"></script>
+    <script src="/static/js/search.js"></script>
+    <script>
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(function(tab) {
+            tab.addEventListener('click', function() {
+                document.querySelectorAll('.tab').forEach(function(t) {
+                    t.classList.remove('active');
+                });
+                document.querySelectorAll('.tab-content').forEach(function(c) {
+                    c.classList.remove('active');
+                });
+
+                tab.classList.add('active');
+                var tabId = tab.dataset.tab;
+                document.getElementById(tabId).classList.add('active');
+
+                // Load data for specific tabs
+                if (tabId === 'tasks') {
+                    TasksManager.loadTasks();
+                } else if (tabId === 'documents') {
+                    DocumentsManager.loadDocuments();
+                } else if (tabId === 'crawl') {
+                    CrawlManager.loadRecords();
+                }
+            });
+        });
+
+        // Modal close handlers
+        document.querySelectorAll('.modal-close').forEach(function(closeBtn) {
+            closeBtn.addEventListener('click', function() {
+                this.closest('.modal').style.display = 'none';
+            });
+        });
+
+        window.addEventListener('click', function(e) {
+            if (e.target.classList.contains('modal')) {
+                e.target.style.display = 'none';
+            }
+        });
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', function() {
+            TasksManager.init();
+            DocumentsManager.init();
+            CrawlManager.init();
+            SearchManager.init();
+        });
+    </script>
+</body>
+</html>
