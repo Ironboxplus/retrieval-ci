@@ -1,0 +1,90 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+.ropeproject/
+
+# IDE / Claude Code
+.claude/
+.pytest_cache/
+
+# Secrets — never commit
+pypitoken
+*.token
+pypi-本地持久化token-禁止删除
+
+# Data (150GB+ corpus, DB, indices)
+data/
+snapshots/
+
+# Code KB local Qdrant + eval scratch / ACE project-local playbook (per-project state)
+.code_kb/
+.ace/
+
+# Qdrant binary
+tools/qdrant/
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Logs
+*.log
+myeasylog.log
+
+# Temp files
+tmp_*
+nul
+.qdrant-initialized
+
+# Secrets
+.env
+*.key
+*.pem
+
+# Gateway (app-tier) — secrets + local ledger, never commit
+gateway.env
+deploy/bwh/gateway.env
+gateway-data/
+gateway.db
+gateway.db-shm
+gateway.db-wal
+
+# wrangler / analysis artifacts (not source)
+.wrangler/
+frontend/public/landscape.json
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+.playwright-mcp/
+mcp_plugin/dist/
+
+.deploy-tmp/
+
+.playwright-cli/
+
+frontend/dist-public-code/
+
+output/
+
+vendor/
+
+
+data/medical/
+
+
+# Test/release detritus left in the repo root by long-running suites and release
+# packaging (~94 MB as of 2026-09-01). None of it is source; see plan.md's
+# working-tree inventory. Kept out of version control rather than deleted, so an
+# in-flight release bundle is not destroyed by a stray clean.
+.pytest-temp-*/
+.release-artifacts/
+medical-predeploy-*.tar.gz
+
+# transient rollout staging (evidence lives in .release-artifacts/)
+.deploy-manifest*.txt
+.deploy-payload*
